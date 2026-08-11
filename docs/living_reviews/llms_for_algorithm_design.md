@@ -1,10 +1,21 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-08-07
+**Last Updated:** 2026-08-11
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-11 (1 papers)
+
+### [MuEvo: LLM-Driven Evolution of Multi-Heuristic Ensemble](https://arxiv.org/abs/2608.03636)
+
+**2026-08-04** | Southern University of Science and Technology, The Hong Kong University of Science and Technology | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* LLM-driven co-evolutionary framework combining Dynamic Component Management (short-budget probing, reversible lifecycle) with LLM-Driven Co-Evolution (Multi-Ensemble Evaluation, Cross-Component Information Sharing, Relation-Guided Pair Evolution, Adaptive Budget Allocation) for heuristic ensembles. | *LLM role:* evolutionary_search
+
+> MuEvo introduces an LLM-driven co-evolutionary framework that simultaneously optimizes multiple interacting heuristics within an algorithmic solver (like ACO or Selection Hyper-Heuristics) rather than isolating a single component. The results are backed by extensive numerical evidence across TSP, CVRP, BPP, and Flowshop, showing consistent improvements over human-designed defaults and single-component LLM-AHD baselines (e.g., reducing the TSP-L optimality gap from 6.26% to 5.24%). KEY INSIGHT: To prevent a component from overfitting to a specific set of collaborators, candidate heuristics should be evaluated across multiple contexts (e.g., the current best ensemble, the initial ensemble, and a diverse secondary ensemble), while an LLM summarizes cross-component interaction history to guide joint pair evolution. This is highly relevant to our work in LLM evolutionary search; the multi-ensemble evaluation and dynamic component lifecycle directly address the co-adaptation challenges we face when evolving complex, multi-operator routing and scheduling solvers.
+
 
 #### 2026-08-07 (3 papers)
 

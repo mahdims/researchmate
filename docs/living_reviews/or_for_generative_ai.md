@@ -1,10 +1,53 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-08-07
+**Last Updated:** 2026-08-11
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-11 (5 papers)
+
+### [ElastiCo: Elastic Configuration and Interference-Aware Orchestration for GPU Clusters](https://arxiv.org/abs/2608.07971)
+
+**2026-08-08** | Beihang University, University of Leeds, University of Sydney | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Lagrangian decomposition with projected subgradient ascent for resource allocation, DNN for interference prediction, and Kubernetes-native middleware for orchestration | *LLM role:* none
+
+> ElastiCo is a GPU cluster scheduler that co-locates deep learning training and offline LLM inference by treating job configurations as elastic variables and using shadow pricing for multi-resource allocation. The results are backed by strong empirical evidence on a 64-GPU testbed and 512-GPU simulation, demonstrating a 2.94x reduction in average job completion time and an increase in GPU utilization from 25% to 46% compared to static partitioning baselines. The key insight is the combination of 'Resource Shape Transformation'—exposing a family of valid resource-performance profiles for each job—with a Lagrangian decomposition that uses dynamic shadow prices to resolve cluster-wide multi-resource contention. This is highly relevant to our research in OR formulations for AI systems and LLM serving scheduling, providing a concrete, scalable mathematical framework for interference-aware GPU allocation.
+
+### [Hybrid-Adaptive Thread Tuning to Mitigate Simulation Execution Bottlenecks in High-Performance Reinforcement Learning Inference](https://arxiv.org/abs/2608.06025)
+
+**2026-08-06** | National University of Defense Technology | M=7 P=6 I=8 *discuss*
+
+*Method:* Hybrid Adaptive Thread-Tuning using Physics-Informed Neural Operator (PINO) guided by a finite-source M/M/1 queueing model, combined with a three-tier dynamic adjustment strategy | *LLM role:* none
+
+> Su et al. propose AutoThread, a hybrid adaptive thread-tuning method that dynamically optimizes worker thread counts for reinforcement learning simulation environments. The authors demonstrate real empirical gains, achieving up to an 83.8% runtime reduction and 1.8x throughput improvement over baseline tuning methods on AMD and Intel platforms. The key insight is the use of a Physics-Informed Neural Operator (PINO) where a finite-source M/M/1 queueing model acts as a structural constraint on the neural network's loss function, ensuring predictions remain physically plausible under dynamic workloads. While applied to RL simulation threads, this methodology of embedding queueing theory into neural predictors is highly transferable to our research on resource allocation and queueing optimization for LLM serving infrastructure.
+
+### [When Does Disaggregation Pay? Simulating Prefill--Decode--Attention--FFN Specialization for Agentic LLM Inference](https://arxiv.org/abs/2608.03741)
+
+**2026-08-04** | Imperial College London, University of Cambridge | M=5 P=8 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Event-driven simulation framework (HeteroPanacea) with roofline execution model for NPU architectures, supporting disaggregated quantization and parallelization scheduling | *LLM role:* none
+
+> Forys et al. introduce HeteroPanacea, a simulation framework to evaluate 4-way (Prefill-Decode-Attention-FFN) disaggregated LLM serving across heterogeneous hardware and parallelization strategies. Backed by extensive simulation data, they demonstrate that this PDAF disaggregation yields up to a 2.06x throughput gain over non-disaggregated serving for prefill-heavy agentic workloads on custom NPUs. The key insight is that the hardware demands of attention (KV-bandwidth bound) and FFN (compute/weight bound) diverge so sharply in agentic workloads that they require entirely different hardware profiles to avoid resource stranding. This is highly relevant for our research in LLM serving scheduling; we should incorporate these distinct stage-level hardware constraints and the PDAF paradigm into our operations research formulations for resource allocation.
+
+### [Every Cache Entry Earns Its Place: Global Allocation of Resolution and Coverage for KV Cache Compression](https://arxiv.org/abs/2608.07001)
+
+**2026-08-07** | Tsinghua University | M=7 P=7 I=7 *discuss*
+
+*Method:* Global resource allocation using progressively refinable prototype trees and a utility-guided greedy budget flow with a budget-aware singleton floor. | *LLM role:* target_of_optimization
+
+> GraceKV formulates KV cache compression for long-context LLMs as a global resource allocation problem, using prototype trees and greedy marginal-utility allocation to balance local resolution and broad coverage. The method is backed by strong empirical results, achieving state-of-the-art performance across 24 of 32 settings on LongBench and RULER while reducing KV cache memory by up to 92% at 30K context lengths. The key insight is treating KV cache compression not as a fixed eviction or merging rule, but as a unified knapsack-like allocation problem across layers, heads, and context slots, enabling dynamic, input-conditioned memory optimization. This is highly relevant for our research in applying operations research formulations to LLM serving optimization, providing a concrete example of how classical allocation algorithms can alleviate GPU memory bottlenecks during inference.
+
+### [BALANCE: Hybrid Autoregressive-Speculative LLM Inference in Wireless Edge Networks](https://arxiv.org/abs/2608.05926)
+
+**2026-08-06** | The University of Hong Kong, Imperial College London | M=5 P=7 I=6 *discuss*
+
+*Method:* Polynomial-time algorithm with constant approximation guarantee based on problem decomposition, enumeration of feasible parameters, and sorting for user scheduling | *LLM role:* none
+
+> Qu et al. propose an edge LLM inference scheduling framework that maximizes task throughput by jointly assigning users to either autoregressive or speculative decoding while partitioning GPU memory and compute. The results are backed by numerical simulations and device measurements, demonstrating ~30-38% throughput improvements over single-mode baselines. The key insight is that the latency-memory trade-off between AD (low memory, high latency) and SD (high memory, low latency) can be effectively optimized by decoupling the modes and applying greedy knapsack heuristics based on user-specific latency contributions. This is directly relevant to our research in OR formulations for LLM serving scheduling, offering a concrete mathematical model for hybrid decoding environments, even if the underlying solution algorithm is standard.
+
 
 #### 2026-08-07 (4 papers)
 
