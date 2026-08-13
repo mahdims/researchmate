@@ -1,0 +1,897 @@
+--- Page 1 ---
+From Monolithic to Modular: Segment-level Automatic Prompt Optimization
+Nikita Kulin1 , Viktor Zhuravlev2 , Artur Khairullin3 , Sergey Muravyov4 , Ilya Makarov5 , Daniil
+Sukhorukov6 and Ekaterina Averkova7
+1,2,3,4,7ITMO University
+5,6AXXX
+nikita.kulin@itmo.ru1, vnzhuravlev@itmo.ru2, arkhairullin@itmo.ru3, smuravyov@itmo.ru4,
+iamakarov@hse.ru5, d.sukhorukov@axxx.tech6, ekaterina.averkova@itmo.ru7
+Abstract
+Automatic Prompt Optimization (APO) often
+rewrites prompts monolithically, which can improve
+one behavior while degrading others. We present
+SAPO, a segment-level APO method that decom-
+poses prompts into role, context, tasks, and output
+format, then applies targeted improvements based
+on top-5 and bottom-5 examples. The optimiza-
+tion loop uses one LLM with static meta-prompts
+and structured outputs for segmentation, weakness
+analysis, and candidate generation. We describe
+a train/validation protocol and a two-stage genera-
+tion process: (1) segment-level diagnosis and rec-
+ommendation extraction, (2) candidate synthesis
+constrained by weak/strong segment signals. Using
+the evaluation setup across SQuADv2, TweetEval,
+XSUM, CommonGen, and GSM8K on GPT-3.5-
+Turbo and GPT-4o-mini, SAPO achieves the best av-
+erage score against Zero-shot and strong APO base-
+lines including APE, OPRO, EvoPrompt, GEPA,
+and StraGO.
+1
+Introduction
+Large language models (LLMs) are increasingly used as
+general-purpose interfaces for NLP tasks, including instruc-
+tion following, reasoning, and generation [Brown et al., 2020;
+Wei et al., 2022; Ouyang et al., 2022]. In many practical set-
+tings, adaptation has shifted from finetuning toward prompt
+design, where system behavior is controlled through natural-
+language instructions [Zhou et al., 2023]. As a consequence,
+prompt quality becomes a primary reliability bottleneck: small
+wording changes can produce large behavioral shifts, while
+manual prompt iteration remains costly and unstable [Zhou et
+al., 2023; Pryzant et al., 2023].
+Automatic Prompt Optimization (APO) addresses this prob-
+lem by iteratively generating and selecting improved prompts
+from data and model feedback [Zhou et al., 2023; Pryzant et
+al., 2023; Yang et al., 2024; Guo et al., 2024; Agrawal et al.,
+2026]. Such approaches are particularly attractive because
+they are deployment-friendly and compatible with black-box
+APIs.
+A persistent limitation, however, is that many APO pipelines
+still optimize prompts as monolithic strings.
+In practice,
+prompts are compositional artifacts: role framing, context
+grounding, task directives, and output-format constraints con-
+tribute differently to downstream behavior. Prior work reports
+prompt drifting and instability in iterative optimization, where
+edits that fix one subset of cases may degrade previously cor-
+rect behavior [Wu et al., 2024]. Additional studies show that
+optimizer effectiveness is sensitive to model capability and
+setup choices [Zhang et al., 2024; Ma et al., 2024], and that
+gains can be regime-dependent in compound systems [Zhang
+et al., 2026]. Thus, the core challenge is not merely generating
+more prompt variants, but controlling where and how edits are
+applied.
+This paper presents Segment-level APO (SAPO), a modular
+optimization strategy over explicit prompt segments. Instead
+of one global rewrite, the method diagnoses weak and strong
+segments from ranked evidence and synthesizes candidates
+that preserve strengths while fixing weaknesses. Here, strong
+segments are segments associated with correct model behavior
+on top-ranked examples, while weak segments are segments
+associated with incorrect behavior on bottom-ranked exam-
+ples.
+Compared with prior autoprompting methods, SAPO
+contributes:
+1. Segment-explicit optimization objective: prompts are
+decomposed into role, context, tasks, and output format,
+enabling targeted rather than monolithic edits.
+2. Constrained candidate synthesis and selection: candi-
+dates preserve strong segments, revise weak segments, and
+use an edit-distance tie-break for conservative updates.
+3. Contrastive diagnostic stage:
+update decisions are
+grounded in top/bottom evidence, including class-aware
+handling for discrete per-example metrics.
+We evaluate SAPO on five datasets with different task types:
+SQuADv2, TweetEval, XSUM, CommonGen, and GSM8K,
+and report results on two model backbones: GPT-3.5-Turbo
+and GPT-4o-mini. SAPO achieves the best average score
+against APE, OPRO, EvoPrompt, GEPA, and StraGO. Relative
+to the strongest competing baseline by average score, gains
+are +5.13% on GPT-3.5-Turbo and +7.25% on GPT-4o-mini.
+2
+Related Work
+Search-based APO methods.
+Early and widely used APO
+methods formulate prompt improvement as iterative search
+arXiv:2608.11219v1  [cs.AI]  21 Jul 2026
+
+
+--- Page 2 ---
+Figure 1: SAPO loop. Starting from the initial prompt P (0), the
+method first segments instructions into role/context/tasks/output for-
+mat, then performs contrastive evidence extraction on train data to
+diagnose weak and strong segments. Next, it generates constrained
+candidates that preserve strong segments while revising weak ones,
+evaluates them on validation data, applies edit-distance tie-break
+under equal scores, and accepts an update only when validation per-
+formance improves; otherwise the current prompt is retained.
+over textual candidates. APE optimizes instruction candidates
+via generation and selection [Zhou et al., 2023], while ProTeGi
+applies textual gradients with beam search and bandit-style
+selection [Pryzant et al., 2023]. OPRO and EvoPrompt further
+extend search with trajectory-conditioned optimization and
+evolutionary operators, respectively [Yang et al., 2024; Guo et
+al., 2024]. GEPA introduces reflective prompt evolution, pro-
+viding modular modifications through optimization [Agrawal
+et al., 2026]. Despite their effectiveness, these methods pri-
+marily operate as global prompt-level rewrites rather than as
+explicit segment-constrained updates [Zhou et al., 2023; Yang
+et al., 2024; Guo et al., 2024; Fernando et al., 2023].
+Structured and modular optimization trends.
+In parallel,
+the field is moving toward structured optimization workflows.
+DSPy and TextGrad cast optimization in programmatic or
+graph-based forms rather than single prompt rewrites [Khat-
+tab et al., 2023; Yuksekgonul et al., 2024]. Promptomatix
+emphasizes modular orchestration and cost-aware refinement
+[Murthy et al., 2025]. More recently, section-local optimiza-
+tion explicitly operates over fixed prompt components and
+reports improved robustness in small-model settings [Sharma
+and Henley, 2026]. Collectively, this line of work indicates
+that structural decomposition can improve interpretability and
+reduce destructive interference between edits.
+Gap summary.
+Existing literature provides either strong
+search performance or improved robustness diagnostics [Yang
+et al., 2024; Guo et al., 2024; Wu et al., 2024; Sharma and
+Henley, 2026; Agrawal et al., 2026], but there is still limited
+evidence on simple black-box pipelines that jointly enforce
+segment-level controllability, preserve known-strong prompt
+components, and remain implementation-light under a unified
+multi-task protocol.
+Positioning of SAPO.
+SAPO sits at the intersection of static
+meta-prompting and structure-aware optimization. It preserves
+the deployment simplicity of black-box APO, while introduc-
+ing explicit segment-level diagnosis and constrained updates
+that preserve strong components and localize revisions.
+3
+Method
+3.1
+Problem Formulation
+Figure 1 provides the high-level pipeline view, while Algo-
+rithm 1 specifies the executable optimization procedure.
+Let an initial prompt template be P (0) with placeholder
+{input}. Let datasets be split into training and validation
+parts:
+Dtrain = {(xi, yi)}Ntr
+i=1,
+Dval = {(xj, yj)}Nval
+j=1 .
+(1)
+Given one LLM M and task-dependent metric Qτ, the
+objective is:
+P ∗= arg max
+P ∈P Qτ(P; Dval, M).
+(2)
+At iteration t, the optimizer applies an update operator U to
+the current prompt:
+P (t+1) = U
+
+P (t), Dtrain, Dval
+
+.
+(3)
+The operator is acceptance-constrained: if the best candidate
+generated at iteration t does not improve validation quality,
+the prompt is kept unchanged. This converts the procedure
+into a monotone, validation-gated search over prompt space,
+which directly targets robustness against destructive rewrites.
+Prompt structure is represented as four explicit segments:
+S(P) = {srole, scontext, stasks, soutput format}.
+(4)
+3.2
+Algorithm Overview
+The optimization loop can be summarized as:
+1. Decompose the current prompt into segments {role, con-
+text, tasks, output format}.
+2. Run Stage A: evaluate on train, extract top-5/bottom-5 evi-
+dence, infer weak/strong segments and recommendations.
+3. Run Stage B: generate K constrained prompt candidates.
+4. Evaluate candidates on validation; choose the best by score,
+with edit-distance tie-break.
+5. Accept the candidate only if validation score improves;
+otherwise keep the current prompt.
+Figure 1 and Algorithm 1 formalize this loop.
+3.3
+Prompt Segment Design
+SAPO optimizes four segments because they map to distinct
+and operationally separable control dimensions in instruction-
+based LLM use.
+
+
+--- Page 3 ---
+Algorithm 1 Segment-level APO (SAPO).
+Require: Initial prompt P, train set Dtrain, validation set
+Dval, candidates K, iterations T
+1: P ∗←P; Q∗←−∞
+2: for t = 1 to T do
+3:
+Segment current prompt into {role, context, tasks,
+output format}
+4:
+Stage A: evaluate P on Dtrain, build top-5/bottom-5
+evidence, infer weak/strong segments and recommenda-
+tions
+5:
+Stage B: generate K improved candidates
+6:
+Evaluate candidates on Dval and choose best candi-
+date ˜P (tie: minimum edit distance)
+7:
+if Qτ( ˜P; Dval) > Qτ(P; Dval) then
+8:
+P ←˜P
+9:
+end if
+10:
+if Qτ(P; Dval) > Q∗then
+11:
+P ∗←P; Q∗←Qτ(P; Dval)
+12:
+end if
+13: end for
+14: return P ∗
+Role (srole).
+This segment defines behavioral stance (e.g.,
+classifier, summarizer, analyst). Prior prompt engineering
+literature shows that instruction framing can materially affect
+downstream behavior [Zhou et al., 2023; Pryzant et al., 2023].
+Context (scontext).
+This segment encodes task grounding,
+input injection, and domain constraints (including {input}
+placement). It controls what information is available and how
+the model conditions on it.
+Tasks (stasks).
+This segment specifies actionable require-
+ments and decision rules. It is the main locus for correcting
+underspecified or ambiguous instructions.
+Output format (soutput format).
+This segment governs the
+response schema and formatting constraints. It is critical in
+tasks where metric outcomes depend on strict label/output
+conventions (e.g., classification labels or short-form answers).
+These four segments were selected because they provide a
+compact decomposition that is expressive enough for hetero-
+geneous NLP tasks while remaining small enough for stable,
+low-cost iterative optimization. This design choice is aligned
+with broader prompt-structure taxonomies and recent trends
+toward structured and section-local prompt optimization [Liu
+et al., 2021; Schulhoff et al., 2024; Khattab et al., 2023; Yuk-
+sekgonul et al., 2024; Sharma and Henley, 2026].
+3.4
+Two-stage Generation Pipeline
+Stage A: Evidence extraction and segment-level diagnosis.
+At iteration t, the current prompt P (t) is first evaluated on
+Dtrain:
+ˆyi = M(P (t), xi),
+qi = Qτ
+
+P (t); (xi, yi), M
+
+.
+(5)
+Examples are ranked by qi, and two contrastive evidence sets
+are extracted:
+B(t)
+good = Top-5(qi),
+B(t)
+bad = Bottom-5(qi).
+(6)
+For discrete per-example metrics (e.g., ExactMatch with
+qi ∈{0, 1}), we use class-aware evidence selection: B(t)
+good
+is drawn first from positive examples (qi = 1), and B(t)
+bad is
+drawn first from negative examples (qi = 0). If one side
+has fewer than five examples, the remainder is backfilled
+from the global rank order. Given (B(t)
+good, B(t)
+bad) and segment
+decomposition S(P (t)), one LLM with static meta-prompts
+infers structured diagnostic outputs:
+weak segments,
+strong segments, and recommendations.
+Intu-
+itively, strong segments are associated with consistently suc-
+cessful evidence, while weak segments are associated with
+failure cases and become primary targets for revision.
+Stage B: Candidate synthesis.
+The same LLM receives
+current prompt, segment decomposition, weak/strong labels,
+and recommendations, then generates K improved prompt
+candidates {P (t)
+k }K
+k=1. Candidate synthesis is explicitly con-
+strained to preserve segments listed in strong segments
+and primarily modify segments listed in weak segments,
+reducing cross-segment interference.
+Each candidate P (t)
+k
+is evaluated on Dval:
+Q(t)
+k,τ = Qτ(P (t)
+k ; Dval, M).
+(7)
+The best candidate is accepted only if it improves the current
+validation score. Under score ties, we select the candidate
+with the smallest edit distance to the current prompt:
+˜P (t) = arg max
+P (t)
+k
+Q(t)
+k,τ,
+tie-break by min dedit(P (t)
+k , P (t)).
+(8)
+This conservative tie-break favors minimal edits and helps
+preserve validated prompt behavior.
+For compactness, Stages A–B define an update operator:
+˜P (t) = U
+
+P (t), B(t)
+good, B(t)
+bad
+
+,
+(9)
+where U performs diagnosis, constrained candidate synthesis,
+and tie-aware selection.
+An example of SAPO optimization trajectory is shown in
+Figure 2. Meta-prompts for each stage and method complexity
+analysis are provided in Appendix C and Appendix A.2.
+4
+Experimental Setup
+Datasets and task coverage.
+We evaluate on five datasets
+spanning extractive QA, social NLP classification, abstractive
+summarization, constrained commonsense generation, and
+mathematical reasoning: SQuADv2 [Rajpurkar et al., 2018],
+TweetEval [Barbieri et al., 2020], XSUM [Narayan et al.,
+2018], CommonGen (CG) [Lin et al., 2020], and GSM8K
+[Cobbe et al., 2021]. This mix is intended to stress different
+prompt components (role, task specification, response for-
+mat, and domain context) under a shared APO loop. In our
+evaluation, we use BERTScore F1 [Zhang et al., 2020] for
+(XSUM, CG, SQuAD2), F1 – (TweetEval), and ExactMatch –
+(GSM8K).
+Models.
+We report results for GPT-3.5-Turbo and GPT-4o-
+mini to cover two commonly used API models with different
+capability/cost profiles.
+
+
+--- Page 4 ---
+Data split and protocol.
+Each dataset is split into
+train/validation/test with sizes 150/100/all. The train split
+is used for top/bottom evidence extraction, validation is used
+for candidate selection during optimization, and the held-out
+test split is used for final reporting. This separation is strictly
+enforced for all iterative methods to reduce selection leakage.
+Generation settings and baselines.
+For candidate genera-
+tion, we use K = 5 candidates per iteration and a sampling
+temperature of 0. These values are fixed across all experiments
+and are kept identical for SAPO and all iterative APO base-
+lines for fairness. We compare against Zero-shot prompting
+(as a baseline and as an initial prompt for optimization) and
+representative APO methods: APE [Zhou et al., 2023], OPRO
+[Yang et al., 2024], EvoPrompt [Guo et al., 2024], GEPA
+[Agrawal et al., 2026], and StraGO [Wu et al., 2024].
+Runs and reporting.
+Each method/model setup is run five
+times with different random seeds and data samples. Main
+tables report mean values across runs.
+5
+Results
+Across both model settings, SAPO delivers the highest average
+score among compared baselines on the reported benchmark
+suite. Unless explicitly stated otherwise, all numbers in this
+section are evaluated on the held-out test split. The largest rel-
+ative gains appear on GSM8K and XSUM, consistent with the
+value of segment-level control in settings that require strict an-
+swer extraction or tightly constrained generation. The SAPO-
+optimized prompts are provided in Appendix C.
+On GPT-3.5-Turbo, SAPO achieves the highest average
+score. It yields gains on SQuAD2, GSM8K, CommonGen,
+and TweetEval, while trailing GEPA on XSUM. The largest rel-
+ative gain appears on GSM8K, suggesting that segment-level
+control and task-focused refinement are particularly beneficial
+for exact-answer reasoning settings.
+On GPT-4o-mini, SAPO again delivers the highest aver-
+age score and outperforms all compared baselines on all five
+datasets. This pattern indicates that segment-level optimiza-
+tion is complementary to model capability scaling rather than
+specific to one backbone.
+The average gain relative to the best competing baseline by
+average score is +5.13% on GPT-3.5-Turbo and +7.25% on
+GPT-4o-mini, indicating consistent benefits from constrained
+segment-local updates.
+6
+Discussion
+Why segment-level updates help.
+The observed gains are
+consistent with the hypothesis that explicit weak/strong seg-
+ment separation reduces destructive interference between edits.
+Instead of globally rewriting prompts, SAPO localizes revi-
+sions to weak components while preserving high-performing
+structure, aligning with recent observations on prompt drifting
+in iterative APO [Wu et al., 2024].
+When improvements are likely.
+Improvements are most
+pronounced when tasks depend on strict output conventions
+or multi-part instructions. In such settings, preserving strong
+format/context segments appears as important as improving
+Table 1: Test-split comparison on GPT-3.5-Turbo. Best values per
+column are in bold. “Difference vs best baseline” is computed per
+column against the strongest non-SAPO method in that column.
+Method
+SQuAD2 GSM8K
+CG
+TweetEval XSum
+Avg
+Zero-shot
+0.812
+0.527
+0.824
+0.483
+0.801 0.689
+APE
+0.904
+0.710
+0.883
+0.511
+0.815 0.765
+OPRO
+0.871
+0.715
+0.873
+0.536
+0.828 0.765
+EvoPrompt
+0.895
+0.697
+0.889
+0.521
+0.837 0.768
+GEPA
+0.873
+0.744
+0.871
+0.539
+0.859 0.777
+StraGO
+0.915
+0.717
+0.908
+0.523
+0.834 0.779
+SAPO
+0.922
+0.835
+0.911
+0.575
+0.852 0.819
+Diff.
++0.007
++0.091 +0.003
++0.036
+-0.007 +0.040
+Rel. diff. (%)
++0.77
++12.23
++0.33
++6.68
+-0.81 +5.13
+Table 2: Test-split comparison on GPT-4o-mini. Best values per
+column are in bold. “Difference vs best baseline” is computed per
+column against the strongest non-SAPO method in that column.
+Method
+SQuAD2 GSM8K
+CG
+TweetEval XSum
+Avg
+Zero-shot
+0.795
+0.841
+0.784
+0.477
+0.638
+0.707
+APE
+0.851
+0.884
+0.823
+0.551
+0.690
+0.760
+OPRO
+0.842
+0.891
+0.831
+0.510
+0.695
+0.754
+EvoPrompt
+0.827
+0.905
+0.808
+0.556
+0.714
+0.762
+GEPA
+0.923
+0.880
+0.823
+0.539
+0.695
+0.772
+StraGO
+0.838
+0.903
+0.810
+0.572
+0.720
+0.769
+SAPO
+0.931
+0.952
+0.875
+0.593
+0.789
+0.828
+Diff.
++0.008
++0.047 +0.044
++0.021
++0.069 +0.056
+Rel. diff. (%)
++0.87
++5.19
++5.29
++3.67
++9.58 +7.25
+task wording; this is consistent with recent evidence that opti-
+mization success is regime-dependent and tied to task structure
+[Zhang et al., 2026].
+Limitations.
+A key limitation of this work is that SAPO
+uses a fixed and relatively small segment set. While this de-
+composition is practical and interpretable, it may not capture
+finer-grained prompt structure needed for some tasks. Future
+work should explore richer segment taxonomies and adaptive
+segment discovery, including LLM-based automatic genera-
+tion of new segment types during optimization. This would
+allow the optimizer to expand or refine its own editing space
+dynamically, rather than relying on a predefined segmenta-
+tion scheme. Meanwhile, our current setup uses fixed top-
+5/bottom-5 evidence windows, which may miss finer-grained
+error modes.
+7
+Conclusion
+We presented SAPO, a modular APO framework that replaces
+monolithic rewrites with segment-level optimization. Un-
+der this protocol, SAPO achieves the strongest average per-
+formance against strong APO baselines and offers an inter-
+pretable pathway for future extensions in APO.
+8
+Acknowledgments
+This
+work
+supported
+by
+the
+Ministry
+of
+Eco-
+nomic Development of the Russian Federation (IGK
+000000C313925P4C0002), agreement No139-15-2025-010
+
+
+--- Page 5 ---
+References
+Lakshya A. Agrawal, Shangyin Tan, Dilara Soylu, Noah
+Ziems, Rishi Khare, Krista Opsahl-Ong, Arnav Singhvi,
+Herumb Shandilya, Michael J. Ryan, Meng Jiang, Christo-
+pher Potts, Koushik Sen, Alexandros G. Dimakis, Ion Sto-
+ica, Dan Klein, Matei Zaharia, and Omar Khattab. Gepa:
+Reflective prompt evolution can outperform reinforcement
+learning. arXiv preprint arXiv:2507.19457, 2026. Accepted
+to ICLR 2026 (Oral).
+Francesco Barbieri, Jose Camacho-Collados, Luis Espinosa-
+Anke, and Leonardo Neves. Tweeteval: Unified bench-
+mark and comparative evaluation for tweet classification. In
+Findings of the Association for Computational Linguistics:
+EMNLP 2020, pages 1644–1650, 2020.
+Tom B. Brown, Benjamin Mann, Nick Ryder, Melanie Sub-
+biah, Jared Kaplan, Prafulla Dhariwal, Arvind Neelakantan,
+Pranav Shyam, Girish Sastry, Amanda Askell, et al. Lan-
+guage models are few-shot learners. In Advances in Neural
+Information Processing Systems 33 (NeurIPS 2020), 2020.
+Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian, Mark
+Chen, Heewoo Jun, Lukasz Kaiser, Matthias Plappert, Jerry
+Tworek, Jacob Hilton, Reiichiro Nakano, Christopher Hesse,
+and John Schulman. Training verifiers to solve math word
+problems. arXiv preprint arXiv:2110.14168, 2021.
+Chrisantha Fernando, Dylan Banarse, Henryk Michalewski, Si-
+mon Osindero, and Tim Rockt¨aschel. Promptbreeder: Self-
+referential self-improvement via prompt evolution. arXiv
+preprint arXiv:2309.16797, 2023.
+Qingyan Guo, Rui Wang, Junliang Guo, Bei Li, Kaitao Song,
+Xu Tan, Guoqing Liu, Jiang Bian, and Yujiu Yang. Con-
+necting large language models with evolutionary algorithms
+yields powerful prompt optimizers. In International Con-
+ference on Learning Representations (ICLR), 2024.
+Omar Khattab, Arnav Singhvi, Paridhi Maheshwari, Zhiyuan
+Zhang, Keshav Santhanam, Sri Vardhamanan, Saiful Haq,
+Ashutosh Sharma, Thomas T. Joshi, Hanna Moazam,
+Heather Miller, Matei Zaharia, and Christopher Potts.
+Dspy: Compiling declarative language model calls into
+self-improving pipelines. arXiv preprint arXiv:2310.03714,
+2023.
+Bill Yuchen Lin, Wangchunshu Zhou, Ming Shen, Pei Zhou,
+Chandra Bhagavatula, Yejin Choi, and Xiang Ren. Com-
+mongen: A constrained text generation challenge for gener-
+ative commonsense reasoning. In Findings of the Associa-
+tion for Computational Linguistics: EMNLP 2020, pages
+1823–1840, 2020.
+Pengfei Liu, Weizhe Yuan, Jinlan Fu, Zhengbao Jiang, Hi-
+roaki Hayashi, and Graham Neubig. Pre-train, prompt, and
+predict: A systematic survey of prompting methods in natu-
+ral language processing. arXiv preprint arXiv:2107.13586,
+2021.
+Ruotian Ma, Xiaolei Wang, Xin Zhou, Jian Li, Nan Du,
+Tao Gui, Qi Zhang, and Xuanjing Huang. Are large lan-
+guage models good prompt optimizers?
+arXiv preprint
+arXiv:2402.02101, 2024.
+Rithesh Murthy, Ming Zhu, Liangwei Yang, Jielin Qiu, Juntao
+Tan, Shelby Heinecke, Caiming Xiong, Silvio Savarese,
+and Huan Wang. Promptomatix: An automatic prompt
+optimization framework for large language models. arXiv
+preprint arXiv:2507.14241, 2025.
+Shashi Narayan, Shay B. Cohen, and Mirella Lapata. Don’t
+give me the details, just the summary! topic-aware con-
+volutional neural networks for extreme summarization. In
+Proceedings of the 2018 Conference on Empirical Methods
+in Natural Language Processing (EMNLP), pages 1797–
+1807, 2018.
+Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll
+Wainwright, Pamela Mishkin, Chong Zhang, et al. Train-
+ing language models to follow instructions with human
+feedback. In Advances in Neural Information Processing
+Systems 35 (NeurIPS 2022), 2022.
+Reid Pryzant, Dan Iter, Jerry Li, Yin Tat Lee, Chenguang
+Zhu, and Michael Zeng. Automatic prompt optimization
+with ”gradient descent” and beam search. In Proceedings
+of the 2023 Conference on Empirical Methods in Natural
+Language Processing (EMNLP), pages 7957–7968, 2023.
+Pranav Rajpurkar, Robin Jia, and Percy Liang. Know what
+you don’t know: Unanswerable questions for squad. In
+Proceedings of the 56th Annual Meeting of the Association
+for Computational Linguistics (ACL 2018), pages 784–789,
+2018.
+Sander Schulhoff, Michael Ilie, Nishant Balepur, Konstantine
+Kahadze, Amanda Liu, Chenglei Si, Yinheng Li, Aayush
+Gupta, HyoJung Han, Sevien Schulhoff, et al. The prompt
+report: A systematic survey of prompt engineering tech-
+niques. arXiv preprint arXiv:2406.06608, 2024.
+Prith Sharma and Austin Z. Henley. Modular prompt opti-
+mization: Optimizing structured prompts with section-local
+textual gradients. arXiv preprint arXiv:2601.04055, 2026.
+Jason Wei, Xuezhi Wang, Dale Schuurmans, Maarten Bosma,
+Brian Ichter, Fei Xia, Ed H. Chi, Quoc V. Le, and Denny
+Zhou. Chain-of-thought prompting elicits reasoning in large
+language models. In Advances in Neural Information Pro-
+cessing Systems 35 (NeurIPS 2022), 2022.
+Yurong Wu, Yan Gao, Bin Benjamin Zhu, Zineng Zhou, Xi-
+aodi Sun, Sheng Yang, Jian-Guang Lou, Zhiming Ding, and
+Linjun Yang. Strago: Harnessing strategic guidance for
+prompt optimization. In Findings of the Association for
+Computational Linguistics: EMNLP 2024, pages 10043–
+10061, 2024.
+Chengrun Yang, Xuezhi Wang, Yifeng Lu, Hanxiao Liu,
+Quoc V. Le, Denny Zhou, and Xinyun Chen. Large lan-
+guage models as optimizers. In International Conference
+on Learning Representations (ICLR), 2024.
+Mert Yuksekgonul, Federico Bianchi, Joseph Boen, Sheng
+Liu, Zhi Huang, Carlos Guestrin, and James Zou. Textgrad:
+Automatic “differentiation” via text.
+arXiv preprint
+arXiv:2406.07496, 2024.
+Tianyi Zhang, Varsha Kishore, Felix Wu, Kilian Q. Wein-
+berger, and Yoav Artzi. Bertscore: Evaluating text gener-
+
+
+--- Page 6 ---
+ation with bert. In International Conference on Learning
+Representations (ICLR), 2020.
+Tuo Zhang, Jinyue Yuan, and Salman Avestimehr. Revisiting
+opro: The limitations of small-scale llms as optimizers. In
+Findings of the Association for Computational Linguistics:
+ACL 2024, pages 1727–1735, 2024.
+Xing Zhang, Guanghui Wang, Yanwei Cui, Wei Qiu, Ziyuan
+Li, Bing Zhu, and Peiyang He. Prompt optimization is a
+coin flip: Diagnosing when it helps in compound ai systems.
+arXiv preprint arXiv:2604.14585, 2026.
+Yongchao Zhou, Andrei Ioan Muresanu, Ziwen Han, Keiran
+Paster, Silviu Pitis, Harris Chan, and Jimmy Ba. Large lan-
+guage models are human-level prompt engineers. In Inter-
+national Conference on Learning Representations (ICLR),
+2023.
+A
+Ablation Study
+A.1
+Segment Importance
+To quantify the contribution of individual prompt segments,
+we run a controlled ablation on all five datasets using the
+same task-specific metrics as in the main experiments. For
+each dataset, we treat the final SAPO prompt as the baseline
+and evaluate on test samples ablated variants relative to that
+baseline:
+• −Role: final prompt without role
+• InitTasks: final prompt with tasks replaced by initial tasks
+• InitCtx: final prompt with context replaced by initial
+context
+• −RespFmt: final prompt without response format
+Dataset
+Baseline ∆(-Role) ∆(InitTasks) ∆(InitCtx) ∆(-RespFmt)
+SQuADv2
+-
++0.0210
+-0.0637
++0.0000
+-0.0281
+TEval
+-
+-0.0744
+-0.0391
+-0.0160
+-0.0844
+XSUM
+-
+-0.0103
+-0.0811
++0.0011
+-0.0328
+CG
+-
+-0.0016
+-0.0550
+-0.0005
+-0.0522
+GSM8K
+-
+-0.0801
+-0.2800
++0.0000
++0.0207
+Average
+-
+-0.0291
+-0.1038
+-0.0031
+-0.0354
+Table 3: Segment ablation on five datasets. Each ∆entry reports
+variant score minus baseline score, where positive values indicate
+improvement over baseline and negative values indicate degradation.
+The experimental results are shown in Table 3. The updated
+delta table shows a clear pattern: all ablation families are neg-
+ative on average, meaning the final SAPO prompt remains the
+strongest configuration overall. The largest degradation comes
+from reverting tasks to initial wording (Avg ∆= −0.1038),
+with the strongest drop on GSM8K (−0.2800); this confirms
+that task-level refinement is the main driver of improvements.
+Removing response-format constraints also hurts on average
+(Avg ∆= −0.0354), and role removal is similarly unfavor-
+able overall (Avg ∆= −0.0291). Although isolated positives
+exist (e.g., SQuADv2 for −Role, GSM8K for −RespFmt),
+they are not strong enough to reverse the cross-dataset trend.
+Context reversion is the least harmful perturbation (Avg
+∆= −0.0031), with near-zero effects on SQuADv2 and
+GSM8K and mixed small effects elsewhere. This suggests
+that, in the current setup, context edits are comparatively sta-
+ble, while tasks and output constraints are the most sensitive
+levers.
+A.2
+Computational Costs.
+To make algorithmic cost comparable across methods, we
+use a call-level proxy under a common budget (T iterations,
+K candidates per iteration). Let Ntr and Nval denote train
+and validation sizes, and let cdiag, crefl, and cgen denote per-
+iteration diagnostic/reflection/generation overhead constants.
+Under this proxy:
+• APO:
+CAPO = T
+
+K Ntr + K Nval + cdiag + crefl + K cgen
+
+• OPRO:
+COPRO = T
+
+K Nval + K cgen
+
+• EvoPrompt:
+CEvo = T
+
+K Nval + K cgen
+
+• StraGO:
+CStraGO = T
+
+K Ntr + K Nval + cdiag + K cgen
+
+• GEPA:
+CGEPA = T
+
+K Ntr +K Nval +cdiag +crefl +K cgen
+
+• SAPO:
+CSAPO = T
+
+Ntr + K Nval + cdiag + cgen
+
+This proxy captures dominant LLM-call complexity, while
+wall-clock time also depends on provider latency, batching,
+and parallelization.
+B
+Prompt Optimization Example by SAPO
+
+
+--- Page 7 ---
+Figure 2: Example of SAPO optimization on GSM8K samples. The figure traces how the LLM diagnoses and updates weak prompt segments
+across iterations. At each step, performance is analyzed at the segment level; missing segments are treated as weak by default. Segments
+identified as strong are preserved and not modified during candidate generation. The best result was obtained at iteration 3 (candidate 1), where
+segment-level expansion and reformulation yielded near-complete coverage of correct answers on the sample.
+
+
+--- Page 8 ---
+C
+SAPO Optimized Prompts
+The figures below show, for each dataset, the initial prompt
+(top) and the optimized segmented prompt (bottom) used in
+GPT-4o-mini experiments.
+Figure 3: SQuADv2 prompt pair (GPT-4o-mini): initial prompt (top)
+and optimized segmented prompt (bottom).
+Figure 4: TweetEval Sentiment prompt pair (GPT-4o-mini): initial
+prompt (top) and optimized segmented prompt (bottom).
+Figure 5: XSUM prompt pair (GPT-4o-mini): initial prompt (top)
+and optimized segmented prompt (bottom).
+Figure 6: CommonGen prompt pair (GPT-4o-mini): initial prompt
+(top) and optimized segmented prompt (bottom).
+Figure 7: GSM8K prompt pair (GPT-4o-mini): initial prompt (top)
+and optimized segmented prompt (bottom).
+
+
+--- Page 9 ---
+Figure 8: SQuADv2 prompt pair (GPT-3.5-Turbo): initial prompt
+(top) and optimized segmented prompt (bottom).
+Figure 9: TweetEval Sentiment prompt pair (GPT-3.5-Turbo): initial
+prompt (top) and optimized segmented prompt (bottom).
+Figure 10: XSUM prompt pair (GPT-3.5-Turbo): initial prompt (top)
+and optimized segmented prompt (bottom).
+Figure 11: CommonGen prompt pair (GPT-3.5-Turbo): initial prompt
+(top) and optimized segmented prompt (bottom).
+
+
+--- Page 10 ---
+Figure 12: GSM8K prompt pair (GPT-3.5-Turbo): initial prompt
+(top) and optimized segmented prompt (bottom).
+
+
+--- Page 11 ---
+D
+Meta-prompts
+Figure 13: Segmentation meta-prompt used by SAPO to decompose
+a prompt into role, context, tasks, and output format.
+Figure 14:
+Weakness-analysis meta-prompt:
+SAPO contrasts
+top/bottom evidence and outputs weak segments, strong segments,
+and actionable recommendations.
+Figure 15: Candidate-generation meta-prompt used to synthesize
+constrained prompt variants that preserve strong segments and revise
+weak ones.
