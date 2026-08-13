@@ -1,10 +1,45 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-08-11
+**Last Updated:** 2026-08-13
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-13 (4 papers)
+
+### [MEGA: Self-Evolving Agent Optimization Infrastructure via Wisdom Graph](https://arxiv.org/abs/2608.10504)
+
+**2026-08-11** | megacode.ai | M=8 P=9 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Three-layer self-evolving architecture (MEGA) with typed Wisdom Graph, PCR decomposition, PCST-based compositional retrieval, and multi-agent collaborative optimization under Seed-Epoch regime | *LLM role:* Multi-agent coordination, knowledge synthesis, conflict resolution, test case generation, evaluation, root-cause analysis, code review, architectural redesign, meta-learning
+
+> MEGA is a three-layer infrastructure for self-evolving agent optimization that distills execution traces into a structured 'Wisdom Graph' and uses a multi-agent loop to iteratively improve agent workflows. The results are backed by strong empirical numbers, achieving a 76.55 aggregate score on four benchmarks (HotpotQA, IFBench, HoVer, PUPA) and outperforming SOTA optimizers like GEPA and TextGrad. The key insight is the 'Seed-Epoch' evaluation regime—which fixes the evaluation seed during an optimization epoch to eliminate data variance and isolate the true impact of strategy changes—alongside the decomposition of memory into atomic Primary-Context-Resultant (PCR) triplets for logical reasoning. This is highly relevant to our work in LLM evolutionary search and multi-agent optimization, offering concrete architectural blueprints for persistent memory and reliable fitness attribution across search runs.
+
+### [Hierarchical Self-Improvement: A Framework for Task-Specific Evolvable Agent Harnesses](https://arxiv.org/abs/2608.08466)
+
+**2026-08-09** | HKUST | M=8 P=7 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Hierarchical Self-Improvement (HSI) framework with layered self-modification of agent harnesses and evolution strategies | *LLM role:* code_writer
+
+> Zhou introduces Hierarchical Self-Improvement (HSI), a framework where a single frozen LLM evolves both its task-specific execution harness and the evolutionary search strategy used to improve that harness. The results are backed by strong empirical evidence on the BALROG benchmark, showing massive gains (e.g., +39.3% on BabyAI, +33.0% on Crafter) using DeepSeek-V4-Flash, with ablation studies proving that evolving the search strategy itself contributes significantly to the performance. The key insight is the three-layer hierarchical architecture (task harness, evolver, meta-evolver) bounded by a frozen outer anchor, which allows the system to safely rewrite its own seed selection and commit policies without unbounded self-reference. This is highly relevant to our work in LLM evolutionary search, as it provides a concrete, implementable blueprint for 'evolving the evolver' to improve search efficiency and discovery quality.
+
+### [PACE: Primitive-Aware Code Evolution for Automated Algorithm Design](https://arxiv.org/abs/2608.07395)
+
+**2026-08-07** | Southern University of Science and Technology, Shenzhen University | M=8 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Primitive-Aware Code Evolution (PACE) using Executable Algorithmic Primitives (EAPs) with Thompson Sampling for EAP selection and primitive-aware variation operators | *LLM role:* code_writer
+
+> Xie et al. introduce Primitive-Aware Code Evolution (PACE), which improves LLM-based automated algorithm design by extracting and preserving useful local logic as reusable Executable Algorithmic Primitives (EAPs). The method demonstrates strong empirical results, outperforming recent baselines like ReEvo and MCTS-AHD on zero-shot transfer for TSP (e.g., achieving a cost of 28.13 vs 50.29 on 1000-node TSP-ACO) and continuous control tasks. The key insight is using Thompson Sampling to evaluate the parent-relative performance improvement of individual EAPs, effectively solving the credit assignment problem for sub-components without requiring extra evaluation budgets. This is highly relevant to our work in LLM evolutionary search, as it provides a concrete, implementable architecture for persistent memory and modular code generation that directly improves search efficiency.
+
+### [Relay, Don't Route: Adaptive Population Handoff for Cost-Efficient LLM-Driven Evolution](https://arxiv.org/abs/2608.05651)
+
+**2026-08-06** | Carnegie Mellon University, The University of Hong Kong, City University of Hong Kong, JIUTIAN Research, China Mobile | M=8 P=9 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Training-free adaptive population handoff framework using a Grow–Deepen bandit scheduler and greedy submodular selection for candidate curation | *LLM role:* mutation_operator, exploration, refinement
+
+> RelayEvolve is a training-free framework that reduces the cost of LLM-driven evolutionary search by using a cheap model to explore and curate a quality-diverse population, which is then handed off to a strong model for refinement. The results are backed by solid empirical evidence, showing it outperforms single-model and call-level routing baselines in 11 of 12 budget-benchmark settings across four program evolution tasks. The key insight is that because evolutionary search is stateful, budget allocation should focus on population handoff rather than individual mutation steps; cheap models can efficiently capture front-loaded progress to build a diverse seed bank. This is highly relevant for our research in LLM evolutionary search, offering a concrete, implementable strategy to drastically reduce API costs while maintaining or improving search quality.
+
 
 #### 2026-08-11 (1 papers)
 
