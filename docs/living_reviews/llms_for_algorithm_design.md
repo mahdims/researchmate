@@ -1,10 +1,53 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-08-13
+**Last Updated:** 2026-08-18
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-18 (5 papers)
+
+### [Competing at Every Price Point with Agentic Evolution over a Menu of LLMs](https://arxiv.org/abs/2608.16207)
+
+**2026-08-17** |  | M=8 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Evolutionary meta-agent (RoboPhD) evolving agent Python programs using Elo-based selection over head-to-head batch tournaments with a cost-penalized objective | *LLM role:* evolutionary_search, code_writer, evaluator
+
+> Borthwick introduces a cost-targeted evolutionary meta-agent that writes Python programs utilizing a menu of differently-priced LLMs to optimize the cost-accuracy Pareto frontier. The results are highly rigorous, Pareto-dominating nearly all baselines (including hand-engineered systems) on two AstaBench tasks using only 66 to 100 training examples. The key insight is that exposing a priced menu of LLMs to the evolutionary search and using a graded cost-penalty objective (pricing cost overages in error-equivalents) naturally forces the discovery of cheap-first cascades and selective strong-model escalation. This is essential reading for our work in LLM evolutionary search and multi-agent optimization, as it provides a concrete, proven mechanism for managing inference costs and sample efficiency during automated agent design.
+
+### [$\varepsilon$-MemEvo: Adaptive Cross-Task Memory Transfer for LLM Program Evolution](https://arxiv.org/abs/2608.12522)
+
+**2026-08-12** |  | M=9 P=9 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* LLM-based program evolution augmented with a Tactic Memory Bank for natural-language strategy summaries and an Adaptive Injection Gate using contextual Thompson Sampling. | *LLM role:* program_generator, strategy_summarizer, prompt_augmenter
+
+> ε-MemEvo introduces a cross-task memory framework for LLM program evolution that stores natural-language strategy summaries from prior tasks and uses a contextual Thompson Sampling gate to control their injection into new tasks. The results are rigorously backed by empirical data, demonstrating an 8.7% improvement in convergence area (AUCC) and a 9.4% boost in early-stage convergence across 8 optimization benchmarks using GPT-5. The key insight is that cross-task memory transfer in evolutionary coding is fundamentally a safety problem; naive memory injection causes catastrophic negative transfer, but an adaptive bandit gate successfully suppresses mismatched tactics while retaining the benefits of aligned ones. This is exceptionally relevant to our research in LLM evolutionary search, providing a concrete, low-overhead mechanism to safely reuse algorithmic discoveries across different optimization domains without sacrificing search stability.
+
+### [MEGA: Self-Evolving Agent Optimization Infrastructure via Wisdom Graph](https://arxiv.org/abs/2608.10504)
+
+**2026-08-11** | megacode.ai | M=8 P=9 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Three-layer self-evolving architecture (MEGA) with typed Wisdom Graph, PCR decomposition, PCST-based compositional retrieval, and multi-agent collaborative optimization under Seed-Epoch regime | *LLM role:* Multi-agent coordination, knowledge synthesis, conflict resolution, test case generation, evaluation, root-cause analysis, code review, architectural redesign, meta-learning
+
+> MEGA is a three-layer infrastructure for self-evolving agent optimization that distills execution traces into a structured 'Wisdom Graph' and uses a multi-agent loop to iteratively improve agent workflows. The results are backed by strong empirical numbers, achieving a 76.55 aggregate score on four benchmarks (HotpotQA, IFBench, HoVer, PUPA) and outperforming SOTA optimizers like GEPA and TextGrad. The key insight is the 'Seed-Epoch' evaluation regime—which fixes the evaluation seed during an optimization epoch to eliminate data variance and isolate the true impact of strategy changes—alongside the decomposition of memory into atomic Primary-Context-Resultant (PCR) triplets for logical reasoning. This is highly relevant to our work in LLM evolutionary search and multi-agent optimization, offering concrete architectural blueprints for persistent memory and reliable fitness attribution across search runs.
+
+### [Improving the matrix multiplication exponent with modern optimization and AlphaEvolve](https://arxiv.org/abs/2608.16884)
+
+**2026-08-17** | Google DeepMind, MIT, Carnegie Mellon University, Columbia University | M=6 P=5 I=8 **MUST-READ** *discuss*
+
+*Method:* Gradient descent with optimal transport techniques and AlphaEvolve for algorithm refinement | *LLM role:* evolutionary_search
+
+> This paper applies gradient-based optimization and AlphaEvolve to the combination loss analysis problem, improving the theoretical upper bound on the matrix multiplication exponent to ω < 2.371177. The results are rigorously verified using rational arithmetic, proving a genuine state-of-the-art advance over the previous 2.371339 bound. The key insight for LLM evolutionary search is the preparation pipeline: the authors relaxed discrete max-entropy constraints into a differentiable tensor program using the Sinkhorn-Knopp algorithm and Jax, enabling hardware parallelization up to 7 million parameters. They then applied AlphaEvolve using 'evolving constructions' to iteratively refine the optimizer while passing the best solution state between generations. This is highly relevant for our work, as it demonstrates how to successfully scale LLM-driven algorithm discovery for massive, highly constrained combinatorial problems.
+
+### [GoalEvolve: From Handcrafted Algorithm Priors to Goal-Driven Evolution of Physical Design Algorithms](https://arxiv.org/abs/2608.16733)
+
+**2026-08-17** | Fudan University | M=8 P=7 I=8 **MUST-READ** *discuss*
+
+*Method:* Goal-driven source-code evolution framework with LLM-based Teacher-Student agents and mechanism memory | *LLM role:* decomposition_guide
+
+> GoalEvolve is an LLM-based evolutionary search framework that optimizes physical design algorithms by targeting final full-flow metrics rather than stage-local objectives. The results are backed by strong empirical evidence, demonstrating a 30.67% improvement in total negative slack over default OpenROAD and outperforming standard Codex goal mode under matched evaluation budgets. The key insight is the use of 'effect-debt analysis' combined with an Evolutionary Program Database (EPD), which tracks whether a local algorithmic change causes downstream degradation and stores this as persistent mechanism memory to guide future LLM prompts. This is highly relevant to our research in LLM evolutionary search; the team can adapt the EPD and effect-debt tracking to improve sample efficiency and credit assignment in our own multi-stage optimization pipelines, such as routing or scheduling.
+
 
 #### 2026-08-13 (4 papers)
 

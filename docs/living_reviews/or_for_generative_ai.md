@@ -1,10 +1,21 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-08-13
+**Last Updated:** 2026-08-18
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-18 (1 papers)
+
+### [LazyTrain: Limited-resource Allocation toward Zero-waste Yield Optimization in Large Language Model Training](https://arxiv.org/abs/2608.11919)
+
+**2026-08-12** | The Hong Kong University of Science and Technology (Guangzhou), IDEA Research, DataArcTech Ltd. | M=7 P=6 I=7 *discuss*
+
+*Method:* Mixed-integer linear programming (MILP) for joint optimization of checkpoint selection, activation placement, recomputation, and CPU-GPU-NVMe communication overlap | *LLM role:* none
+
+> LazyTrain formulates limited-resource LLM training, specifically activation offloading, recomputation, and communication overlap, as a mixed-integer linear programming (MILP) scheduling problem. The results are backed by concrete hardware measurements, demonstrating a 1.24x TFLOPS improvement over heuristic baselines on a single H800 for a 27B model. The key insight is that treating heterogeneous memory offloading as a joint MILP path-selection problem, rather than a greedy heuristic, enables the solver to perfectly hide PCIe and NVMe transfer costs within compute windows. This is highly relevant to our work on operations research formulations for AI systems, as the specific bandwidth and compute-overlap constraints can be directly adapted for optimizing LLM serving and GPU resource allocation.
+
 
 #### 2026-08-13 (5 papers)
 
