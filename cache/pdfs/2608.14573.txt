@@ -1,0 +1,1724 @@
+--- Page 1 ---
+1
+WARA: Toward Automated Wireless Optimization
+Research with Closed-Loop LLM Agents
+Yuan Guo, Member, IEEE, Yilong Chen, Member, IEEE, Chao Hu, Graduate Student Member, IEEE,
+Xianghao Yu, Senior Member, IEEE, Liang Hong, and Jie Xu, Fellow, IEEE
+Abstract—Large language model (LLM) agents are increas-
+ingly capable of external tool use, code generation and execution,
+intermediate artifact inspection, and iterative output revision,
+creating new opportunities for automating scientific and engineer-
+ing research. To the best of our knowledge, this paper presents
+the first end-to-end autoresearch framework for the wireless
+domain, with a particular focus on wireless resource allocation
+optimization, an essential area for characterizing the fundamental
+performance limits of wireless systems and enhancing their
+practical performance under dynamic channel and network
+conditions. Specifically, we propose the Wireless AutoResearch
+Agent (WARA), a closed-loop multi-agent system for automated
+wireless optimization research. Given only an initial research
+topic as input, WARA decomposes the research workflow into
+three phases: 1) research gap identification and problem proposal,
+2) wireless optimization problem modeling, solution algorithm
+design, and experimentation, and 3) construction of research
+deliverables. For each phase, we design artifact-mediated control
+mechanisms, where declared upstream artifacts are consumed
+as inputs to produce structured outputs for downstream use. A
+controller-managed gate is then applied in each phase to validate
+the generated artifacts and ensure consistency among models,
+algorithms, experiments, and claims. When an artifact fails
+validation, only the corresponding artifact needs to be repaired,
+rather than restarting the entire workflow. Furthermore, we
+present a representative wireless resource allocation case study to
+demonstrate how WARA converts an initial topic into a complete
+research package with executable evidence and a synthesized
+technical manuscript. We also design a structured LLM-based
+ScoringAgent to evaluate manuscript-level research validity and
+optimization research maturity, and the comparative evaluations
+show that WARA substantially outperforms one-shot LLM gen-
+eration while approaching the quality profile of recently accepted
+peer-reviewed technical papers. These results demonstrate that
+closed-loop artifact control is a promising path toward end-
+to-end LLM-assisted wireless optimization research. The source
+code is available at https://github.com/guoyuan-dotcom/WARA
+CUHKSZ.
+Index Terms—Wireless autoresearch, large language model
+agents, wireless optimization, multi-agent systems, automated
+research workflows.
+Yuan Guo, Yilong Chen, Chao Hu, and Jie Xu are with the School of
+Science and Engineering (SSE), the Shenzhen Future Network of Intelligence
+Institute (FNii-Shenzhen), and the Guangdong Provincial Key Laboratory of
+Future Networks of Intelligence, The Chinese University of Hong Kong,
+Shenzhen, Guangdong 518172, China (e-mail: guoyuan@cuhk.edu.cn, cheny-
+ilong@cuhk.edu.cn, chaohu@link.cuhk.edu.cn, xujie@cuhk.edu.cn).
+Xianghao Yu is with the Department of Electrical Engineering, City
+University of Hong Kong, Hong Kong (e-mail: alex.yu@cityu.edu.hk).
+Liang Hong is with Sun Yat-Sen University, Guangzhou, Guangdong
+510006, China (e-mail: hongliang@sysu.edu.cn).
+(Corresponding author: Jie Xu).
+I. INTRODUCTION
+The remarkable success of large artificial intelligence mod-
+els, particularly large language models (LLMs), has reshaped
+expectations regarding the role of artificial intelligence (AI) in
+scientific and engineering research. Beyond their established
+use in text and code generation, LLMs are increasingly being
+embedded into agentic systems that integrate language-based
+reasoning with external tools, executable environments, reflec-
+tion mechanisms, and multi-agent coordination
+[1]–[4]. In
+this context, LLM-based agentic systems offer a promising
+path toward autonomous research exploration, enabling the
+generation of innovative research ideas and their progressive
+refinement into validated research outcomes through iterative
+reasoning, execution, and verification.
+A typical research workflow in science and engineering
+can generally be divided into three phases: 1) research gap
+and problem identification, where a broad topic or moti-
+vation is used to guide a comprehensive literature review,
+identify limitations in prior work, and formulate a concrete
+research problem; 2) problem solving and experimentation,
+where the problem is developed into a technical model, solved
+using suitable algorithms or methods, and evaluated through
+experiments; and 3) construction of deliverables, where the
+results are verified, refined, and organized into research papers
+through iterative research-review cycles.
+Prior work has shown that LLMs and LLM-based agents
+can assist research in each of these phases separately. First,
+for the research gap and problem identification phase, the
+authors in [5] exploited LLMs to generate research ideas and
+evaluated their quality against human-generated ideas through
+expert review. ResearchAgent [6] and Scideator [7] further
+used existing papers to support research problem generation
+and human–LLM ideation, while the AI co-scientist system
+[8] employed multiple agents to generate and refine scientific
+hypotheses. Next, for the problem solving and experimentation
+phase, several studies have investigated local design–execution
+loops, where LLM agents write code, run experiments, inspect
+outputs, and revise their solutions [9]–[16]. Specifically, MLA-
+gentBench [9], MLEbench [10], and AIDE [11] evaluated
+these capabilities in machine-learning experimentation and
+engineering settings. [12]–[16] studied LLM-assisted opti-
+mization scenarios, where LLMs transform natural-language
+problem descriptions into mathematical optimization formu-
+lations and then design algorithms or solution methods for
+the formulated problems. Furthermore, for the construction
+of deliverables phase, data-to-paper [17] and CycleResearcher
+arXiv:2608.14573v1  [cs.NI]  7 Jun 2026
+
+
+--- Page 2 ---
+2
+[18] studied how LLMs can organize technical results into
+complete research papers through iterative research-review
+cycles. Relatedly, [19]–[21] investigated LLM-based review
+and evaluation methods to support scientific feedback, paper
+review, and paper-level assessment.
+Different from the above works that focus on specific phases
+of the research process, another line of research takes a further
+step by connecting these phases into closed-loop research
+workflows, leading to recent advances in end-to-end closed-
+loop autoresearch. In particular, autoresearch has attracted
+growing interest in AI/machine learning (ML) and computa-
+tional research, where algorithm design and experimentation
+can be performed online by LLM agents through code gener-
+ation and tool use. For example, AI Scientist is an early end-
+to-end AI/ML autoresearch system that generates complete
+papers from research ideas, but it largely relies on single-agent
+reasoning and has limited ability to recover from execution
+failures [22]. AI Scientist-v2 advances this direction through
+agentic tree search and experiment management, although
+each run is still largely treated as an independent research
+attempt [23]. AI-Researcher develops a multi-agent system
+for autonomous AI research and introduces Scientist-Bench
+to evaluate the quality of generated research outputs [24].
+AutoResearchClaw [25] further formulates autonomous re-
+search as an iterative process by incorporating failure recovery,
+result verification, human–AI collaboration, and experience
+accumulation across runs. Beyond AI/ML, a recent work
+[26] proposed Robin, an autoresearch framework for science,
+particularly biology, where LLM-based multi-agent systems
+are used for background research, hypothesis generation, and
+data analysis, while human-based laboratory experimentation
+is integrated as one phase of the overall loop.
+Motivated by recent advances in autoresearch for science
+and engineering, this paper investigates closed-loop research
+automation for wireless communications, with a particular
+focus on wireless resource allocation and optimization. Re-
+source allocation is a cornerstone of wireless communication
+research, playing a central role in both characterizing fun-
+damental performance limits and enhancing practical system
+performance under dynamic channel and network conditions1.
+On the one hand, many fundamental problems in wireless
+communications can be formulated as optimization problems.
+For example, the characterization of information-theoretic
+limits in communication systems such as multi-input multi-
+output (MIMO) communications [27], massive MIMO [28],
+reconfigurable intelligent surface (RIS)-assisted networks [29],
+movable-antenna systems [30], and unmanned aerial vehicle
+(UAV)-enabled communications [31], integrated sensing and
+communications (ISAC) [32], and simultaneous wireless infor-
+mation and power transfer (SWIPT) [33], can often be cast as
+rate maximization problems over transmit covariance matrices,
+power allocation policies, bandwidth allocation strategies, and
+other communication resources [34], [35]. On the other hand,
+future sixth-generation (6G) networks are expected to operate
+1A survey of major IEEE wireless communications venues from 2010
+to 2025 reveals that optimization-related research consistently constitutes a
+substantial portion of published papers, with the proportion typically ranging
+from 40% to 70% across different venues and years.
+in highly dynamic environments with massive antenna arrays,
+dense deployments, heterogeneous nodes, integrated sensing
+and computing functionalities, and rapidly varying service
+requirements. In such systems, adaptive resource allocation
+is essential for improving communication efficiency, mitigat-
+ing interference, and coordinating communication, sensing,
+and computing resources across space and time. Importantly,
+wireless optimization research exhibits a highly structured
+workflow that is particularly amenable to automation. Given
+a communication scenario, researchers typically formulate a
+mathematical optimization problem based on physical channel
+models, communication-performance metrics, and resource
+constraints [34]–[39]. The resulting problem is then solved us-
+ing analytical or numerical methods, followed by simulation-
+based evaluation under representative network settings. This
+workflow naturally provides executable verification mecha-
+nisms, where optimization algorithms and simulation envi-
+ronments can be repeatedly invoked to validate technical
+claims. Such a process of modeling assumptions, optimization
+formulations, algorithm design, experimental evaluation, and
+performance claims makes wireless optimization research an
+ideal test-bed for closed-loop autoresearch systems.
+In the literature, recent studies have begun exploring the
+use of LLMs and LLM agents in wireless communications.
+One line of work focuses on LLM-assisted wireless optimiza-
+tion and network control, including power control, adaptive
+resource allocation, optimization reformulation, and LLM-
+powered xApps for O-RAN management [40]–[45]. Another
+line of work develops wireless-domain LLM agent frameworks
+and benchmarks. Examples include LLM-enhanced multi-
+agent systems for 6G communications [46], WirelessAgent
+for intelligent network management [47], AgentRAN for
+autonomous O-RAN control [48], ComAgent for intent-
+driven wireless optimization and simulation generation [49],
+WirelessAgent++ for workflow discovery, and WirelessBench
+for wireless-agent evaluation [50], [51]. While these efforts
+demonstrate the potential of LLMs for wireless optimization
+and network intelligence, they primarily address isolated tasks
+such as network control, optimization formulation, workflow
+generation, or benchmark evaluation. To the best of our knowl-
+edge, no existing work has investigated the end-to-end au-
+tomation of wireless optimization research, spanning research
+problem discovery, mathematical modeling, algorithm design,
+experimentation, result validation, and manuscript generation
+within a unified closed-loop framework.
+To bridge this gap, we propose the Wireless AutoRe-
+search Agent (WARA), an end-to-end autoresearch framework
+for wireless optimization. Rather than generating individual
+artifacts in isolation, WARA aims to transform an initial
+wireless research topic into a technically consistent, evidence-
+supported, and reviewable research package, where modeling
+assumptions, optimization formulations, algorithmic designs,
+executable experiments, and reported claims remain coherent
+throughout the entire research lifecycle. Specifically, WARA
+organizes the research process into three phases: 1) research
+gap identification and problem proposal, 2) wireless optimiza-
+tion modeling and experimentation, and 3) research deliverable
+generation. For each phase, we design artifact-mediated con-
+
+
+--- Page 3 ---
+3
+WARA Controller
+Runs gates, freezes con-
+tracts, and routes repair
+Wireless Artifact Workspace
+Stores problems, models, code,
+logs, figures, references, and claims
+commit / read
+Phase 1
+Research gap
+identification
+and problem
+proposal
+Phase 2
+Wireless
+optimization
+modeling,
+algorithm
+design, and
+experimentation
+Phase 3
+Research
+deliverable
+generation
+Subphase 1.1
+Identification of
+Wireless System,
+Variables, and Metrics
+ScoutAgent
+Subphase 1.2
+Literature Search
+LiteratureAgent
+Subphase 1.3
+Generation
+and Selection
+of Research Problems
+ScoutAgent
+Subphase 1.4
+Freezing and Exporting
+the Selected Problem
+LiteratureAgent
+topic
+literature
+problem
+problem handoff
+Subphase 2.1
+Construction of
+System Model
+and Optimization
+Problem
+FormulationAgent
+Subphase 2.2
+Tractability Analysis and
+Solution-Route Selection
+TheoryAgent
+Subphase 2.3
+Algorithm
+Specification and
+Validation Principle
+TheoryAgent
+Subphase 2.4
+Experiment Design
+and Code Execution
+ExperimentAgent
+Subphase 2.5
+Result Verification
+and Promotion
+to Paper-Level Evidence
+ValidationAgent
+model
+route
+algorithm
+quick run
+math contract
+algorithm contract
+executable package
+verified result package
+experiment / result repair
+result
+verified results
+Subphase 3.1
+Drafting Problem
+Formulation
+and Method Sections
+WritingAgent
+Subphase 3.2
+Drafting
+Numerical Results
+and Supported Claims
+AnalysisAgent
+Subphase 3.3
+Assembly of
+Technical Sections
+WritingAgent
+Subphase 3.4
+Construction of the Full
+Manuscript Draft
+LiteratureAgent
++ WritingAgent
+Subphase 3.5
+Full Manuscript Review
+ReviewAgent
+Subphase 3.6
+Revision and
+Export of the
+Final Research Package
+RepairAgent +
+WritingAgent
+tech
+claims
+sections
+citations
+final
+manuscript repair
+main artifact flow
+phase handoff
+localized repair
+frozen contract
+Fig. 1. WARA workflow for wireless optimization autoresearch. Each subphase is executed by one or more role-specialized agents responsible for specific
+tasks, as summarized in Table I.
+trol mechanisms, where declared upstream artifacts are con-
+sumed as inputs to produce structured outputs for downstream
+use. A controller-managed gate is then applied in each phase to
+validate the generated artifacts and ensure consistency among
+models, algorithms, experiments, and claims. When an artifact
+fails validation, only the corresponding artifact needs to be
+repaired, rather than restarting the entire workflow.
+Furthermore, we present a representative wireless resource
+allocation case study to demonstrate how WARA transforms
+an initial research topic into a complete set of research
+deliverables, including executable experimental evidence and
+a synthesized technical manuscript. To evaluate the gen-
+erated manuscripts, we further design a structured LLM-
+based ScoringAgent that applies fixed reviewer-style rubrics
+to assess manuscript-level research validity and optimization
+research maturity. Comparative evaluations show that WARA
+substantially outperforms one-shot LLM generation under the
+same topic set and backbone model, while approaching the
+quality profile of recently accepted peer-reviewed technical
+papers. These results highlight the effectiveness of closed-loop
+artifact-mediated control and suggest a promising pathway to-
+ward end-to-end LLM-assisted wireless optimization research.
+The remainder of this paper is organized as follows. Sec-
+tion II proposes the WARA framework and details the three
+research phases. Section III presents a representative wireless
+optimization case study and illustrates the complete artifact
+trajectory generated by WARA. Section IV presents compara-
+tive evaluations against one-shot LLM-generated manuscripts
+and recently accepted peer-reviewed papers. Finally, Section V
+concludes the paper and discusses future research directions
+for wireless autoresearch.
+II. WARA FRAMEWORK
+In this section, we present the WARA framework for
+closed-loop wireless optimization research. We first introduce
+the overall architecture and workflow of WARA. We then
+describe the implementation details of each phase, followed
+by the artifact-mediated control mechanism consisting of gate
+validation, interface freezing, and localized repair.
+A. Overall Workflow
+Following the standard workflow of wireless optimization
+research, WARA is designed to automatically construct a
+complete research package from an initial wireless research
+topic under a finite computational budget. As illustrated in Fig.
+1, WARA organizes the research process into three sequential
+phases coordinated by multiple role-specialized LLM agents,
+i.e.
+1) Research Gap Identification and Problem Proposal;
+2) Wireless Optimization Modeling, Algorithm Design, and
+Experimentation;
+3) Research Deliverable Generation.
+In particular, the first phase aims to transform a broad
+research topic into a concrete and technically grounded re-
+search problem. To achieve this, it is further divided into four
+subphases that successively generate a research frame, collect
+grounding evidence from the literature, produce and select
+candidate research directions, and export a frozen problem
+handoff. Given the selected research problem, the second
+phase develops the technical solution through five subphases.
+Specifically, it constructs the system model, formulates the
+optimization problem, analyzes problem tractability and po-
+tential reformulations, designs the solution algorithm and
+
+
+--- Page 4 ---
+4
+validation principles, and generates executable experimental
+workflows. Through iterative execution, quick validation, and
+result verification, this phase ultimately produces validated
+numerical results and paper-ready figures supporting the pro-
+posed technical approach. Finally, the third phase transforms
+the generated technical artifacts into research deliverables.
+Specialized agents are responsible for drafting and assembling
+manuscript components, including the introduction, system
+model, methodology, experimental evaluation, and conclusion
+sections. These components are subsequently integrated into
+a complete manuscript package. In parallel, a review agent
+evaluates the technical consistency, result support, and overall
+manuscript quality, and requests revisions when deficiencies
+are identified.
+For the purpose of clarity, we now define several concepts
+used throughout the WARA workflow as follows,
+• Artifact is a stored research object produced or used
+during a WARA run. It records content generated by
+an agent, an execution tool, or a validation step. The
+workspace saves artifacts as persistent files so that later
+steps can read, check, and reuse them.
+• Role-specialized agents are task-specific LLM roles used
+to produce or revise WARA artifacts. Each agent uses its
+role prompt and the relevant input artifacts to generate
+the required output, which is then stored in the workspace
+and checked by the corresponding gate. The main agents,
+their research roles, artifact interfaces, and execution or
+verification mechanisms are summarized in Table I.
+• Gate is a check performed before an artifact, contract,
+or handoff is used by later steps. It produces a machine-
+readable report with the pass/fail result, detected prob-
+lems, and repair suggestions. The gate checks the required
+properties of the current subphase, including complete-
+ness, contract consistency, executable behavior, evidence
+validity, citation support, and manuscript consistency.
+• Contract is a structured artifact that records technical
+decisions to be preserved at later steps. A contract
+fixes decisions made in an accepted artifact, including
+the problem direction, modeling assumptions, notation,
+variables, objective, constraints, solution route, solver
+requirements, experiment scope, or claim boundary. After
+the corresponding gate passes, the contract is frozen and
+later agents must follow it when generating, checking, or
+revising artifacts.
+• Handoff is the information package passed from one
+phase to the next after the current phase has been checked.
+It collects the accepted artifacts and frozen contracts
+required by the next phase. A handoff records what the
+next phase uses as its fixed starting point, including
+the selected direction, modeling requirements, validation
+plan, verified evidence, and supported claims.
+• Controller is the module that coordinates a WARA run.
+It calls agents, records their outputs, tracks dependencies
+among artifacts, applies gates, freezes accepted contracts
+and handoffs, and sends failed outputs back for revision.
+The controller records these actions in run manifests
+rather than rewriting the research content.
+In the following three subsections, we describe the execution
+of the three phases by detailing their corresponding subphases.
+B. Phase 1: Research Gap Identification and Problem Pro-
+posal
+Phase 1 addresses the transition from a broad wireless
+research topic to a well-defined wireless optimization problem.
+Its design is inspired by topic-grounding mechanisms in au-
+tomated research workflows [25], while being specialized for
+wireless optimization by jointly considering the communica-
+tion scenario, controllable resources, performance objectives,
+and supporting literature. This phase consists of four subphases
+that progressively generate, evaluate, select, and formalize a
+research problem for the technical development in the next
+phase.
+1) Subphase 1.1: Identification of Wireless System, Vari-
+ables, and Metrics: Given an initial wireless research topic,
+Subphase 1.1 transforms it into a structured wireless optimiza-
+tion frame. Specifically, the controller first validates the topic
+against a wireless-domain taxonomy2 to filter out unrelated
+systems, objectives, variables, and metrics. The ScoutAgent
+then identifies the corresponding wireless scenario, key physi-
+cal tradeoffs, optimization variables, candidate objectives, ma-
+jor constraints, and evaluation metrics. The resulting research
+frame serves as the foundation for subsequent literature search
+and problem formulation.
+2) Subphase 1.2: Literature Search: Using the research
+frame generated in Subphase 1.1, the LiteratureAgent con-
+structs search queries based on the identified communication
+system, optimization variables, objectives, performance met-
+rics, and potential solution directions. Literature retrieval is
+then conducted through multiple academic sources, including
+Crossref, Semantic Scholar, OpenAlex, arXiv, IEEE Xplore,
+and Google Scholar. If the retrieved literature is insufficient,
+the search is expanded using a local repository of seminal
+papers and additional query refinements. The output of this
+subphase is an evidence pack containing related system mod-
+els, assumptions, baselines, performance metrics, references,
+and citation requirements, which provides the knowledge foun-
+dation for candidate-problem generation and later validation.
+3) Subphase 1.3: Generation and Selection of Research
+Problems: Based on the research frame and evidence pack,
+the ScoutAgent generates multiple candidate wireless opti-
+mization problems and recommends one for further develop-
+ment. Rather than directly accepting the recommendation, the
+controller evaluates each candidate according to predefined
+criteria, including field completeness, consistency with the
+wireless-domain taxonomy, logical coherence of the under-
+lying mechanisms, and suitability for downstream optimiza-
+tion modeling and experimentation in Phase 2. A candidate
+2The taxonomy covers common wireless tasks, network settings, radio
+technologies, optimization variables, modeling assumptions, solver families,
+and performance metrics. The topic may include ISAC, SWIPT, cell-free
+networks, RIS, beamforming, and power allocation. Model assumptions,
+optimization techniques, and objectives may include imperfect channel state
+information (CSI), successive convex approximation (SCA), semidefinite
+relaxation (SDR), sum rate, harvested power, and Cram´er–Rao bound (CRB).
+
+
+--- Page 5 ---
+5
+TABLE I
+Main Role-Specialized Agents in WARA.
+Agent
+Research role
+Input / output artifacts
+Execution / verification inter-
+face
+ScoutAgent
+Frames the initial wireless topic, defines the research
+scope, compares candidate directions, and selects a
+bounded problem direction for downstream modeling.
+Reads the user topic and available literature signals.
+Writes the research frame, candidate directions, selected
+direction, and Phase-1 handoff.
+Schema validation; scope and
+feasibility checks.
+LiteratureAgent
+Grounds the selected direction in wireless literature
+and identifies prior models, baselines, assumptions,
+and citation needs.
+Reads the research frame, selected direction, and search
+plan. Writes the evidence pack, reference bank, and
+citation–claim map.
+Literature
+retrieval;
+metadata
+verification; citation consistency
+checks.
+FormulationAgent
+Converts the selected direction into a wireless system
+model and an original optimization formulation.
+Reads the Phase-1 handoff and evidence pack. Writes
+the system model, assumptions, variables, objective,
+constraints, and mathematical contract.
+Symbol-role audit; equation con-
+sistency checks; LATEX valida-
+tion.
+TheoryAgent
+Analyzes tractability, identifies the reformulation route,
+and develops the algorithmic solution scope.
+Reads the frozen mathematical contract, system model,
+and problem formulation. Writes the tractability analysis,
+reformulation path, algorithm contract, and algorithm
+description.
+Contract
+compliance
+checks;
+convexity and assumption audit.
+ExperimentAgent
+Builds and executes the experiment package according
+to the frozen mathematical and algorithmic contracts.
+Reads the mathematical contract, algorithm contract,
+algorithm description, and experiment blueprint. Writes
+the experiment design, Python/CVXPY code, benchmark
+implementations, execution logs, solver outputs, and
+candidate figures.
+Code execution; solver valida-
+tion; simulation logs; benchmark
+checks; plot/data generation.
+ValidationAgent
+Checks experiment outputs and promotes valid numer-
+ical evidence for downstream analysis and writing.
+Reads the experiment report, figure data, validation logs,
+and benchmark outputs. Writes the evidence contract,
+verified figure evidence, benchmark definitions, and
+evidence-readiness summary.
+CSV/log inspection; figure audit;
+benchmark consistency checks;
+metric
+and
+claim-evidence
+checks.
+AnalysisAgent
+Interprets verified numerical evidence and maps sup-
+ported trends to research claims.
+Reads the evidence contract and verified figure evidence.
+Writes the numerical-results text, claim–evidence map,
+and result interpretation notes.
+Claim–evidence
+checks;
+trend
+consistency audit.
+WritingAgent
+Assembles manuscript text from frozen contracts, ver-
+ified evidence, and curated citations.
+Reads the mathematical contract, algorithm contract,
+numerical-results text, figure evidence, and reference
+bank. Writes technical sections, full-paper preview, and
+revised manuscript text.
+LATEX compilation; bibliography
+validation;
+style
+and
+notation
+checks.
+ReviewAgent
+Audits the artifact chain and final draft for technical
+consistency, evidence support, citation adequacy, and
+manuscript readiness.
+Reads the full-paper preview, citation–claim map, ex-
+periment report, figure evidence, and frozen contracts.
+Writes the review report, critical issues, and routing
+decision.
+Cross-artifact
+audit;
+evidence
+and
+citation
+checks;
+PDF/log
+inspection.
+RepairAgent
+Applies scoped revisions to the responsible artifact
+according to gate or review feedback.
+Reads the target artifact, error report, and relevant frozen
+contract. Writes the repaired artifact, repair log, and gate
+rerun result.
+Localized
+repair;
+regression
+checks; gate rerun.
+is accepted only if it is sufficiently specific, optimization-
+oriented, technically grounded, and actionable. For traceability,
+the selected problem is stored together with the alternative
+candidates and the rationale underlying the selection decision.
+4) Subphase 1.4:Freezing and Exporting the Selected Prob-
+lem: Subphase 1.4 converts the selected problem into a formal
+handoff artifact for Phase 2. Given the selected problem,
+supporting references, and candidate-selection record, the Lit-
+eratureAgent performs a focused literature search to further
+verify topic-specific grounding and ensure adequate evidential
+support. If the retrieved references are insufficient, the search
+scope is iteratively expanded until the required coverage is
+achieved. The controller then assembles a structured problem
+contract containing the selected problem definition, relevant
+references, and modeling instructions required for optimization
+formulation, algorithm design, experimentation, and validation
+in Phase 2. Once the handoff artifact passes the validation gate,
+it is frozen and delivered to Phase 2. Otherwise, it is routed
+back to the literature-search or problem-selection subphases
+for targeted repair and refinement.
+C. Phase 2: Wireless Optimization Modeling, Solving, and
+Experimentation
+With the Phase-1 handoff frozen, Phase 2 transforms the
+selected research problem into a wireless system model and
+optimization formulation, derives a solution route consistent
+with the formulation, and implements the resulting method in
+executable experiment code. The following subphases describe
+this process from model construction to the generation of
+verified numerical evidence.
+1) Subphase 2.1: Construction of System Model and Opti-
+mization Problem: Using the frozen problem handoff from
+Phase 1 as input, FormulationAgent invokes an LLM to
+generate the wireless system model and the corresponding
+optimization problem. The resulting artifact specifies the sys-
+tem setup, including signal and channel models, optimization
+variables, objective function, constraints, and performance
+metrics. The controller then verifies whether the formulation
+is complete, physically meaningful, and consistent with the
+selected research problem. If the formulation gate fails, the
+detected issues are returned to FormulationAgent for repair
+within a bounded repair budget. If the gate passes, the system
+model and optimization formulation are frozen as the math-
+ematical contract. If no acceptable formulation is obtained
+after the allowed repair attempts, the run is terminated and
+the formulation errors are recorded in the repair log.
+2) Subphase 2.2: Tractability Analysis and Solution-Route
+Selection: Using the frozen mathematical contract from Sub-
+phase 2.1, the controller prepares a tractability-analysis prompt
+and passes it to TheoryAgent. TheoryAgent then invokes
+an LLM to determine whether the optimization problem is
+directly tractable or requires reformulation. The analysis ex-
+
+
+--- Page 6 ---
+6
+amines convexity, conic representability, and major sources
+of difficulty, such as nonconvex coupling, discrete variables,
+rank constraints, fractional structures, and uncertainty. If the
+problem is directly tractable, a convex or conic optimization
+solver is selected. Otherwise, an appropriate reformulation or
+approximation strategy is chosen, such as SDR, SCA, bisec-
+tion, alternating optimization, robust approximation, mixed-
+integer optimization, or a problem-specific heuristic.
+3) Subphase 2.3: Algorithm Specification and Validation
+Principle: Based on the mathematical contract and the se-
+lected solution route, TheoryAgent invokes an LLM to gen-
+erate an implementable algorithm specification. The resulting
+artifact describes the variable-update rules, feasibility checks,
+stopping criteria, and baseline-comparison methodology. The
+controller then verifies consistency between the algorithm
+and the frozen optimization formulation, and checks whether
+the associated convergence, complexity, and optimality dis-
+cussions are supported by the chosen solution route. If the
+theory gate passes, the algorithm specification and validation
+principles are accepted, and a claim map is created to track
+theoretical and empirical claims throughout subsequent stages.
+Otherwise, the identified issues are returned to TheoryAgent
+for targeted repair.
+4) Subphase 2.4: Experiment Design and Code Execution:
+Using the mathematical contract, algorithm contract, and
+claim map as inputs, the controller first constructs a struc-
+tured experiment-design specification, including comparison
+methods, parameter sweeps, performance metrics, and figure
+objectives. ExperimentAgent then invokes an LLM to generate
+a concrete experiment design. The controller verifies that the
+selected metrics, sweep variables, and benchmark methods are
+consistent with the frozen optimization problem. Once the
+design passes validation, ExperimentAgent generates Python
+experiment code.
+The controller subsequently inserts the generated code into
+a fixed validation harness3 and executes it locally. The harness
+performs interface validation, code execution, log collection,
+result-table generation, and output verification. It also checks
+whether the implementation faithfully follows the algorithm
+specification. For solver-based approaches, the implementation
+must invoke the designated solver rather than replacing it with
+a proxy implementation. If validation succeeds, an executable
+experiment package is produced. Otherwise, the code, execu-
+tion logs, validation report, and frozen contracts are returned
+to ExperimentAgent for bounded repair.
+5) Subphase 2.5: Result Verification and Promotion to
+Paper-Level Evidence:
+Subphase 2.5 transforms the exe-
+cutable experiment package into verified numerical evidence.
+ValidationAgent examines the approved experiment design,
+benchmark plan, execution logs, result tables, and candidate
+figures to determine whether the generated results support
+the intended wireless communication claims. The validation
+process checks data provenance, benchmark consistency, met-
+3A validation harness is controller-owned Python code to standardize how
+the generated experiment code is loaded, executed, logged, and checked. It
+provides the fixed execution wrapper around the problem-specific experiment
+code and implements the feedback and verification layer required for reliable
+agent execution [52].
+ric validity, and figure readiness. Specifically, plotted curves
+must originate from saved result tables, compared methods
+must match the approved design, metrics must correspond to
+valid wireless-performance measures, and figures must satisfy
+manuscript-quality requirements.
+After initial validation, a three-level experiment-expansion
+strategy is employed. The first level performs a scout sweep to
+identify the intended trend using a small number of representa-
+tive parameter settings. The second level conducts a medium-
+scale sweep to verify trend stability using additional parameter
+values and random seeds. The final level performs a paper-
+scale sweep using denser parameter grids and larger num-
+bers of random seeds to generate publication-quality figures.
+Throughout all stages, the benchmark family, metric family,
+and target claims remain fixed according to the approved
+experiment design. If inconsistencies are detected, the issue
+is routed back to experiment-design repair. Once the final
+validation gate passes, the verified result package is frozen
+and handed over to Phase 3.
+D. Phase 3: Research Deliverable Generation
+Phase 3 transforms the validated outputs of Phase 2 into
+a complete research package. It generates the manuscript,
+validates the resulting draft, applies necessary revisions, and
+exports the final deliverables, including the manuscript, fig-
+ures, bibliography, review reports, and repair records. The
+detailed workflow is described in Subphases 3.1–3.6.
+1) Subphase
+3.1:
+Drafting
+Problem
+Formulation
+and
+Method Sections: Using the frozen mathematical contract
+from Subphase 2.1 and the frozen algorithm contract from
+Subphase 2.3, WritingAgent generates the formulation and
+method sections in LaTeX format. The resulting draft describes
+the wireless system model, optimization formulation, refor-
+mulation strategy, and algorithmic procedure according to the
+approved contracts. The controller then compiles a technical
+preview and verifies that the notation, equations, constraints,
+and algorithm descriptions remain consistent with the frozen
+formulation and solution route. Any inconsistencies are routed
+to RepairAgent for targeted revision.
+2) Subphase 3.2: Drafting Numerical Results and Sup-
+ported Claims: Using the verified result package produced in
+Subphase 2.5, AnalysisAgent generates the numerical-results
+section. The generated text interprets the approved figures
+and experiment records and links each reported observation to
+its corresponding evidence source. In parallel, this subphase
+constructs a claim–figure traceability record that explicitly
+maps numerical claims to supporting figures. The controller
+verifies that all interpretations are evidence-grounded and
+remain within the scope of the validated results. Any unsup-
+ported claims are returned for revision.
+3) Subphase 3.3: Assembly of Technical Sections: Using the
+formulation, method, and numerical-results sections, together
+with the supported-claim record, WritingAgent assembles the
+core technical manuscript. This includes generating the ab-
+stract, keywords, and conclusion while preserving consistency
+with the validated technical content. The controller checks
+completeness and verifies that the high-level narrative remains
+
+
+--- Page 7 ---
+7
+TABLE II
+Controller Repair Routing in WARA.
+Subphase
+Failure type
+Artifact owner
+Controller action
+Subphases 1.3–1.4
+Selected wireless problem is weak or insuffi-
+ciently supported
+ScoutAgent / LiteratureAgent
+Revise the candidate problem, expand literature search, rebuild
+the Phase-1 handoff, or stop with a direction-repair report.
+Subphase 2.1
+System model or optimization formulation is
+inconsistent
+FormulationAgent
+Return the gate report for formulation repair, rerun the for-
+mulation gate, and freeze the mathematical contract only after
+passage.
+Subphases 2.2–2.3
+Convexity
+analysis,
+reformulation,
+solver
+route, or algorithm description is invalid
+TheoryAgent
+Repair the tractability analysis or algorithm contract and rerun
+the theory gate before experiment code generation.
+Subphase 2.4
+Experiment design or generated Python code
+fails quick validation
+ExperimentAgent
+Revise the experiment design or repair the generated code using
+harness logs and frozen contracts, then rerun the fixed validation
+harness.
+Subphase 2.5
+Numerical results or figures are not paper-
+ready
+ValidationAgent / ExperimentA-
+gent
+Request scout, medium, or paper-level reruns; route back to
+experiment-design or code repair; or block promotion to paper
+figures.
+Subphases 3.1–3.3
+Technical writing or numerical interpretation
+is unsupported
+WritingAgent / AnalysisAgent
+Revise the LATEX text or claim–figure record using the gate
+report and frozen result package.
+Subphase 3.4
+References, citation placement, or bibliogra-
+phy checks fail
+LiteratureAgent / WritingAgent
+Repair the reference bank, citation commands, citation–claim
+mapping, or full manuscript preview.
+Subphases 3.5–3.6
+Final review finds a cross-artifact inconsis-
+tency
+ReviewAgent / routed owner
+Apply local manuscript repair or route the issue back to the
+responsible upstream phase before final export.
+aligned with the approved model, algorithm, numerical evi-
+dence, and supported claims.
+4) Subphase 3.4: onstruction of the Full Manuscript Draft:
+Using the assembled technical sections and the verified refer-
+ence repository, LiteratureAgent first prepares validated Bib-
+TeX entries, prioritizing IEEE and peer-reviewed sources.
+WritingAgent then generates the introduction, positions the
+work relative to prior literature, and inserts citations using
+the verified reference keys. The controller compiles a full
+manuscript preview and validates citation keys, bibliogra-
+phy entries, venue formatting, citation placement, and cita-
+tion–claim consistency. Any violations are routed to RepairA-
+gent for correction.
+5) Subphase 3.5: Full Manuscript Review: Using the com-
+plete manuscript draft together with the frozen formulation,
+algorithm, result, and reference artifacts, ReviewAgent per-
+forms a paper-level review. The review evaluates consistency
+among equations, algorithms, figures, citations, abbreviations,
+and technical claims. The output is a structured review report
+containing blocking issues, major issues, minor issues, and
+ownership assignments for each issue. Based on the report,
+the controller determines whether the problem can be resolved
+within Phase 3 or must be routed back to an earlier technical
+phase.
+6) Subphase 3.6: Revision and Export of the Final Re-
+search Package: Guided by the review report, RepairAgent
+resolves manuscript issues and WritingAgent regenerates the
+updated manuscript. The controller then executes the final
+quality gate, which validates compilation, citation integrity,
+abbreviation consistency, figure quality, and claim support. If
+the manuscript passes the final gate, WARA exports the final
+research package, including the manuscript source, compiled
+PDF preview, bibliography, figures, review reports, repair
+history, and final validation records. Otherwise, the issue is
+routed either to local manuscript repair or to the responsible
+upstream phase, depending on its origin.
+E. Gate–Freezing–Repair Mechanism
+The gate–freezing–repair mechanism is a core component of
+WARA and serves as the control layer that connects all phases
+into a coherent research workflow. By validating artifacts
+before reuse, freezing approved decisions, and routing failures
+to responsible agents, the mechanism maintains consistency
+across problem formulation, algorithm design, experimenta-
+tion, and manuscript generation.
+1) Gate: A gate serves as the entry condition for down-
+stream artifact reuse. It separates artifact generation from arti-
+fact validation: agents generate candidate artifacts, while gates
+evaluate whether those artifacts satisfy the active contracts
+and subphase requirements. Each gate produces a machine-
+readable report containing the artifact, pass/fail status, detected
+issues, and repair instructions. Passed artifacts are committed
+to the workspace, whereas failed artifacts are blocked from
+downstream use and routed to repair.
+2) Freezing: Freezing is applied to gate-approved artifacts
+that contain decisions required by later stages. WARA freezes
+four key artifacts: the problem handoff, the mathematical con-
+tract, the algorithm contract, and the verified result package.
+These artifacts respectively define the selected research prob-
+lem, optimization formulation, solution route, and numerical
+evidence used throughout the remainder of the workflow. Sub-
+sequent agents may consume these artifacts but cannot modify
+them without triggering a repair-and-revalidation process.
+3) Repair: Repair is localized to the artifact that failed
+validation. Formulation errors are routed to FormulationAgent,
+algorithmic errors to TheoryAgent, experimental or imple-
+mentation errors to ExperimentAgent, evidence-related issues
+to ValidationAgent, and manuscript issues to the appropriate
+writing or review agent. Each repair cycle records the failed
+gate, artifact owner, repair instructions, revised artifact, and
+validation outcome. If the repaired artifact passes validation,
+the updated version is committed and execution continues.
+Otherwise, WARA either performs additional repair attempts
+within the allocated budget or terminates the run with a
+structured repair report. Table II summarizes the corresponding
+repair-routing policy.
+
+
+--- Page 8 ---
+8
+Fig. 2. Four-page manuscript snapshot generated by WARA for the cell-free massive MIMO case.
+III. CASE STUDY
+This section presents a representative WARA run from
+an initial wireless topic to a complete research package.
+The concrete run budget, including LLM output-token caps,
+repair limits, literature-retrieval limits, and experiment-sweep
+settings, is summarized below.
+Case-Study Run Budget
+Backbone LLM: OpenAI GPT-5.5.
+LLM output-token caps: 24000 tokens for Phase 1 calls and Subphase 2.1
+formulation; 18000 tokens for Subphase 2.2 tractability analysis; 10000 tokens
+for Subphase 2.3 algorithm design; 24000 tokens for Subphase 2.4 solver-package
+and validation-plan generation; 12000 tokens for Subphase 2.4 code-file and repair
+calls; 9000–12000 tokens for Phase 3 section-writing, numerical-writing, citation,
+and assembly calls; and 24000 tokens for the final ReviewAgent call.
+Repair limits: one JSON-serialization repair round in Phase 1; two contract-
+repair rounds for Subphase 2.1–2.3; three experiment-code repair rounds and three
+experiment-design repair rounds in Subphase 2.4; three evidence-expansion rounds
+in Subphase 2.5; two technical-writing repair rounds in Subphase 3.1; and three
+final review-repair rounds.
+Literature budget: up to eight Phase-1 literature queries with up to eight retrieved
+records per query, plus supplemental retrieval with up to ten records per query when
+needed.
+Experiment budget: two promoted evidence sweeps are used: a fronthaul-capacity
+sweep with 12 x-axis points and 50 Monte Carlo seeds per point, and a user-load
+sweep with 9 x-axis points and 50 Monte Carlo seeds per point. With two compared
+methods, this gives 1050 paired simulation settings and 2100 method evaluations.
+We next provide the main artifacts produced in the three
+phases of this run in the following subsections.
+A. Research Gap Identification and Problem Proposal
+The input topic is “cell-free massive MIMO”. In Phase 1,
+WARA constructs and reviews candidate research directions.
+In this run, the selected direction is Fronthaul-Aware Max-
+Min Power Control and User-Centric Clustering for Cell-
+Free Massive MIMO. The selected direction focuses on rate-
+dependent fronthaul coupling: a serving access point (AP) can
+improve a user’s received signal, while it must also carry that
+user’s admitted stream over a finite fronthaul link. The main
+Phase-1 artifact produced is summarized below, showing the
+selected problem direction and the information passed to the
+technical construction phase.
+Phase 1 Artifact: Research Direction Contract
+Selected direction: Fronthaul-aware max-min power control and user-centric
+clustering for downlink cell-free massive MIMO.
+Research object: A downlink cell-free massive MIMO network with distributed
+APs, single-antenna users, finite AP transmit-power budgets, and finite per-AP
+fronthaul capacities.
+Core technical tension: Activating an AP–user serving link can increase useful
+signal strength, while also consuming AP transmit power and fronthaul capacity.
+Selected mechanism: Jointly optimize AP–user association and power loading so
+that fronthaul is allocated to serving links with high fairness value.
+Grounding output: Phase 1 builds a topic-focused evidence pack covering cell-
+free massive MIMO foundations, user-centric clustering, downlink power control,
+scalable fronthaul, and fronthaul-aware cooperation.
+Handoff to Phase 2: The handoff specifies the modeling seed, variables, expected
+max-min objective, fronthaul constraint form, validation intent, and technical risks.
+B. Wireless Optimization Modeling, Algorithm Design, and
+Experimentation
+In Phase 2, WARA develops the selected cell-free massive
+MIMO direction through the same modeling, solving, and
+experimentation pipeline described above. In Subphase 2.1,
+FormulationAgent turns the Phase-1 handoff into a downlink
+cell-free massive MIMO model and a max-min admitted-
+rate formulation with AP–user association, power loading,
+fronthaul-capacity constraints, and SINR-dependent rate con-
+straints. In Subphases 2.2 and 2.3, TheoryAgent identifies
+the problem as mixed-integer and nonconvex and selects a
+target-rate bisection route, where each trial rate is checked
+through a mixed-integer conic feasibility test. In Subphase 2.4,
+ExperimentAgent generates the Python experiment code and
+runs quick validation under the fixed harness. In Subphase
+2.5, WARA expands the validated experiment package and
+promotes two paper-ready figures: a fronthaul-capacity sweep
+and a user-load sweep. The main Phase-2 outputs are summa-
+rized below.
+Phase 2 Artifact: Model, Reformulation, Algorithm, and Figures
+Original problem: WARA formulates the selected problem as a fronthaul-aware
+max-min admitted spectral-efficiency problem for downlink cell-free massive
+MIMO. The binary variable xmk indicates whether AP m serves user k, pmk is
+the corresponding downlink power coefficient, rk is the admitted spectral efficiency
+of user k, and t is the common fairness level. The effective spectral efficiency is
+Rk(x, p) = log2
+ 1 + γk(p)
+
+,
+
+
+--- Page 9 ---
+9
+where
+γk(p) =
+ P
+m∈M amk√pmk
+2
+P
+j∈K\{k}
+P
+m∈M bmkjpmj + σ2
+k
+.
+The fronthaul load at AP m is
+Fm(x, r) =
+X
+k∈K
+xmkrk.
+The original problem is
+(P0)
+max
+x,p,r,t
+t
+s.t.
+rk ≥t,
+∀k ∈K,
+rk ≤Rk(x, p),
+∀k ∈K,
+X
+k∈K
+pmk ≤P max
+m
+,
+∀m ∈M,
+pmk ≤xmkP max
+m
+,
+∀(m, k) ∈E,
+Fm(x, r) ≤Cm,
+∀m ∈M,
+X
+m∈M xmk ≥1,
+∀k ∈K,
+xmk ∈{0, 1},
+pmk ≥0,
+∀(m, k) ∈E,
+rk ∈R+,
+∀k ∈K,
+t ∈R+.
+Reformulated problem: WARA exploits the max-min structure by checking a trial
+common target τ. For each τ, it sets rk = t = τ, defines θ(τ) = 2τ −1, and
+introduces solver-side amplitudes umk ≥0 with physical recovery pmk = u2
+mk.
+The target test is written as a mixed-integer second-order-cone feasibility problem
+over (x, u), with binary association, service, fronthaul, AP-power, activation, and
+signal-to-interference-plus-noise-ratio constraints.
+Solution route: Scalar bisection over τ with certified mixed-integer second-order-
+cone feasibility tests.
+Compared methods: Proposed joint association and power-loading method versus
+the regularized-zero-forcing fixed-association (RZF-fixed) benchmark.
+Main metric: Minimum admitted spectral efficiency t.
+Promoted figures: Fronthaul-capacity sweep and user-load sweep.
+Fig. (a) Fronthaul-capacity sweep.
+Fig. (b) User-load sweep.
+Fig. (a) shows the minimum admitted spectral efficiency
+t versus the fronthaul capacity Cm. The proposed method
+achieves a higher t than the RZF-fixed benchmark because
+it jointly optimizes AP–user association and power loading
+under the fronthaul constraint. Fig. (b) shows the minimum
+admitted spectral efficiency t versus the number of users K
+under the same finite-fronthaul and AP-power setting. As the
+user load increases, the proposed method maintains a higher
+fairness level than RZF-fixed by adapting the serving links
+and power amplitudes for each target rate, whereas RZF-fixed
+keeps the user-centric clusters fixed before power loading.
+C. Phase 3: Research Deliverable Generation
+Phase 3 turns the validated Phase-2 outputs into the fi-
+nal paper package. In this case, WARA uses the selected
+problem direction, mathematical formulation, solution route,
+promoted figures, and verified references to generate a four-
+page manuscript. The final package contains 13 references,
+two paper-ready figures, a post-revision quality-gate report, a
+contract-scope report, and an abbreviation check. The gener-
+ated manuscript is shown in Fig. 2.
+IV. COMPARATIVE EVALUATION RESULTS
+In this section, we evaluate the research quality of WARA-
+generated manuscripts using a structured LLM-based scoring
+agent as evaluator. The evaluation has two purposes. First, it
+measures the overall validity of the final manuscript, including
+problem definition, novelty, technical correctness, method–
+formulation alignment, evidence support, claim consistency,
+writing quality, and reference grounding. Second, it zooms in
+on the optimization part of the manuscript, because wireless
+optimization papers require not only readable exposition but
+also a coherent chain from wireless bottleneck, mathematical
+formulation, solution method, benchmark design, and numer-
+ical evidence. We therefore report both a manuscript-level
+research-validity comparison and an optimization research-
+maturity comparison.
+A. ScoringAgent and Evaluation Criteria
+We design a structured LLM-based ScoringAgent to evalu-
+ate the research quality of manuscripts. For each evaluated
+manuscript, ScoringAgent receives a manuscript PDF and
+calls an evaluator LLM with a fixed reviewer-style prompt.
+The prompt instructs the LLM to act as a strict wireless-
+communications reviewer, apply predefined scoring criteria,
+justify each score using manuscript-visible evidence, and
+return a machine-readable JSON report. The report contains
+dimension-level scores, brief justifications, overall scores,
+identified strengths and weaknesses, and a confidence value.
+The same scoring prompts, scoring criteria, output schema,
+parsing rules, and score-range checks are used for all evaluated
+manuscripts.
+The evaluation uses two complementary scoring criteria,
+as summarized in Table III. The first criterion measures
+manuscript-level research validity. It evaluates whether the
+manuscript defines a clear research problem, positions its con-
+tribution, presents a technically correct system model, aligns
+the method with the formulation, provides valid evidence,
+supports its claims, communicates clearly, and grounds its
+statements in references. This criterion is the main aggregate
+quality score and uses an additive 100-point scale. The second
+criterion measures optimization research maturity. It is used as
+a diagnostic profile for the optimization part of the study, fo-
+cusing on optimization framing, formulation quality, solution-
+method validity, benchmark design, evidence strength, and
+scholarly positioning. Each optimization-maturity dimension
+is scored on a normalized 0–100 scale, and the overall
+optimization-maturity score is computed as the arithmetic
+mean of the six dimension scores.
+For the i-th manuscript Pi, ScoringAgent first assigns
+manuscript-level dimension scores
+sR
+i = [sR
+i,1, sR
+i,2, . . . , sR
+i,8],
+(1)
+according to the eight research-validity dimensions in Ta-
+ble III. The manuscript-level research-validity score is com-
+puted as
+SR
+i =
+8
+X
+d=1
+sR
+i,d.
+(2)
+
+
+--- Page 10 ---
+10
+TABLE III
+Evaluation Criteria for Manuscript-Level Research Validity and Optimization Research Maturity.
+Manuscript-level research-validity scoring
+Dimension
+Score
+Evaluation focus
+Problem definition and scope
+10
+Clarity, boundary, and appropriateness of the research prob-
+lem.
+Novelty and positioning
+10
+Claimed contribution and relation to prior work.
+System model and technical correctness
+15
+Correctness of the model, assumptions, notation, and wireless
+reasoning.
+Method validity and formulation alignment
+15
+Consistency between formulation, method, and claimed solu-
+tion route.
+Evidence validity and experiment design
+20
+Execution provenance, baselines, scenarios, sweeps, and em-
+pirical support.
+Result interpretation and claim support
+15
+Whether numerical trends support the stated claims.
+Scientific writing and presentation
+10
+Organization, readability, figure/table quality, and technical
+clarity.
+Reference grounding
+5
+Citation relevance and grounding of prior-work claims.
+Total
+100
+–
+Optimization research-maturity scoring
+Dimension
+Scale
+Evaluation focus
+Optimization framing
+0–100
+Wireless bottleneck, controllable resources, objective, and
+contribution mechanism.
+Formulation quality
+0–100
+Variables, assumptions, objective, and constraints of the opti-
+mization problem.
+Solution-method validity
+0–100
+Reformulation, algorithmic route, approximation scope, and
+method–formulation alignment.
+Benchmark design
+0–100
+Baselines, scenarios, sweeps, ablations, and fairness of com-
+parison.
+Evidence strength
+0–100
+Stability, interpretability, and sufficiency of numerical evi-
+dence.
+Scholarly positioning
+0–100
+Relation to prior wireless optimization literature.
+Overall
+Mean
+Arithmetic mean of the six normalized dimension scores.
+For optimization-focused evaluation, ScoringAgent also as-
+signs a six-dimensional maturity profile
+ui = [ui,1, ui,2, . . . , ui,6],
+0 ≤ui,d ≤100,
+(3)
+where each entry is a normalized score for one optimization-
+maturity dimension. Consistent with Table III, the overall
+optimization research-maturity score is
+SO
+i = 1
+6
+6
+X
+d=1
+ui,d.
+(4)
+For a benchmark set B with N manuscripts, we report the
+average manuscript-level score
+¯SR(B) = 1
+N
+X
+Pi∈B
+SR
+i .
+(5)
+We also report the average optimization research-maturity
+score
+¯SO(B) = 1
+N
+X
+Pi∈B
+SO
+i .
+(6)
+B. Benchmark Sets and Comparative Results
+We compare three benchmark sets. The WARA and one-shot
+LLM sets are topic-paired, while the accepted IEEE Wireless
+Communications Letters (WCL) set is used as a peer-reviewed
+reference profile. Specifically, the benchmark sets are:
+• WARA-generated manuscripts: ten manuscripts pro-
+duced by the proposed closed-loop WARA workflow
+from ten wireless optimization topics, using OpenAI
+GPT-5.5 as the backbone LLM.
+• One-shot LLM manuscripts: ten manuscripts generated
+from the same ten topics using a single prompt and
+the same OpenAI GPT-5.5 backbone, without phase-
+structured artifact control, executable validation, or repair.
+• Accepted WCL papers: ten randomly selected, recently
+accepted optimization-related IEEE Wireless Communi-
+cations Letters papers used as a peer-reviewed reference
+group.
+To reduce evaluator–generator coupling, the scoring agent
+is implemented using Kimi K2.6 rather than the GPT-5.5
+backbone used for the generated manuscripts.
+Table IV and Fig. 3 report the manuscript-level research-
+validity comparison. WARA obtains an average score of
+68.5, compared with 37.4 for the topic-paired one-shot LLM
+baseline, yielding a 31.1-point improvement under the same
+topic set and backbone model. The largest gap appears in
+evidence validity, where the one-shot baseline receives 0.0
+because its numerical results are generated as text without
+recorded experiment execution, while WARA reaches 13.0
+through executable validation and evidence packaging. WARA
+also improves claim support from 3.0 to 9.3, showing that
+its performance claims are more directly tied to validated
+figures and recorded experiment outputs. These two dimen-
+sions benefit most from closed-loop control because WARA
+explicitly separates experiment generation, execution, evidence
+verification, and claim writing into different gated stages.
+As a result, unsupported numerical descriptions are blocked
+
+
+--- Page 11 ---
+11
+TABLE IV
+Manuscript-Level Validity Scores.
+Benchmark set
+N
+Overall
+Scope Novelty Model Method Evidence Claims Writing Refs
+/100
+/10
+/10
+/15
+/15
+/20
+/15
+/10
+/5
+One-shot LLM
+10
+37.4±2.7
+6.0
+5.7
+7.9
+6.7
+0.0
+3.0
+5.0
+3.3
+WARA
+10
+68.5±5.7
+8.0
+6.8
+10.4
+9.8
+13.0
+9.3
+6.9
+3.6
+Accepted WCL
+10
+81.4±4.1
+8.4
+7.6
+12.2
+11.7
+17.1
+12.3
+8.0
+4.2
+Fig. 3. Manuscript-level validity profiles.
+Fig. 4.
+Topic-level paired manuscript scores for WARA and the one-shot
+LLM baseline.
+before synthesis, and downstream claims must remain within
+the scope of the verified evidence. The gains in system-
+model correctness and method validity further show that staged
+formulation and algorithm construction help reduce mismatch
+between the stated optimization problem and the proposed so-
+lution. Compared with accepted WCL papers, WARA is closer
+in problem definition and novelty, but still weaker in evidence
+validity, claim support, and method maturity. This suggests
+that WARA improves the reliability of generated manuscripts
+mainly by making the research process executable, while the
+remaining gap comes from the depth and refinement of human-
+designed experiments and technical arguments.
+Fig. 4 reports the topic-level paired comparison between
+WARA and the one-shot LLM baseline. WARA outperforms
+the corresponding one-shot manuscript on all ten topics, show-
+ing that the gain is not caused by a few favorable examples.
+The reason is that WARA does not rely on a single forward
+generation from topic to manuscript. Instead, each topic is
+repeatedly interpreted, checked, and revised through multiple
+agent stages. In specific, the research direction is reviewed
+before formulation, the formulation is frozen before algorithm
+design, the algorithm is checked before implementation, and
+the evidence is validated before writing. When a gate fails, the
+repair mechanism sends the problem back to the responsible
+stage instead of letting the final manuscript absorb the incon-
+sistency. This multi-stage reasoning and targeted repair process
+explains why WARA produces more stable improvements
+across different wireless optimization topics.
+Table V and Fig. 5 report the optimization-focused com-
+parison. WARA improves the average optimization research-
+maturity score from 44.6 to 69.7 over the one-shot baseline.
+The key reason is that WARA treats optimization as a struc-
+tured problem-solving process. It first identifies the wireless
+resource-coupling mechanism, then fixes the variables, objec-
+tive, constraints, and assumptions as a mathematical contract,
+and only then derives a solution route and experiment design
+from that contract. This makes the proposed method and
+benchmarks accountable to a specific optimization problem. In
+contrast, one-shot generation tends to produce the formulation,
+method, and evaluation in a single step, so the optimization
+components are less likely to be mutually checked. This
+explains why WARA improves not only evidence strength,
+but also formulation quality, solution-method validity, and
+benchmark design. The accepted WCL papers still obtain the
+highest score of 78.8, mainly because published optimization
+studies usually contain more mature baseline selection, sharper
+ablation logic, stronger scenario design, and more carefully
+calibrated claims. This gap indicates that WARA can already
+construct a clearer optimization research structure, but still
+lacks the full experimental depth and contribution-level judg-
+ment of mature human-authored wireless optimization studies.
+V. CONCLUSION
+This paper presented WARA, a closed-loop multi-agent
+framework for automated wireless optimization research. The
+central idea is to treat a wireless research study as a chain of
+verifiable artifacts rather than as a single generated manuscript.
+Starting from an initial topic, WARA constructs a research
+direction, develops the corresponding optimization study, gen-
+erates executable evidence, and synthesizes the final research
+deliverables. Controller-managed gates, frozen interfaces, and
+
+
+--- Page 12 ---
+12
+TABLE V
+Optimization-Maturity Scores.
+Benchmark set
+N
+Overall
+Framing
+Formulation
+Solution
+Benchmark
+Evidence
+Scholarly
+/100
+/100
+/100
+/100
+/100
+/100
+/100
+One-shot LLM
+10
+44.6
+64.8
+62.9
+52.9
+15.4
+13.8
+57.7
+WARA
+10
+69.7
+77.8
+75.6
+72.7
+60.6
+62.1
+69.7
+Accepted WCL
+10
+78.8
+81.6
+79.1
+77.3
+75.0
+79.8
+80.0
+Fig. 5. Optimization-maturity profiles.
+targeted repair are used to keep these artifacts consistent as
+the research package evolves.
+The case study shows how WARA turns a broad wireless
+topic into a concrete optimization study with a bounded direc-
+tion, a frozen mathematical contract, an implementable solu-
+tion route, and verified numerical evidence. The comparative
+evaluation further shows that WARA improves substantially
+over one-shot LLM generation. The gains are most visible
+in formulation–method alignment, evidence validity, claim
+support, and optimization research maturity. These results in-
+dicate that LLM-agent-assisted wireless research benefits from
+phase-structured artifact construction and executable feedback,
+rather than relying only on fluent end-to-end generation.
+The remaining gap to accepted peer-reviewed wireless pa-
+pers lies mainly in experimental depth and evidence maturity.
+WARA can build a consistent research package and produce
+executable numerical results, but mature wireless optimization
+papers usually require stronger experimental judgment. A
+promising direction is therefore to integrate human exper-
+tise into WARA as part of the artifact chain rather than
+as external comments. Expert feedback can be written back
+as revised contracts, gate criteria, benchmark requirements,
+simulator settings, and evidence-to-claim rules, which later
+agents can directly read and enforce. This would allow WARA
+to reuse expert decisions across runs, update its benchmark
+and simulator libraries, and request human input only when
+automatic checks cannot resolve contribution strength, base-
+line adequacy, or evidence sufficiency.
+REFERENCES
+[1] S. Yao, J. Zhao, D. Yu, N. Du, I. Shafran, K. Narasimhan, and Y. Cao,
+“ReAct: Synergizing reasoning and acting in language models,” in Proc.
+Int. Conf. Learn. Represent. (ICLR), 2023.
+[2] T. Schick, J. Dwivedi-Yu, R. Dess`ı, R. Raileanu, M. Lomeli, E. Hambro,
+L. Zettlemoyer, N. Cancedda, and T. Scialom, “Toolformer: Language
+models can teach themselves to use tools,” in Proc. Adv. Neural Inf.
+Process. Syst. (NeurIPS), 2023.
+[3] N. Shinn, F. Cassano, A. Berman, K. Narasimhan, and S. Yao, “Reflex-
+ion: Language agents with verbal reinforcement learning,” in Proc. Adv.
+Neural Inf. Process. Syst. (NeurIPS), 2023.
+[4] Q. Wu, G. Bansal, J. Zhang, Y. Wu, B. Li, E. Zhu, L. Jiang, X. Zhang,
+S. Zhang, J. Liu, A. H. Awadallah, R. W. White, D. Burger, and
+C. Wang, “AutoGen: Enabling next-gen LLM applications via multi-
+agent conversations,” in Proc. Conf. Lang. Model. (COLM), 2024.
+[5] C. Si, D. Yang, and T. Hashimoto, “Can LLMs generate novel research
+ideas? A large-scale human study with 100+ NLP researchers,” in Proc.
+Int. Conf. Learn. Represent. (ICLR), 2025.
+[6] J. Baek, S. K. Jauhar, S. Cucerzan, and S. J. Hwang, “ResearchAgent:
+Iterative research idea generation over scientific literature with large
+language models,” in Proc. 2025 Conf. Nations Americas Chapter Assoc.
+Comput. Linguistics: Hum. Lang. Technol. (NAACL), 2025, pp. 6709–
+6738.
+[7] M. Radensky, S. Shahid, R. Fok, P. Siangliulue, T. Hope, and D. S.
+Weld, “Scideator: Human-LLM compound system for scientific ideation
+through facet recombination and novelty evaluation,” in Proc. ACM
+Conf. AI Agentic Syst. (CAIS), 2026, pp. 348–374.
+[8] J. Gottweis, W.-H. Weng, A. Daryin, T. Tu et al., “Accelerating scientific
+discovery with Co-Scientist,” Nature, May 2026.
+[9] Q. Huang, J. Vora, P. Liang, and J. Leskovec, “MLAgentBench: Eval-
+uating language agents on machine learning experimentation,” in Proc.
+41st Int. Conf. Mach. Learn. (ICML), vol. 235, 2024, pp. 20 271–20 309.
+[10] J. S. Chan, N. Chowdhury, O. Jaffe, J. Aung, D. Sherburn, E. Mays,
+G. Starace, K. Liu, L. Maksin, T. Patwardhan, A. Madry, and L. Weng,
+“MLE-bench: Evaluating machine learning agents on machine learning
+engineering,” in Proc. Int. Conf. Learn. Represent. (ICLR), 2025.
+[11] Z. Jiang, D. Schmidt, D. Srikanth, D. Xu, I. Kaplan, D. Jacenko, and
+Y. Wu, “AIDE: AI-driven exploration in the space of code,” arXiv
+preprint arXiv:2502.13138, 2025.
+[12] R. Ramamonjison, T. Yu, R. Li, H. Li, G. Carenini, B. Ghaddar, S. He,
+M. Mostajabdaveh, A. Banitalebi-Dehkordi, Z. Zhou, and Y. Zhang,
+“NL4Opt competition: Formulating optimization problems based on
+their natural language descriptions,” in Proc. NeurIPS 2022 Competi-
+tions Track, 2022, pp. 189–203.
+[13] X. Huang, Q. Shen, Y. Hu, A. Gao, and B. Wang, “Mamo:
+A mathematical modeling benchmark with solvers,” arXiv preprint
+arXiv:2405.13144, 2024.
+[14] C. Huang, Z. Tang, S. Hu, R. Jiang, X. Zheng, D. Ge, B. Wang, and
+Z. Wang, “ORLM: A customizable framework in training large models
+for automated optimization modeling,” Operations Research, May 2025.
+[15] A. AhmadiTeshnizi, W. Gao, and M. Udell, “OptiMUS: Scalable opti-
+mization modeling with (MI)LP solvers and large language models,” in
+Proc. 41st Int. Conf. Mach. Learn. (ICML), vol. 235, 2024, pp. 577–596.
+[16] H. Chen, G. E. Constante-Flores, K. S. I. Mantri, S. M. Kompalli, A. S.
+Ahluwalia, and C. Li, “OptiChat: Bridging optimization models and
+practitioners with large language models,” INFORMS Journal on Data
+Science, Nov. 2025.
+[17] T. Ifargan, L. Hafner, M. Kern, O. Alcalay, and R. Kishony, “Au-
+tonomous LLM-driven research-from data to human-verifiable research
+papers,” vol. 2, no. 1, 2025, p. AIoa2400555.
+
+
+--- Page 13 ---
+13
+[18] Y. Weng, M. Zhu, G. Bao, H. Zhang, J. Wang, Y. Zhang, and L. Yang,
+“CycleResearcher: Improving automated research via automated review,”
+in Proc. Int. Conf. Learn. Represent. (ICLR), 2025.
+[19] W. Liang, Y. Zhang, H. Cao, B. Wang, D. Y. Ding, X. Yang, K. Vodra-
+halli, S. He, D. S. Smith, Y. Yin, D. A. McFarland, and J. Zou, “Can
+large language models provide useful feedback on research papers? a
+large-scale empirical analysis,” NEJM AI, vol. 1, no. 8, p. AIoa2400196,
+2024.
+[20] M. Zhu, Y. Weng, L. Yang, and Y. Zhang, “DeepReview: Improving
+LLM-based paper review with human-like deep thinking process,” in
+Proc. 63rd Annu. Meeting Assoc. Comput. Linguistics (ACL), Vol. 1:
+Long Papers, 2025, pp. 29 330–29 355.
+[21] G. Starace, O. Jaffe, D. Sherburn, J. Aung, J. S. Chan, L. Maksin,
+R. Dias, E. Mays, B. Kinsella, W. Thompson, J. Heidecke, A. Glaese,
+and T. Patwardhan, “PaperBench: Evaluating AI’s ability to replicate
+AI research,” in Proc. 42nd Int. Conf. Mach. Learn. (ICML), vol. 267,
+2025, pp. 56 843–56 873.
+[22] C. Lu, C. Lu, R. T. Lange, Y. Yamada, S. Hu, J. Foerster, D. Ha, and
+J. Clune, “Towards end-to-end automation of AI research,” Nature, vol.
+651, no. 8107, pp. 914–919, Mar. 2026.
+[23] Y. Yamada, R. T. Lange, C. Lu, S. Hu, C. Lu, J. Foerster, J. Clune,
+and D. Ha, “The AI scientist-v2: Workshop-level automated scientific
+discovery via agentic tree search,” arXiv preprint arXiv:2504.08066,
+2025.
+[24] J. Tang, L. Xia, Z. Li, and C. Huang, “AI-researcher: Autonomous
+scientific innovation,” in Proc. Adv. Neural Inf. Process. Syst. (NeurIPS),
+vol. 38, 2025, pp. 9481–9520.
+[25] J. Liu, S. Qiu, M. Li, B. Li, H. Ji, S. Han, X. Ye, P. Xia, Z. Dong,
+C. Zhang et al., “Autoresearchclaw: Self-reinforcing autonomous re-
+search with human-AI collaboration,” arXiv preprint arXiv:2605.20025,
+2026.
+[26] A. E. Ghareeb, B. Chang, L. Mitchener, A. Yiu, C. J. Szostkiewicz,
+D. Shved, G. J. Gyimesi, J. M. Laurent, S. M. Wright, M. T. Razzak
+et al., “A multi-agent system for automating scientific discovery,”
+Nature, pp. 1–3, May 2026.
+[27] A. Paulraj, D. Gore, R. Nabar, and H. Bolcskei, “An overview of MIMO
+communications - a key to gigabit wireless,” Proc. IEEE, vol. 92, no. 2,
+pp. 198–218, Feb. 2004.
+[28] E. G. Larsson, O. Edfors, F. Tufvesson, and T. L. Marzetta, “Massive
+MIMO for next generation wireless systems,” IEEE Commun. Mag.,
+vol. 52, no. 2, pp. 186–195, Feb. 2014.
+[29] Q. Wu and R. Zhang, “Intelligent reflecting surface enhanced wireless
+network via joint active and passive beamforming,” IEEE Trans. Wireless
+Commun., vol. 18, no. 11, pp. 5394–5409, Nov. 2019.
+[30] L. Zhu, W. Ma, and R. Zhang, “Movable antennas for wireless commu-
+nication: Opportunities and challenges,” IEEE Commun. Mag., vol. 62,
+no. 6, pp. 114–120, Jun. 2023.
+[31] Y. Zeng, R. Zhang, and T. J. Lim, “Wireless communications with
+unmanned aerial vehicles: opportunities and challenges,” IEEE Commun.
+Mag., vol. 54, no. 5, pp. 36–42, May 2016.
+[32] F. Liu, Y. Cui, C. Masouros, J. Xu, T. X. Han, Y. C. Eldar, and S. Buzzi,
+“Integrated sensing and communications: Toward dual-functional wire-
+less networks for 6G and beyond,” IEEE J. Sel. Areas Commun., vol. 40,
+no. 6, pp. 1728–1767, Jun. 2022.
+[33] J. Xu, L. Liu, and R. Zhang, “Multiuser MISO beamforming for
+simultaneous wireless information and power transfer,” IEEE Trans.
+Signal Process., vol. 62, no. 18, pp. 4798–4810, Sep. 2014.
+[34] A. Goldsmith, Wireless Communications. Cambridge Univ. Press, 2005.
+[35] D. Tse and P. Viswanath, Fundamentals of Wireless Communication.
+Cambridge Univ. Press, 2005.
+[36] D. P. Palomar and Y. C. Eldar, Eds., Convex Optimization in Signal
+Processing and Communications.
+Cambridge Univ. Press, 2010.
+[37] M. Chiang, S. H. Low, A. R. Calderbank, and J. C. Doyle, “Layering
+as optimization decomposition: A mathematical theory of network
+architectures,” Proc. IEEE, vol. 95, no. 1, pp. 255–312, Jan. 2007.
+[38] Z.-Q. Luo and W. Yu, “An introduction to convex optimization for
+communications and signal processing,” IEEE J. Sel. Areas Commun.,
+vol. 24, no. 8, pp. 1426–1438, Aug. 2006.
+[39] Y.-F. Liu, T.-H. Chang, M. Hong, Z. Wu, A. Man-Cho So, E. A.
+Jorswieck, and W. Yu, “A survey of recent advances in optimization
+methods for wireless communications,” IEEE J. Sel. Areas Commun.,
+vol. 42, no. 11, pp. 2992–3031, Nov. 2024.
+[40] K. Qiu, S. Bakirtzis, I. Wassell, H. Song, J. Zhang, and K. Wang,
+“Large language model-based wireless network design,” IEEE Wireless
+Commun. Lett., vol. 13, no. 12, pp. 3340–3344, Dec. 2024.
+[41] H. Zhou, C. Hu, D. Yuan, Y. Yuan, D. Wu, X. Liu, and C. Zhang,
+“Large language model (LLM)-enabled in-context learning for wireless
+network optimization: A case study of power control,” arXiv preprint
+arXiv:2408.00214, 2024.
+[42] W. Lee and J. Park, “LLM-empowered resource allocation in wireless
+communications systems,” IEEE Access, vol. 14, pp. 15 260–15 272, Jan.
+2026.
+[43] H. Noh, B. Shim, and H. J. Yang, “Adaptive resource allocation
+optimization using large language models in dynamic wireless environ-
+ments,” IEEE Trans. Veh. Technol., vol. 74, no. 10, pp. 16 630–16 635,
+Oct. 2025.
+[44] X. Peng, Y. Liu, Y. Cang, C. Cao, and M. Chen, “LLM-OptiRA: LLM-
+driven optimization of resource allocation for non-convex problems in
+wireless communications,” arXiv preprint arXiv:2505.02091, 2025.
+[45] X. Wu, J. Farooq, Y. Wang, and J. Chen, “LLM-xApp: A large language
+model empowered radio resource management xApp for 5G O-RAN,”
+in Proc. NDSS Workshop on Security and Privacy of Next-Generation
+Networks (FutureG), 2025.
+[46] F. Jiang, Y. Peng, L. Dong, K. Wang, K. Yang, C. Pan, D. Niyato,
+and O. A. Dobre, “Large language model enhanced multi-agent systems
+for 6G communications,” IEEE Wireless Commun., vol. 31, no. 6, pp.
+48–55, Dec. 2024.
+[47] J. Tong, W. Guo, J. Shao, Q. Wu, Z. Li, Z. Lin, and J. Zhang,
+“Wirelessagent: Large language model agents for intelligent wireless
+networks,” China Communications, vol. 23, no. 3, pp. 265–285, Mar.
+2026.
+[48] M. Elkael, S. D’Oro, L. Bonati, M. Polese, Y. Lee, K. Furueda, and
+T. Melodia, “AgentRAN: An agentic AI architecture for autonomous
+control of open 6G networks,” arXiv preprint arXiv:2508.17778, 2025.
+[49] H. Li, M. Xiao, K. Wang, R. Schober, D. I. Kim, and Y. L. Guan, “Co-
+mAgent: Multi-LLM based agentic AI empowered intelligent wireless
+networks,” arXiv preprint arXiv:2601.19607, 2026.
+[50] J. Tong, Z. Li, F. Liu, W. Guo, and J. Zhang, “WirelessAgent++:
+Automated agentic workflow design and benchmarking for wireless
+networks,” arXiv preprint arXiv:2603.00501, 2026.
+[51] J. Tong, F. Liu, L. Xv, S. Lu, K. Li, Y. Zhang, Y. Song, Z. Xue, and
+J. Zhang, “WirelessBench: A tolerance-aware LLM agent benchmark for
+wireless network intelligence,” arXiv preprint arXiv:2603.21251, 2026.
+[52] H. Zhong and S. Zhu, “AI harness engineering: A runtime substrate for
+foundation-model software agents,” arXiv preprint arXiv:2605.13357,
+2026.
