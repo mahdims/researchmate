@@ -1,10 +1,37 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-08-18
+**Last Updated:** 2026-08-20
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-20 (3 papers)
+
+### [Competing at Every Price Point with Agentic Evolution over a Menu of LLMs](https://arxiv.org/abs/2608.16207)
+
+**2026-08-17** |  | M=8 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Evolutionary meta-agent (RoboPhD) evolving agent Python programs using Elo-based selection over head-to-head batch tournaments with a cost-penalized objective | *LLM role:* evolutionary_search, code_writer, evaluator
+
+> Borthwick introduces a cost-targeted evolutionary meta-agent that writes Python programs utilizing a menu of differently-priced LLMs to optimize the cost-accuracy Pareto frontier. The results are highly rigorous, Pareto-dominating nearly all baselines (including hand-engineered systems) on two AstaBench tasks using only 66 to 100 training examples. The key insight is that exposing a priced menu of LLMs to the evolutionary search and using a graded cost-penalty objective (pricing cost overages in error-equivalents) naturally forces the discovery of cheap-first cascades and selective strong-model escalation. This is essential reading for our work in LLM evolutionary search and multi-agent optimization, as it provides a concrete, proven mechanism for managing inference costs and sample efficiency during automated agent design.
+
+### [Improving the matrix multiplication exponent with modern optimization and AlphaEvolve](https://arxiv.org/abs/2608.16884)
+
+**2026-08-17** | Google DeepMind, MIT, Carnegie Mellon University, Columbia University | M=6 P=5 I=8 **MUST-READ** *discuss*
+
+*Method:* Gradient descent with optimal transport techniques and AlphaEvolve for algorithm refinement | *LLM role:* evolutionary_search
+
+> This paper applies gradient-based optimization and AlphaEvolve to the combination loss analysis problem, improving the theoretical upper bound on the matrix multiplication exponent to ω < 2.371177. The results are rigorously verified using rational arithmetic, proving a genuine state-of-the-art advance over the previous 2.371339 bound. The key insight for LLM evolutionary search is the preparation pipeline: the authors relaxed discrete max-entropy constraints into a differentiable tensor program using the Sinkhorn-Knopp algorithm and Jax, enabling hardware parallelization up to 7 million parameters. They then applied AlphaEvolve using 'evolving constructions' to iteratively refine the optimizer while passing the best solution state between generations. This is highly relevant for our work, as it demonstrates how to successfully scale LLM-driven algorithm discovery for massive, highly constrained combinatorial problems.
+
+### [GoalEvolve: From Handcrafted Algorithm Priors to Goal-Driven Evolution of Physical Design Algorithms](https://arxiv.org/abs/2608.16733)
+
+**2026-08-17** | Fudan University | M=8 P=7 I=8 **MUST-READ** *discuss*
+
+*Method:* Goal-driven source-code evolution framework with LLM-based Teacher-Student agents and mechanism memory | *LLM role:* decomposition_guide
+
+> GoalEvolve is an LLM-based evolutionary search framework that optimizes physical design algorithms by targeting final full-flow metrics rather than stage-local objectives. The results are backed by strong empirical evidence, demonstrating a 30.67% improvement in total negative slack over default OpenROAD and outperforming standard Codex goal mode under matched evaluation budgets. The key insight is the use of 'effect-debt analysis' combined with an Evolutionary Program Database (EPD), which tracks whether a local algorithmic change causes downstream degradation and stores this as persistent mechanism memory to guide future LLM prompts. This is highly relevant to our research in LLM evolutionary search; the team can adapt the EPD and effect-debt tracking to improve sample efficiency and credit assignment in our own multi-stage optimization pipelines, such as routing or scheduling.
+
 
 #### 2026-08-18 (5 papers)
 

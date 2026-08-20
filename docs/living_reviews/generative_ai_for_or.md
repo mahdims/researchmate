@@ -1,10 +1,21 @@
 # Living Review: Generative AI for OR
 
-**Last Updated:** 2026-08-18
+**Last Updated:** 2026-08-20
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-20 (1 papers)
+
+### [From Errors to Proofs: Minimal-Core-Guided Repair for Neuro-Symbolic Constraint Solving](https://arxiv.org/abs/2608.14771)
+
+**2026-08-14** | Independent Researcher | M=7 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Minimal-core-guided repair for Answer Set Programming (ASP) formalizations | *LLM role:* code_writer
+
+> This paper replaces generic solver error messages with minimal unsatisfiable cores (MUCs) to guide LLM self-repair when translating natural language constraint problems into Answer Set Programming. The results are backed by a 77-instance benchmark, showing that MUC feedback reduces fabricated solutions on infeasible problems from 79% to 7% for weaker models, though strong models perform well even with generic chain-of-thought. The key insight is that raw solver errors (e.g., 'unsatisfiable') often cause LLMs to blindly delete valid constraints until a problem becomes solvable, whereas structural proof artifacts localize the conflict and allow the LLM to correctly identify genuine infeasibility. This is highly relevant for symbolic OR modeling and LLM-in-the-loop optimization; the community could adapt this by using Irreducible Infeasible Subsystems (IIS) from MIP solvers as a high-quality, leakage-free feedback signal for LLM evolutionary search or autoformalization pipelines.
+
 
 #### 2026-08-18 (1 papers)
 
