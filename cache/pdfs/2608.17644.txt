@@ -1,0 +1,2317 @@
+--- Page 1 ---
+LLM-Derived Preference Judgments Are Not Self-Consistent
+Matthew T. Ford1, Francis Bahk1, Jingjing Wang1, Adam S. Jovine1,
+Tinghan Ye2, David B. Shmoys1, Peter I. Frazier1
+1Cornell University
+2Georgia Institute of Technology
+{mtf62,feb47,jw2446,asj53}@cornell.edu, joe.ye@gatech.edu,
+{dbs10,pf98}@cornell.edu
+Abstract
+Agents increasingly interpret a person’s natural-language pref-
+erences by querying an LLM for numerical preference judg-
+ments, e.g., by asking how much the person would be willing
+to pay for an item. A growing body of work estimates a utility
+function from these judgments and then chooses actions based
+on their estimated utility. This pipeline assumes the judgments
+are approximately self-consistent: that a single utility func-
+tion can reproduce them. But are they? To study this question,
+we measure the self-consistency of cardinal LLM preference
+judgments. For example, the difference in stated willingness-
+to-pay between two items should match the stated payment
+that makes a person indifferent to exchanging them. We de-
+velop statistical tests and interpretable measures of how far
+observed responses depart from the best-fitting self-consistent
+utility function. Experiments with flight, apartment, and hotel
+examples across six LLMs reveal large persistent inconsisten-
+cies. This suggests that LLM-derived preference judgments
+cannot be faithfully summarized by a single utility function.
+1
+Introduction
+A growing body of work asks a large language model (LLM)
+to turn a person’s natural-language description of their prefer-
+ences into structured preference data on which a decision pro-
+cedure acts: explicit utility or score functions in LISTEN-U
+(Jovine et al. 2025) and LILO (Kobalczyk et al. 2025); item-
+level evidence for latent utilities in PEBOL (Austin et al.
+2024); batch or tournament choices in LISTEN-T (Jovine
+et al. 2025); probabilistic priors over feature-utility weights
+from automated LLM interviews (Eichelbeck, Voigt, and Al-
+thoff 2026); and constraints for optimization models (Law-
+less et al. 2023; Sanguinetti et al. 2025). In these systems,
+LLM-derived or LLM-mediated preference signals become
+inputs to estimation, ranking, query selection, or optimiza-
+tion rather than merely generated prose, as illustrated by the
+representative workflow in Figure 1.
+Many preference-learning systems represent or reason
+through a latent utility function that is assumed to be sta-
+ble, although the precise observation model differs across
+interfaces. LISTEN-U and LILO represent or fit utility val-
+ues directly. PEBOL updates a belief over latent item utilities,
+and LISTEN-T assumes a utility implicitly through transitiv-
+ity and completeness. This follows the classical preference-
+learning view that judgments are noisy observations of a
+Figure 1: Representative LLM-assisted preference learn-
+ing. Natural-language preferences condition LLM feedback
+used for utility estimation, optimization, and ranking; LIS-
+TEN and LILO instantiate related variants (Jovine et al. 2025;
+Kobalczyk et al. 2025).
+stable utility (Debreu 1954; Kreps 1988). Yet downstream
+performance does not establish that preference information
+obtained through different prompts is mutually consistent.
+We ask the more basic measurement question: can the pop-
+ulation means of these numerical LLM judgments be repro-
+duced by one stable quasi-linear, dollar-denominated utility?
+An analogous scalar-representation step appears in LLM
+evaluation and LLM feedback pipelines, where LLM-
+provided pointwise scores and pairwise judgments over can-
+didate responses are used to construct scalar rewards (Zheng
+et al. 2023; Kim et al. 2023; Lambert et al. 2024). These set-
+tings use observation models different from ours and are not
+empirically audited here. They pose a broader representation
+question: can heterogeneous judgments over text-described
+alternatives be coherently compressed into one latent scalar?
+Our monetary setting is an externally anchored special case in
+which listed price fixes the units and supplies a prespecified
+cross-format relationship.
+We study offers, a familiar format in everyday language
+and web text that pairs an item with a listed price. Price
+supplies a numeraire that places heterogeneous items on a
+common dollar scale. We assume we have a human prefer-
+ence utterance to pass as context to influence the responses
+the LLM gives when queried. An item query asks the max-
+arXiv:2608.17644v1  [cs.AI]  18 Aug 2026
+
+
+--- Page 2 ---
+imum price the user would pay for one item. An offer-pair
+query asks for the signed price change that would make the
+user indifferent between two offers. The sign supplies an or-
+dinal preference direction, while the magnitude is a cardinal
+monetary judgment. Recovering such monetary trade-offs
+from binary choices instead requires price variation and a
+fitted choice model. For example, Reusens et al. (2026) infer
+hotel-attribute willingness to pay by fitting a multinomial-
+logit model to price-varying binary LLM choices. Direct nu-
+merical queries could avoid this indirect recovery step, but
+they make a stronger measurement claim: their dollar scale
+must be stable. In particular, the difference between two item-
+query responses should agree with the compensation elicited
+directly for the corresponding offers.
+We formalize this claim as a self-consistency hypothesis.
+For each fixed preference utterance and item set, every item
+receives its own unrestricted, dollar-denominated utility. The
+audit is feature-agnostic but numeraire-dependent: it treats
+each item description as an atomic alternative rather than a
+feature vector, while listed price identifies a common cardinal
+scale across query types. We impose no linearity, smooth-
+ness, separability, or additivity over item features. The main-
+tained economic restriction is quasi-linearity in the monetary
+numeraire: an offer’s utility is its item’s utility minus its listed
+price (Mas-Colell, Whinston, and Green 1995; Roughgarden
+2016). Self-consistency requires the expected responses from
+item and offer-pair queries to agree with this single utility.
+Even failure to reject would establish representability only
+for the audited finite items, queries, and prompt semantics,
+not generalization to unseen items or prompts.
+Section 3 formalizes the self-consistency hypothesis HSC
+and derives two necessary local implications. We test the hy-
+pothesis jointly, by measuring departure from the best-fitting
+shared quasi-linear dollar utility, and locally, through P1 and
+P2. P1 compares a direct offer-pair estimate with a sum along
+a path of offer-pair queries; P2 compares an offer-pair esti-
+mate with the price-adjusted difference of two item-query
+estimates. A violation of either property provides evidence
+against HSC for the queries involved, although satisfying both
+does not establish the full hypothesis. Because exact tests
+can detect operationally small disagreements, we report both
+statistical evidence and effect magnitudes in dollars and rel-
+ative to listed prices. Applying the audit to controlled flight,
+apartment, and hotel examples across six models reveals per-
+sistent disagreement, particularly between query types. The
+audit measures internal coherence rather than accuracy for
+the person who supplied the preference description: rejec-
+tion provides evidence against a shared quasi-linear dollar
+utility for the audited means, while failure to reject does not
+establish human fidelity.
+Our contributions are:
+• We formulate the audit over finite sets of text-described
+items, assigning one unrestricted dollar value to every
+item and imposing only quasi-linearity in listed price; no
+feature-based utility form is assumed.
+• We develop a reusable audit protocol for numerical LLM
+preference interfaces with a monetary numeraire: a joint
+bootstrap test of whether one such utility fits all query
+means, together with local P1/P2 diagnostics reporting
+statistical evidence, price-scaled magnitude, and sup-
+ported preference reversals.
+• We demonstrate the audit across three controlled domains
+and six models, finding persistent disagreement across
+query types.
+2
+Related Work
+LLM-derived and LLM-mediated preference signals.
+The systems closest to our setting elicit preferences from
+an LLM as input to a downstream selection or optimiza-
+tion procedure. LISTEN maps a natural-language preference
+description to explicit utilities, batch choices, or a selected
+item for multi-objective selection (Jovine et al. 2025); LILO
+fits Gaussian-process utilities from LLM-generated scalar
+or pairwise feedback within a Bayesian-optimization loop
+(Kobalczyk et al. 2025); and PEBOL converts free-text user
+replies into item-level evidence for Bayesian utility beliefs
+that drive acquisition (Austin et al. 2024). In the rental-listing
+setting of Eichelbeck, Voigt, and Althoff (2026), an auto-
+mated LLM interview initializes a prior over feature-utility
+weights that subsequent user comparisons update. Beyond
+personalized decision support, LLM feedback over candidate
+text responses can provide pairwise labels for training pref-
+erence models (Bai et al. 2022); reward models assign scalar
+scores and are commonly evaluated on preferred–rejected
+response pairs (Lambert et al. 2024). These systems use ob-
+servation models different from ours and are not empirically
+audited here, but they similarly turn LLM-derived judgments
+into scalar signals used for ranking or optimization. Trans-
+lating specified optimization problems into solver form (Ra-
+mamonjison et al. 2023; AhmadiTeshnizi, Gao, and Udell
+2024) or extracting constraints from natural language (Law-
+less et al. 2023; Sanguinetti et al. 2025) addresses a different
+task: the objective is specified rather than elicited.
+Feedback form and shared scalar representation.
+LILO
+compares its default binary pairwise labels with a scalar
+variant scoring each outcome in [0, 1], but the compari-
+son simultaneously changes the response scale, observation
+model, and points selected by the sequential policy (Kobal-
+czyk et al. 2025). Pointwise scores on bounded or rubric-
+anchored scales (Zheng et al. 2023; Kim et al. 2023) and
+pairwise judgments over the same kinds of text-described
+items both appear in LLM feedback and evaluation. These
+feedback forms do not automatically share a cardinal scale:
+interpreting pairwise choices through scalar rewards requires
+a specified choice model, while bounded scores require a
+specified scale interpretation. Reusens et al. (2026), for ex-
+ample, infer attribute-level willingness to pay by fitting an ad-
+ditive multinomial-logit model to price-varying binary LLM
+choices over hotel rooms.
+Our item-query and offer-pair responses are instead ex-
+pressed directly in dollars. Listed price supplies the external
+numeraire, and the maintained assumption of quasi-linearity
+in that numeraire specifies how the two query types should
+relate. We therefore hold the monetary scale and compared
+items fixed and test their agreement before downstream fit-
+ting, assigning each audited item an unrestricted utility rather
+
+
+--- Page 3 ---
+than imposing a feature-based model.
+Utility representation and consistency audits.
+The as-
+sumption that responses are consistent with a utility function
+inherits from work on learning from comparisons expressed
+by human decision-makers. Transitive and complete prefer-
+ences over a countable item set are represented by a utility
+function (Debreu 1954; Kreps 1988). Humans do report in-
+transitive judgments (Tversky 1969), but violations concen-
+trate among items of near-equal utility (Luce 1956; Fishburn
+1991), and once response noise is modeled, gross violations
+of transitivity are rare (Regenwetter, Dana, and Davis-Stober
+2011). This literature concerns ordinal coherence; our audit
+additionally requires that elicited dollar magnitudes cohere.
+Our global fit and path diagnostics are also related to
+HodgeRank, which fits a global node potential to cardinal
+pairwise measurements and characterizes cyclic inconsis-
+tency (Jiang et al. 2011). Our setting combines item-query
+level anchors with offer-pair measurements, assigns the mea-
+surements monetary offer semantics, and tests whether the
+two query types agree under quasi-linearity. LLM-judge
+work documents ordering, scoring, and presentation biases
+(Zheng et al. 2023; Wang et al. 2024; Haldar and Hocken-
+maier 2025), while recent audits test logical conditions such
+as transitivity and commutativity (Feng et al. 2025; Liu et al.
+2024). Those tests are primarily ordinal or logical. A transi-
+tive sign ordering does not identify coherent dollar magni-
+tudes (Appendix A.2); our audit tests cardinal integrability
+and agreement between item and offer-pair queries.
+3
+Utilities and LLM Estimates
+3.1
+Items, Offers, and Utility
+Fix a domain containing a set of items X = {x1, . . . , xd},
+a natural-language preference utterance, an LLM configura-
+tion (comprised of model choice and settings), and prompt
+templates. An item is an outcome represented to the LLM by
+a textual description; in our experiments, items are flights,
+apartment rentals, and hotel rooms. The prompts include the
+utterance when asking the LLM about these items. Section 4
+defines the concrete choices used in our experiments.
+We hypothesize the LLM responses are self-consistent:
+their population means can be described by a utility function
+U. Let U(x) denote item x’s utility under this hypothesized
+function, denominated in a reference currency (US dollars
+in our experiments). If no such utility reproduces all query
+means, then the responses are not internally consistent with a
+single dollar-denominated utility. Provided the person’s pref-
+erences admit this representation, at least one query type must
+misestimate that utility on at least one audited query. Con-
+versely, failure to reject self-consistency does not establish
+that the utility accurately represents the person’s preferences.
+An offer is a tuple a = (x, p) consisting of item x and its
+listed price p. We assume quasi-linearity in money:
+U(a) = U(x) −p.
+This is a standard model for valuations with payments (Mas-
+Colell, Whinston, and Green 1995; Roughgarden 2016). We
+make no other assumption about the functional form of U: the
+item utilities are unrestricted and need not be linear, smooth,
+separable, or additive in item features.
+For offers a = (x, p) and b = (y, q), their target-minus-
+source utility difference is
+U(b) −U(a) = [U(y) −q] −[U(x) −p].
+3.2
+Two Query Types
+We use two prompt types; Appendix B.3 gives their exact
+wording. An item query names an item x without a listed
+price and asks the maximum amount the user would pay for
+it. We interpret that amount as U(x) relative to not buying
+the item.
+An offer-pair query names source offer a = (x, p) and
+target offer b = (y, q) and asks how much the target price q
+would have to change to make the user indifferent. A posi-
+tive response means that b could become more expensive; a
+negative response means that it must become cheaper. Thus
+the sign implies a pairwise preference.
+Stylized prompts are: Item query: “Given the user’s pref-
+erence description and item x, what is the maximum price
+they would pay for x?” Offer-pair query: “Offer A is item
+x at price p, and Offer B is item y at price q. What signed
+amount should be added to B’s price to make the user indiffer-
+ent between the offers? A positive amount means B could cost
+more; a negative amount means B must become cheaper.” Ev-
+ery prompt requests one numerical dollar amount; the exact
+wording is included with the released query specification.
+Item queries are indexed by x ∈X, and offer-pair queries
+by an ordered pair of offers (a, b). Let C be the union of
+these two index sets. For any query c ∈C, let Y i(c) be
+the response from its ith LLM call. Thus Y i(x) denotes
+an item-query response because its argument is an item,
+whereas Y i((a, b)) denotes an offer-pair response because
+its argument is an ordered pair of offers.
+Within a fixed query, we treat finite responses as indepen-
+dent and identically distributed across calls. Distributions
+may differ across queries, including in their variances, and
+need not be Gaussian, symmetric, or unimodal. For n re-
+peated calls to query c, define
+Y (c) := 1
+n
+n
+X
+i=1
+Y i(c).
+(1)
+When a finite collection is enumerated by c = 1, . . . , Q, we
+use the equivalent subscript notation Y i
+c and Y c.
+3.3
+Self-Consistency Hypothesis
+Fix a finite query collection Q ⊂C of cardinality Q before
+observing any responses. For a candidate utility U, define
+the response implied by query c as
+mc(U) :=
+U(x),
+c = x,
+U(b) −U(a),
+c = (a, b).
+(2)
+The first case is an item query and the second is an offer-pair
+query. The self-consistency hypothesis for this collection is
+HSC :
+∃U such that
+E[Y i(c)] = mc(U)
+for every c ∈Q.
+(3)
+
+
+--- Page 4 ---
+Its alternative is the logical negation: no single U satisfies
+every equality, or equivalently every candidate U leaves at
+least one query mean unexplained. Expectations are over
+stochastic completions, conditional on the fixed audit inputs.
+Best-fitting utility and discrepancies.
+Whether or not the
+audited null holds, define the best-fitting population utility
+U ⋆∈arg min
+U
+1
+Q
+X
+c∈Q
+{E[Y i(c)] −mc(U)}2.
+(4)
+Define each query’s persistent discrepancy from this fit as
+δ(c) := E[Y i(c)] −mc(U ⋆).
+U ⋆is the utility assignment that minimizes the average
+squared discrepancy over Q; it is not an additional assump-
+tion about the person’s true utility. The minimized objective
+in Equation 4 is the average of δ(c)2. Under HSC, every
+discrepancy is zero. Under the alternative, at least one is
+nonzero. Thus the null says that one utility assignment ab-
+sorbs all persistent query means; the alternative says that
+some persistent mean disagreement remains after fitting the
+best possible shared utility.
+Individual calls may fluctuate around their query mean.
+Equivalently,
+Y i(c) = mc(U ⋆) + δ(c) + εi(c),
+E[εi(c)] = 0.
+(5)
+Repeated calls reduce the sampling variation represented
+by εi(c) but do not remove the persistent discrepancy δ(c).
+These discrepancies are relative to the shared-utility model,
+not necessarily biases relative to a person’s true preferences.
+Audit overview.
+We assess self-consistency globally, by
+asking whether one utility jointly explains a prespecified col-
+lection of query means, and locally, by comparing alternative
+estimates for the same offer pair. The global test summarizes
+joint lack of fit; P1 and P2 identify specific disagreements.
+3.4
+Global Test for Self-Consistency
+Using the observed query means, estimate the best-fitting
+utility by
+bU ∈arg min
+U
+1
+Q
+X
+c∈Q
+{Y (c) −mc(U)}2.
+(6)
+We measure the joint lack of fit remaining in the observed
+means by
+T =
+(
+1
+Q
+X
+c∈Q
+{Y (c) −mc(bU)}2
+)1/2
+.
+(7)
+Thus T is the smallest root mean squared error (RMSE)
+achievable by assigning one free utility value to every audited
+item. An item query constrains one item value; an offer-pair
+query constrains the price-adjusted difference between two
+item values. Every prespecified query receives equal weight,
+so T is the RMSE for a uniformly selected query from Q.
+This defines the reported effect size; it is not a claim that
+equal weighting is the most efficient way to estimate U.
+As the number of repetitions grows, bU approaches U ⋆.
+Under HSC, T approaches zero because only finite-sample
+noise remains. Under the alternative, it approaches the RMSE
+of the persistent discrepancies δ(c). Larger departures from
+self-consistency therefore shift the distribution of T to-
+ward larger values. Lemma 2 gives the corresponding finite-
+sample expectation of the squared lack-of-fit statistic.
+Because numerical responses may be non-Gaussian and
+have different variances across queries, we use a within-query
+nonparametric bootstrap to estimate the null distribution of
+T and obtain one p-value for Q (Efron and Tibshirani 1993).
+The observed RMSE is T computed from the actual query
+sample means after fitting bU; it is not error against human
+ground truth. Details are in Appendix F.1.
+3.5
+Local Tests for Self-Consistency
+Self-consistency implies that every way of estimating the
+utility difference between the same two offers agrees in ex-
+pectation. The following comparisons test this implication
+without first fitting a shared utility to all query means. Propo-
+sition 1 states both implications formally and Appendix A.2
+proves them.
+P1: direct offer-pair estimate versus path sum.
+Choose
+a path P = (a = a0, a1, . . . , ak = b) from source offer a
+to target offer b, and ask separately about each adjacent pair.
+Section 4.2 specifies the prespecified paths used in our audit.
+k
+X
+j=1
+Y ((aj−1, aj)).
+(8)
+Under HSC, utility differences telescope, so this path sum
+and the direct offer-pair estimate have the same expectation:
+E
+
+
+k
+X
+j=1
+Y ((aj−1, aj))
+
+= U(b) −U(a) = E[Y ((a, b))].
+Define the P1 residual
+bR1,P(a, b) := Y ((a, b)) −
+k
+X
+j=1
+Y ((aj−1, aj)).
+P2: offer-pair estimate versus item queries.
+For the same
+offers a = (x, p) and b = (y, q), an offer-pair query directly
+estimates U(b) −U(a). Alternatively, two item queries give
+the estimate
+[Y (y) −q] −[Y (x) −p].
+(9)
+Under HSC, its expectation is also U(b)−U(a). Equivalently,
+adding the known price difference to the expected offer-pair
+response gives the item utility difference, E[Y i((a, b))] +
+(q −p) = U(y) −U(x). Define the P2 residual
+bR2(a, b) := Y ((a, b)) −{[Y (y) −q] −[Y (x) −p]}.
+P2 is not an assumption that humans answer differently
+framed questions identically. It is an implication of treating
+both LLM query types as estimates of one U.
+
+
+--- Page 5 ---
+Figure 2: Local implications of self-consistency. For offers
+a = (x, p) and b = (y, q), all three constructions estimate
+U(b) −U(a). P1 compares the direct offer-pair response
+Y (a, b) with the path sum Y (a, m) + Y (m, b). P2 com-
+pares Y (a, b) with the price-adjusted item-query difference
+[Y (y) −q] −[Y (x) −p]. Self-consistency requires these es-
+timates to agree in expectation, not on every LLM call.
+Statistical interpretation.
+For either property, the local
+null is that the two estimates being compared have the same
+population mean, so the corresponding residual has expecta-
+tion zero. The local alternative is that their population means
+differ, so the residual has a nonzero expectation. This is a
+specific implication of HSC: rejecting a local null rejects
+self-consistency for those queries, whereas failing to reject it
+does not establish global self-consistency.
+Because each local residual is a prespecified linear com-
+bination of query averages from independent calls, we esti-
+mate its standard error from the constituent queries. We use a
+finite-sample normal approximation motivated by the central
+limit theorem and form the comparison-specific 95% confi-
+dence interval bR±1.96 c
+SE( bR). This approximation does not
+require equal response variances across queries, although it
+does require the sampling distribution of the residual to be
+reasonably approximated by a normal distribution. A local
+self-consistency rejection occurs when this interval excludes
+zero. Under the local null, the interval becomes concentrated
+around zero as calls are added; under a fixed alternative, it be-
+comes concentrated around the nonzero population residual.
+We use this direct calculation locally because the residual
+is a prespecified linear combination. The global statistic in-
+stead requires refitting a shared utility and is calibrated by
+bootstrap.
+Figure 2 summarizes the two local implications of
+self-consistency: P1 compares different paths of offer-pair
+queries, whereas P2 compares offer-pair and item-query es-
+timates of the same utility difference.
+3.6
+Statistical Evidence and Practical Magnitude
+The global and local tests concern exact equalities be-
+tween population means. With enough repeated calls, ei-
+Domain
+Audited
+items
+Audited
+offers
+Utts.
+Pairs/
+utt.
+Offer-pair
+queries
+Item
+queries
+All
+queries
+Flights
+19
+21
+3
+6
+90
+24
+114
+Apartments
+21
+21
+3
+6
+90
+27
+117
+Hotels
+3
+9
+3
+4
+60
+9
+69
+Total
+43
+51
+9
+16
+240
+60
+300
+Table 1: Audit design. Pairs/utt. counts endpoint offer com-
+parisons under one preference utterance. Each pair generates
+five offer-pair queries: one direct query and four steps on
+two two-step paths. Item-query estimates are reused across
+endpoint pairs but are elicited separately for each utterance.
+Each of the 300 query cells receives 15 completions, giving
+4,500 calls per model.
+ther can detect a fixed disagreement too small to matter
+operationally. We therefore separate evidence against exact
+self-consistency, given by rejection and its p-value or confi-
+dence interval, from practical magnitude, reported through
+the global RMSE T and local | bR|. Section 4.3 specifies the
+normalizations, reversal criterion, and family-level reporting
+used in our experiments.
+4
+Audit Protocol
+4.1
+Domains and Preference Utterances
+We construct finite sets of text-described items in three con-
+trolled domains: flights, apartments, and hotels. Flight and
+apartment descriptions vary continuous, ordinal, and cat-
+egorical item features; hotels combine three rating-defined
+room items with three listed prices to form nine offers. These
+features are used only to construct interpretable items, com-
+parisons, and paths. The audit itself uses item identity, listed
+price, and query incidence; it does not fit utility as a function
+of item features. These controlled test cases make the P1 and
+P2 relationships explicit but are not representative samples
+of people or markets.
+Before collecting responses, we fix three utterances per
+domain that vary emphasis on price and domain-specific
+features. An audit group fixes one model, domain, utterance,
+item set, and query collection; its utility fit and test statistic
+are computed separately. This gives nine groups per model.
+Appendices B.1 and B.2 summarize the audited design and
+give the preference utterances.
+4.2
+Queries, Models, and Sampling
+The prespecified design in Table 1 contains 16 endpoint-
+comparison templates (six flight, six apartment, and four ho-
+tel), each evaluated under three domain-specific utterances,
+giving 48 comparison instances across nine audit groups.
+Across the 48 endpoint pairs, the design yields 96 P1 and
+48 P2 comparisons. Reuse explains why 60 item queries
+suffice, while some path-only intermediate items receive no
+item query. The two P1 residuals for a pair share its direct
+estimate, and P2 residuals can share item estimates across
+pairs; individual comparison-specific intervals remain valid,
+but pooled residuals are not independent.
+We use one canonical wording per query type. Each inde-
+pendent prompt contains the utterance and relevant item or
+
+
+--- Page 6 ---
+offers, but no earlier path questions or answers. Thus the au-
+dit concerns stateless rather than conversational elicitation.
+Appendix B.3 gives the exact prompts.
+Models and sampling.
+We audit Claude Opus 4.8, Gem-
+ini 3.5 Flash, GPT-5.5, GPT-OSS 120B, Llama 3.3 70B, and
+Qwen 3.6 27B, analyzing each separately. Each query re-
+ceives 15 calls, as summarized in Table 1. Appendix B.4
+reports service providers, model identifiers, sampling con-
+trols, token limits, and reasoning settings. Analyses condition
+on finite numerical responses; parse failures are reported in
+Appendix C.
+4.3
+Inference and Reporting
+Each audit group provides one bootstrap p-value. Within each
+model, we apply a Bonferroni correction, rejecting a group
+only when p ≤0.05/9 = 0.0056 (Dunn 1961). This controls
+the probability of any false rejection at 5% without assuming
+group independence. We report whether the all-nine claim is
+rejected and how many groups reject after correction.
+We report Tg in dollars and relative to the mean of the
+endpoint listed prices across that group’s offer-pair queries,
+with queries weighted as they appear in the design. This is
+one group-level scale. For local residuals, we instead use a
+comparison-specific scale and report dollars and
+| bR|
+sab
+,
+sab := p + q
+2
+,
+the absolute residual as a fraction of endpoint offers a and
+b’s mean listed price; intermediate path prices do not enter
+this scale. For example, 0.10 means disagreement equal to
+10% of that mean endpoint price. A 95% supported ordi-
+nal reversal has estimates whose confidence intervals (CIs)
+exclude zero in opposite directions, so the two query con-
+structions support opposite preferred offers beyond sampling
+uncertainty. A local rejection instead has a P1 or P2 residual
+CI excluding zero; it can reject equality without reversing
+the implied preference. Empirical complementary cumula-
+tive distribution function (CCDF) curves show the fraction of
+residual magnitudes exceeding each threshold. These inter-
+vals and lower bounds are comparison-specific, not simulta-
+neous confidence statements, and describe local prevalence
+and magnitude rather than an additional family-level claim.
+Appendix F.2 defines standard errors (SEs), CIs, and lower
+bounds; Appendix F.1 gives bootstrap and multiplicity de-
+tails.
+5
+Audit Results
+We first test whether all query means admit one utility and
+then use P1 and P2 to identify disagreements across paths
+and query types. Statistical rejection addresses exact self-
+consistency; RMSE, price-normalized residuals, and sup-
+ported reversals describe practical magnitude.
+5.1
+Does One Utility Fit the Query Means?
+Every model rejects the joint claim that all nine audit groups
+are self-consistent after Bonferroni correction. Five models
+reject all nine groups, while Qwen rejects four. Because each
+Model
+Flights
+$ (%)
+Apartments
+$ (%)
+Hotels
+$ (%)
+Claude Opus 4.8 16.9 (4.6%)
+38.3 (1.6%) 109.2 (19.9%)
+Gemini 3.5 Flash
+7.7 (2.1%)
+47.5 (2.0%) 104.0 (18.9%)
+GPT-5.5
+14.6 (4.0%)
+51.7 (2.2%) 105.7 (19.2%)
+GPT-OSS 120B
+10.9 (3.0%)
+73.9 (3.2%) 127.6 (23.2%)
+Llama 3.3 70B
+18.1 (4.9%) 142.3 (6.1%) 198.0 (36.0%)
+Qwen 3.6 27B
+18.4 (5.0%)
+65.3 (2.8%) 247.2 (44.9%)
+Table 2: Magnitude of lack of fit. Cells average three audit-
+group RMSEs and report dollars (percentage of the group-
+level endpoint-price scale; Section 4.3). Each fit assigns one
+free utility per item. Hotels have 18.9–44.9% RMSE versus
+1.6–6.1% elsewhere, but query geometry and fit rank differ
+by domain.
+fit assigns one unrestricted utility to every audited item, these
+rejections are not failures of a particular feature-based or
+parametric utility model. Under the maintained quasi-linear
+price relation, they provide evidence that no assignment of
+item utilities reproduces all audited query means. Group-
+level results are in Appendix Tables 9 and 10.
+Table 2 reports the remaining error after fitting the best
+possible utility. Average RMSE ranges from 1.6–6.1% of
+the endpoint-price scale for flights and apartments and 18.9–
+44.9% for hotels. These are descriptive rather than controlled
+domain comparisons because the domains differ in query ge-
+ometry and fit rank. The global audit establishes disagree-
+ment but does not identify its source or which responses
+better represent the person’s preferences.
+5.2
+Where Does Self-Consistency Fail?
+P2 provides the clearest local failure. Across models, 41.7–
+87.5% of P2 residual confidence intervals exclude zero (Ta-
+ble 3), and Figure 3 shows that many disagreements are
+substantial relative to offer prices. Supported reversals occur
+for 2.1–12.5% of the 48 prespecified comparisons per model.
+In each such comparison, a two-offer selector based on item-
+query means chooses the opposite offer from one based on
+the offer-pair mean. Thus query type can affect both the es-
+timated utility difference and, in some audited cases, the
+resulting choice. The audit does not establish which choice
+is more faithful to the person; domain-level results are in
+Appendix Table 8.
+P1 and path composition.
+P1 failures are less uniform
+across models: rejection rates range from 6.2% to 68.8%,
+supported reversals are rare, and price-normalized magni-
+tudes are generally smaller than for P2. These results provide
+evidence against unrestricted composition of offer-pair es-
+timates in the audited design, but not a robust cross-model
+ordinal effect.
+A supplementary stress test divides four smooth single-
+feature changes into increasingly fine paths. For every model,
+mean price-normalized P1 error is higher at k = 8 and k =
+16 than at k = 2 (Appendix Figure 4 and Table 7). In these
+four paths, simple local steps do not guarantee agreement
+with the direct estimate. The small design and nonmonotone
+curves do not establish a general scaling law.
+
+
+--- Page 7 ---
+Figure 3: Local disagreement by query construction. P1
+compares a direct offer-pair estimate with a path sum; P2
+compares it with the price-adjusted difference of two item-
+query estimates. At threshold t, the curve gives the fraction
+with | bR|/[(p+q)/2] ≥t; thus, t = 0.10 means disagreement
+of at least 10% of the endpoint offers’ mean price. Axes end
+at t = 1; larger residuals still contribute to the curve height
+there. Solid curves use observed residuals; dashed curves use
+comparison-specific 95% lower bounds, not simultaneous
+confidence bands.
+6
+Implications for Preference Learning
+The large and statistically significant inconsistencies that we
+observe do not by themselves show that preference informa-
+tion elicited from LLMs is unusable; instead, these inconsis-
+tency show that algorithm designers should be careful when
+using preference information from LLMs. This information
+depends on the way in which questions are asked and the
+choice of LLM. When possible, algorithm designers should
+corroborate an LLM’s preference judgements with real hu-
+man judgements.
+Our audit can be repeated with new items and price
+changes to check consistency in application domains be-
+fore numerical elicitation is applied. After performing such
+an audit, an algorithm designers may may wish to choose
+an LLM with better self-consistency, using the metrics we
+develop, because using an LLMs with poor self-consistency
+risks results that depend arbitrarily on the specific form of
+questions asked.
+Our audit also points toward human-subject research. Self-
+consistency is necessary for the shared-utility model but not
+sufficient for fidelity: an LLM whose responses admit a single
+quasi-linear dollar utility may still assign values that a person
+P1 (n = 96)
+P2 (n = 48)
+Model
+Rev.
+Reject.
+Rev.
+Reject.
+Claude Opus 4.8 4 (4.2%) 66 (68.8%) 6 (12.5%) 41 (85.4%)
+Gemini 3.5 Flash 1 (1.0%) 51 (53.1%)
+4 (8.3%) 37 (77.1%)
+GPT-5.5
+0 (0.0%) 37 (38.5%)
+1 (2.1%) 40 (83.3%)
+GPT-OSS 120B
+0 (0.0%) 38 (39.6%)
+2 (4.2%) 31 (64.6%)
+Llama 3.3 70B
+2 (2.1%) 53 (55.2%) 5 (10.4%) 42 (87.5%)
+Qwen 3.6 27B
+0 (0.0%)
+6 (6.2%)
+1 (2.1%) 20 (41.7%)
+Table 3: Local self-consistency audit. Entries are counts
+(percentages). P1 compares a direct offer-pair estimate with
+a path sum; P2 compares it with the difference of two item-
+query estimates. Rev. denotes a supported reversal, whose
+estimate CIs exclude zero in opposite directions; Reject. de-
+notes a residual CI excluding zero.
+would not endorse, and our design cannot detect this. Mea-
+suring that gap requires eliciting the same item and offer-pair
+queries from people who supply the preference description,
+which would identify which query construction, if either,
+better recovers stated human values. A second direction is to
+calibrate the inconsistencies we report against human ones.
+Humans are themselves inconsistent, and framing effects in
+stated willingness to pay are well documented, so the relevant
+question for a designer is not whether LLM responses depart
+from a single utility but whether they depart more than the
+human judgments they stand in for. Running our protocol on
+human subjects and LLMs over the same items would answer
+this, and would also show whether the failures concentrate
+in the same comparisons.
+7
+Conclusion
+We test whether heterogeneous numerical LLM answers es-
+timate one utility. Across all six models, the joint claim that
+all nine audit groups are self-consistent is rejected after Bon-
+ferroni correction. P2 disagreements are frequent, often large
+relative to price, and sometimes reverse the preferred offer;
+P1 and path-length results caution against unrestricted com-
+position but are more model- and design-dependent. The
+audit does not establish human fidelity; it identifies when
+query types or paths cannot be treated as interchangeable
+under a shared quasi-linear dollar utility.
+Limitations
+This study audits internal coherence, not human fidelity, and
+uses no human data. Controlled items, hand-written utter-
+ances, three domains, six models, fixed prompts and provider
+versions, stateless calls, and 15 completions are not rep-
+resentative; real users, larger rankings, paraphrases, model
+versions, and conversational histories may differ. The quasi-
+linear dollar model excludes wealth effects, binding budgets,
+and cases without finite compensation; P2 covers price-free
+item queries, not all utility prompts. Analyses condition on
+parseable outputs and do not compare numerical with bi-
+nary elicitation. The path-length check uses only four smooth
+single-feature paths and is not a scaling law.
+
+
+--- Page 8 ---
+References
+AhmadiTeshnizi, A.; Gao, W.; and Udell, M. 2024. Opti-
+MUS: Scalable Optimization Modeling with (MI)LP Solvers
+and Large Language Models. arXiv:2402.10172.
+Austin, D.; Korikov, A.; Toroghi, A.; and Sanner, S. 2024.
+Bayesian Optimization with LLM-Based Acquisition Func-
+tions for Natural Language Preference Elicitation. In 18th
+ACM Conference on Recommender Systems, RecSys ’24,
+74–83. ACM.
+Bai, Y.; et al. 2022. Constitutional AI: Harmlessness from
+AI Feedback. arXiv preprint arXiv:2212.08073.
+Debreu, G. 1954. Representation of a Preference Ordering
+by a Numerical Function. Decision Processes, 159–165.
+Dunn, O. J. 1961. Multiple Comparisons Among Means.
+Journal of the American Statistical Association, 56(293):
+52–64.
+Efron, B.; and Tibshirani, R. J. 1993. An Introduction to the
+Bootstrap. New York: Chapman and Hall.
+Eichelbeck, M.; Voigt, T.; and Althoff, M. 2026. Support-
+ing High-Stakes Decision Making Through Interactive Pref-
+erence Elicitation in the Latent Space. In The Fourteenth
+International Conference on Learning Representations.
+Feng, Y.; Wang, S.; Cheng, Z.; Wan, Y.; and Chen, D. 2025.
+Are We on the Right Way to Assessing LLM-as-a-Judge?
+arXiv:2512.16041.
+Fishburn, P. C. 1991. Nontransitive Preferences in Decision
+Theory. Journal of Risk and Uncertainty, 4(2): 113–134.
+Haldar, A.; and Hockenmaier, J. 2025. Rating Roulette: Self-
+Inconsistency in LLM-As-A-Judge Frameworks. In Findings
+of the Conference on Empirical Methods in Natural Lan-
+guage Processing (EMNLP).
+Jiang, X.; Lim, L.-H.; Yao, Y.; and Ye, Y. 2011. Statistical
+Ranking and Combinatorial Hodge Theory. Mathematical
+Programming, 127(1): 203–244.
+Jovine, A. S.; Ye, T.; Bahk, F.; Wang, J.; Shmoys,
+D. B.; and Frazier, P. I. 2025.
+LISTEN to Your Prefer-
+ences: An LLM Framework for Multi-Objective Selection.
+arXiv:2510.25799.
+Kim, S.; Shin, J.; Cho, Y.; Jang, J.; Longpre, S.; Lee, H.;
+Yun, S.; Shin, S.; Kim, S.; Thorne, J.; and Seo, M. 2023.
+Prometheus: Inducing Fine-grained Evaluation Capability in
+Language Models. arXiv:2310.08491.
+Kobalczyk, K.; Lin, Z. J.; Letham, B.; Zhao, Z.; Balandat,
+M.; and Bakshy, E. 2025. LILO: Bayesian Optimization with
+Interactive Natural Language Feedback. arXiv:2510.17671.
+Kreps, D. M. 1988. Notes on the Theory of Choice. Under-
+ground Classics in Economics. Westview Press.
+Lambert, N.; Pyatkin, V.; Morrison, J.; Miranda, L.; Lin,
+B. Y.; Chandu, K.; Dziri, N.; Kumar, S.; Zick, T.; Choi,
+Y.; Smith, N. A.; and Hajishirzi, H. 2024.
+Reward-
+Bench: Evaluating Reward Models for Language Modeling.
+arXiv:2403.13787.
+Lawless, C.; Schoeffer, J.; Le, L.; Rowan, K.; Sen, S.;
+Hill, C. S.; Suh, J.; and Sarrafzadeh, B. 2023.
+“I Want
+It That Way”: Enabling Interactive Decision Support Us-
+ing Large Language Models and Constraint Programming.
+arXiv:2312.06908.
+Liu, Y.; Guo, Z.; Liang, T.; Shareghi, E.; Vulić, I.; and Col-
+lier, N. 2024. Aligning with Logic: Measuring, Evaluating
+and Improving Logical Preference Consistency in Large Lan-
+guage Models. arXiv:2410.02205.
+Luce, R. D. 1956. Semiorders and a Theory of Utility Dis-
+crimination. Econometrica, 24(2): 178–191.
+Mas-Colell, A.; Whinston, M. D.; and Green, J. R. 1995.
+Microeconomic Theory. New York: Oxford University Press.
+Ramamonjison, R.; Yu, T. T.; Li, R.; Li, H.; Carenini,
+G.; Ghaddar, B.; He, S.; Mostajabdaveh, M.; Banitalebi-
+Dehkordi, A.; Zhou, Z.; and Zhang, Y. 2023. NL4Opt Com-
+petition: Formulating Optimization Problems Based on Their
+Natural Language Descriptions. arXiv:2303.08233.
+Regenwetter, M.; Dana, J.; and Davis-Stober, C. P. 2011.
+Transitivity of Preferences. Psychological Review, 118(1):
+42–56.
+Reusens, M.; Goethals, S.; Calders, T.; and Martens, D. 2026.
+Would a large language model pay extra for a view? Inferring
+willingness to pay from subjective choices. Expert Systems
+with Applications, 331: 133279.
+Roughgarden, T. 2016.
+Twenty Lectures on Algorithmic
+Game Theory. Cambridge, UK: Cambridge University Press.
+Sanguinetti, M.; Perniciano, A.; Zedda, L.; Loddo, A.; Ru-
+berto, C. D.; and Atzori, M. 2025. From User Preferences
+to Optimization Constraints Using Large Language Models.
+arXiv:2503.21360.
+Tversky, A. 1969. Intransitivity of Preferences. Psychologi-
+cal Review, 76(1): 31–48.
+Wang, P.; Li, L.; Chen, L.; Cai, Z.; Zhu, D.; Lin, B.; Cao,
+Y.; Kong, L.; Liu, Q.; Liu, T.; and Sui, Z. 2024. Large Lan-
+guage Models are not Fair Evaluators. In Proceedings of the
+62nd Annual Meeting of the Association for Computational
+Linguistics (ACL).
+Zheng, L.; Chiang, W.-L.; Sheng, Y.; Zhuang, S.; Wu, Z.;
+Zhuang, Y.; Lin, Z.; Li, Z.; Li, D.; Xing, E. P.; Zhang, H.;
+Gonzalez, J. E.; and Stoica, I. 2023. Judging LLM-as-a-Judge
+with MT-Bench and Chatbot Arena. arXiv:2306.05685.
+
+
+--- Page 9 ---
+A
+Formal basis of the audit
+A.1
+Why the queries estimate item utilities and
+offer-utility differences
+Section 3.2 gives the prompt semantics. Here we derive their
+targets under quasi-linearity. Let v be the direct query’s tar-
+get amount. Utility is unchanged for our purposes if the same
+constant is added to every outcome, so we subtract the utility
+of buying nothing from every outcome and use buying noth-
+ing as the zero-utility reference. Hence U(x) is the utility
+gain from obtaining x relative to buying nothing. This nor-
+malization is imposed in our measurement model, not stated
+in the LLM prompt. We interpret the prompt’s “maximum
+amount” as the price at which the item and the outside option
+are equally desirable. Indifference at that price then gives
+U(x) −v = 0,
+so
+v = U(x).
+This normalization anchors the otherwise arbitrary utility
+level, and self-consistency therefore requires E[Y (x)] =
+U(x).
+Let r be the signed amount added to the target price in an
+offer-pair query from a = (x, p) to b = (y, q). Indifference
+after that adjustment gives
+U(y) −(q + r) = U(x) −p,
+r = [U(y) −q] −[U(x) −p]
+= U(b) −U(a).
+Thus the offer-pair query targets the signed target-minus-
+source utility difference between the two offers.
+A.2
+Why P1 and P2 follow from self-consistency
+Proposition 1 (Local implications of self-consistency)
+Suppose HSC holds. For any offers a, b and any path
+P = (a = a0, a1, . . . , ak = b),
+E[Y ((a, b))] = E
+
+
+k
+X
+j=1
+Y ((aj−1, aj))
+
+.
+Moreover, if a = (x, p) and b = (y, q), then
+E[Y ((a, b))] = [E[Y (y)] −q] −[E[Y (x)] −p].
+Consequently, the population P1 and P2 residuals are zero.
+Proof.
+For P1, let P = (a = a0, a1, . . . , ak = b) be any
+path from source offer a to target offer b. Because each offer-
+pair estimate has expected value equal to its utility difference
+under HSC,
+E
+
+
+k
+X
+j=1
+Y ((aj−1, aj))
+
+=
+k
+X
+j=1
+E[Y ((aj−1, aj))]
+=
+k
+X
+j=1
+[U(aj) −U(aj−1)]
+= U(b) −U(a)
+= E[Y ((a, b))].
+The middle sum telescopes. For P2, the definitions give
+E[Y ((a, b))] = [U(y) −q] −[U(x) −p]
+= [E[Y (y)] −q]
+−[E[Y (x)] −p].
+Thus a nonzero expected P1 or P2 discrepancy is sufficient
+to reject self-consistency on those queries.
+Graph interpretation.
+Represent offers as nodes and
+offer-pair estimates as directed edges. On each connected
+component, expected offer-pair estimates can be represented
+by one offer utility exactly when every cycle sum is zero. To
+see this, fix a reference offer and define the utility of another
+offer by summing edge means along a path from the refer-
+ence. Zero cycle sums make the definition path-independent;
+conversely, utility differences telescopically sum to zero
+around every cycle. The utility is unique up to an additive
+constant. P1 audits selected cycles formed by one direct edge
+and one decomposed path; it does not claim to enumerate
+every cycle in a larger item graph.
+When the representation holds for all relevant pairs, signs
+inherit the ordering of scalar utilities. Antisymmetry fol-
+lows for reversed edges, and transitivity follows because
+U(y) > U(x) and U(z) > U(y) imply U(z) > U(x).
+These ordinal consequences follow from the cardinal repre-
+sentation. The converse is not true: a transitive sign ordering
+does not identify coherent dollar magnitudes. Item-query es-
+timates add level measurements, and P2 tests whether those
+levels agree with the offer graph.
+B
+Experimental reproducibility details
+B.1
+Domains, items, and query counts
+Table 4 summarizes the items, offers, and query counts used
+in the audit. A source offer is the fixed endpoint from which
+a target offer is compared.
+Source offers and hotel grid.
+The flight source of-
+fers
+are
+gnd_cheap_fast_delta
+($220,
+5.0 h,
+Delta),
+gnd_mid_united
+($360,
+6.5 h,
+United),
+and
+gnd_expensive_slow_american
+($520,
+8.0 h,
+American).
+The
+apartment
+source
+offers
+are
+gnd_cheap_studio_walkup
+($1,400/month,
+380 ft2,
+15 min
+commute,
+studio,
+walk-up),
+gnd_mid_1br_brownstone
+($2,200/month,
+720 ft2,
+30 min,
+1-bedroom,
+brownstone),
+and
+gnd_expensive_2br_highrise
+($3,400/month,
+1,050 ft2, 45 min, 2-bedroom, high-rise). Hotels use the
+Cartesian product of prices {$100, $550, $1,000} per night
+and ratings {0.5, 2.8, 5.0} stars. Thus the hotel design
+contains three hotel-room items, distinguished by rating, and
+nine offers after crossing each room type with each listed
+price. All nine offers enter the audit. The released query
+specification records every source, target, and intermediate
+offer used in each comparison.
+B.2
+Audited preference utterances
+Flights.
+1 (price focused). “Keeping the fare low is my
+main priority. I’m generally willing to accept a less conve-
+nient flight if it saves me money.”
+
+
+--- Page 10 ---
+Flights
+Apartments
+Hotels
+Audited items
+19
+21
+3
+Audited offers
+21
+21
+9 (3×3)
+Numeraire
+price
+rent
+price
+Item features
+travel time (continuous),
+airline (categorical)
+area, commute (continuous),
+bedrooms (ordinal),
+building type (categorical)
+rating (ordinal)
+Audited utterances
+1–3
+1–3
+1–3
+Source offers
+3 named
+3 named
+selected grid offers
+Endpoint pairs / utterance
+6
+6
+4
+P1 comparisons / utterance
+12
+12
+8
+Offer-pair queries
+90
+90
+60
+Item queries
+24
+27
+9
+Total queries
+114
+117
+69
+Queries / group Qg
+38
+39
+23
+Utility-fit rank rg
+19
+21
+3
+Residual df Qg −rg
+19
+18
+20
+Table 4: Audit design by domain. Each source-target pair contributes one direct offer-pair query, four path-step queries, and
+two P1 comparisons. Across domains there are 300 queries; 15 completions per query give 4,500 planned calls per model. Listed
+price is excluded from the item features and serves as the monetary numeraire. Item features construct the controlled design but
+are not covariates in the utility fit.
+2 (time focused). “Keeping the trip short is my main priority.
+I’m willing to pay somewhat more for a shorter flight, but
+price still matters.”
+3 (price and travel time). “I’m trying to balance price and
+travel time. I prefer a cheaper flight, but I would pay some-
+what more for a meaningfully shorter trip.”
+Apartments.
+1 (rent focused). “Keeping my monthly rent
+low is my main priority. I’m willing to compromise on space,
+building type, and commute to save money.”
+2 (space focused). “Having more space is my main priority.
+I’m willing to pay somewhat more for a larger apartment,
+while still staying within a reasonable rental budget.”
+3 (rent, square footage, and commute). “I’m looking for
+an affordable apartment, but I would pay somewhat more for
+additional space or a meaningfully shorter commute.”
+Hotels.
+1 (value-seeker). “I’m looking for good value. I
+prefer a higher-rated hotel when the improvement seems
+worth the additional nightly cost.”
+2 (price focused). “Keeping the nightly price low is my main
+priority. I usually prefer the cheaper hotel, although a major
+difference in quality could still matter.”
+3 (price and rating). “I care about both nightly price and
+hotel quality. I would pay somewhat more for a clearly better-
+rated hotel, but not without limit.”
+B.3
+Prompts and exact query specification
+The released query file records the concrete system and user
+prompt for all 300 queries, and core_audit/scripts/run_core_
+audit.py executes them. Every query uses the same canonical
+wording for its query type; only the preference utterance and
+item or offer content vary as specified above.
+B.4
+Model and API configuration
+Table 5 records the API configuration used for the audit. The
+runner requested temperature 1 and seeds 10000, . . . , 10014
+where supported. Its nominal response limit was 2,000 to-
+kens. For GPT-5.5, the OpenAI adapter translated this to an
+8,000-token completion limit so that hidden reasoning and
+the visible answer shared sufficient space. These limits are
+upper bounds and do not represent matched reasoning bud-
+gets across providers.
+Other generation and analysis settings.
+Each request
+asked for one response. Stop sequences and log probabil-
+ities were disabled; frequency and presence penalties and
+other provider-specific generation controls were not sent
+and therefore remained at provider defaults. Groq calls ex-
+plicitly used stream=false; the other clients used non-
+streaming calls. The global test used B = 2000 bootstrap
+draws with analysis seed 20260713. The path-length inter-
+vals used B = 5000 draws with seed 20260709. All reported
+confidence intervals are 95%, and the model-level family-
+wise testing level is α = 0.05, giving the Bonferroni cutoff
+0.05/9 for nine audit groups.
+Pilot development and frozen settings.
+The final prompts,
+temperature, 15-call sample size, seed schedule, model-
+specific reasoning settings, bootstrap sizes, and testing level
+were fixed before the corresponding full runs were ana-
+lyzed; this was not an external preregistration. Separate pi-
+lot responses are excluded from every reported audit result.
+For GPT-OSS, 90-call pilots at response-token ceilings of
+400, 1,200, and 2,000 produced finite-parse rates of 67.8%,
+93.3%, and 100%, respectively, motivating the 2,000-token
+ceiling. We manually revised the original prompt into the v2
+wording and compared five small offer-pair prompt variants.
+The final output-first signed wording was selected for unam-
+biguous sign semantics, numerical parseability, and avoid-
+ance of nonfinite or grossly out-of-range answers relative to
+the stated domain price ranges, not for P1/P2 residuals or
+rejection rates. Qwen reasoning-mode pilots used 2,000- and
+4,000-token ceilings; the reported Qwen condition was then
+
+
+--- Page 11 ---
+Requested model string
+Service/API
+Collected
+Temp./top-p
+Seed
+Token limit
+Reasoning/thinking
+claude-opus-4-8
+Anthropic Messages
+Jul. 27
+omitted/omitted
+omitted
+(unsup-
+ported)
+2,000 output
+adaptive; no control sent
+gemini-3.5-flash
+Google
+Generative
+AI
+Jul. 27
+1/1
+10000–10014
+re-
+quested
+2,000 output
+no control sent
+gpt-5.5
+OpenAI Chat Com-
+pletions
+Jul. 27
+omitted/1
+10000–10014
+re-
+quested
+8,000 completion
+no effort setting; hidden to-
+kens share limit
+openai/gpt-oss-120b
+Groq Chat Comple-
+tions
+Jul. 27
+1/1
+10000–10014
+2,000 output
+no control sent
+llama-3.3-70b-
+versatile
+Groq Chat Comple-
+tions
+Jul. 28
+1/1
+10000–10014
+2,000 output
+no control sent
+qwen/qwen3.6-27b
+Groq Chat Comple-
+tions
+Jul. 28
+1/1
+10000–10014
+2,000 output
+effort
+none;
+format
+hidden
+Table 5: Model and API configuration. The first column gives the exact string sent to the provider. The APIs did not return or
+we did not retain a separate immutable snapshot identifier, so the collection date is the available version provenance. “Omitted”
+means the parameter was not sent and remained at the provider default. Gemini and OpenAI seeds were requested; the APIs did
+not guarantee determinism. GPT-5.5’s limit includes hidden reasoning tokens; other rows report output-token limits.
+fixed as its documented non-thinking mode with a 2,000-
+token ceiling. The released pilot manifests and separate result
+directories retain these development runs.
+Computational environment.
+All model inference used
+the hosted APIs in Table 5; provider-side serving hardware
+was not exposed, and no local accelerator was used for infer-
+ence. Collection and analysis were orchestrated on an Apple
+M5 MacBook Pro (10 CPU cores, 16 GB memory, arm64)
+running macOS 26.4.1 and Python 3.12.6. Relevant pack-
+age versions were NumPy 2.4.1, Matplotlib 3.10.8, Ope-
+nAI 2.32.0, Anthropic 0.109.2, Groq 1.0.0, Google Gen AI
+1.65.0, and Google Generative AI 0.8.6. The reported re-
+sponses were collected July 27–28, 2026. The main audit
+contains 27,000 successful recorded completions and the
+path-length stress check contains 11,160, for 38,160 total;
+this count excludes any provider requests retried before a
+response was recorded.
+C
+Supplementary nonfinite-output
+diagnostics
+Table 6 treats parseability as a separate measurement re-
+quirement. All Llama 3.3, Qwen 3.6, GPT-5.5, Opus 4.8,
+and Gemini 3.5 Flash responses yielded finite parsed val-
+ues. GPT-OSS produced one empty offer-pair response. Two
+Gemini responses contained a trailing underscore but were
+unambiguously parsed as 30; all other finite responses con-
+sisted only of a signed number, optionally formatted as cur-
+rency.
+D
+Supplementary path-length stress check
+Figure 4 and Table 7 report the path-length stress check. The
+four path instances are two apartment square-footage paths
+and two flight travel-time paths, each under a single canonical
+utterance. For each model and k, the reported quantity is
+mean absolute P1 residual | bR1,k|, normalized by the fixed
+mean price of the endpoint offers sab = (p+q)/2, across the
+four path instances. Confidence intervals are nonparametric
+bootstrap intervals over path instances, not per-sample LLM-
+Figure 4: Path length and P1 disagreement. Each point
+is the mean absolute P1 residual across four prespecified
+smooth single-feature paths, expressed as a percentage of the
+endpoint offers’ mean price. For every model, mean error at
+k = 8 and k = 16 exceeds that at k = 2, although the curves
+are not all monotone. Bars are bootstrap 95% intervals over
+the four paths; this stress test does not establish a general
+scaling law.
+call intervals. The v2 experiment contains 1,860 calls per
+model; all 11,160 responses produced finite parsed values.
+E
+P2 results by domain
+Table 8 separates the pooled P2 results by domain. Domain
+counts are descriptive; the audit was not designed to estimate
+population differences between domains.
+F
+Statistical details
+F.1
+Audit-group self-consistency tests
+For each model, an audit group contains all queries for one
+domain and one utterance. With three domains and three
+selected utterances per domain, there are nine audit groups.
+The utility is conditional on the utterance and defined over
+that domain’s item set, so utility values are neither shared
+nor directly comparable across groups.
+
+
+--- Page 12 ---
+Model
+Calls
+Finite parse
+Number-only |Y | ≥$10,000
+Claude Opus 4.8
+4500 4500 (100.0%) 4500 (100.0%)
+0
+Gemini 3.5 Flash 4500 4500 (100.0%) 4498 (99.96%)
+0
+GPT-5.5
+4500 4500 (100.0%) 4500 (100.0%)
+0
+GPT-OSS 120B
+4500 4499 (99.98%) 4499 (99.98%)
+0
+Llama 3.3 70B
+4500 4500 (100.0%) 4500 (100.0%)
+0
+Qwen 3.6 27B
+4500 4500 (100.0%) 4500 (100.0%)
+0
+Table 6: Numerical-output parseability. Counts are over the same 4,500 calls per model. Finite parse records responses from
+which the parser extracted a finite dollar value. Number-only additionally requires the whole visible response to be a signed
+number, optionally formatted as currency. The final column checks for extreme parsed magnitudes; none reached $10,000.
+As defined in Section 3.2, enumerating the queries gives
+Y i
+c for completion i, Y c = n−1
+c
+P
+i Y i
+c , and mc(U) for the
+answer implied by utility assignment U.
+For audit group g, bUg and Tg are the group-specific ver-
+sions of the least-squares utility and RMSE defined in Sec-
+tion 3.5. The fit uses the observed query means Y (c), and the
+minimum ranges over every assignment of one utility value
+to each audited item. It is obtained by ordinary least squares:
+an item query selects one item value, while an offer-pair
+query takes the difference of two item values and applies a
+known price adjustment. This is not a linear utility model
+over item attributes, and Tg does not select particular P1 or
+P2 comparisons in advance.
+We give each query mean equal weight because Tg is
+intended to measure the RMSE for a uniformly selected query
+from the prespecified set that represents one model–domain–
+utterance use case. Equal weighting is not generally the most
+efficient estimator of U. If query variances were accurately
+known and efficient estimation under a correctly specified
+model were the objective, inverse-variance weighting could
+be used; it would define a different best-fitting summary by
+giving more influence to low-variance queries. Audit groups
+are fit separately so that each has its own conditional utility
+and dollar-scale summary.
+The generic notation also separates persistent disagree-
+ment from finite-sample variation. Let U ⋆
+g be the group-
+specific version of the population least-squares utility as-
+signment in Equation 4 and write
+Y i
+c = mc(U ⋆
+g ) + δc + εi
+c,
+E[εi
+c] = 0.
+For each fixed query c, we assume ε1
+c, . . . , εnc
+c
+are in-
+dependent and identically distributed, with finite variance
+Var(εi
+c) = σ2
+c. We allow σ2
+c to differ across queries and
+treat calls belonging to different queries as independent. Here
+δc = E[Y i
+c ]−mc(U ⋆
+g ) is the persistent discrepancy for query
+c; it is the enumerated form of δ(c) from Section 3.3. The
+null hypothesis holds exactly when every δc is zero.
+Now write
+Sg = QgT 2
+g =
+Qg
+X
+c=1
+{Y c −mc(bUg)}2.
+If the utility values were known rather than fitted, the
+sampling-noise contribution to E[Sg] would be the sum of
+the query-mean variances. In fact, the utilities are fitted from
+these same noisy means, so the fit absorbs some sampling
+variation.
+The corresponding linear regression is simple. Form a
+vector y by leaving each item-query mean unchanged and
+adding the known adjustment (q−p) to each offer-pair-query
+mean; this known shift does not change any fitted residual or
+Sg. Create a design matrix X with one column per audited
+item. An item query about item x has a row containing 1 in
+the column for x and 0 elsewhere. An offer-pair query from
+a = (x, p) to b = (y, q) has −1 in the column for x, +1 in
+the column for y, and 0 elsewhere. Consequently, fitting the
+unrestricted item utilities is exactly
+bu ∈arg min
+u ∥y −Xu∥2
+2.
+The matrix
+H = XX+,
+where X+ is the Moore–Penrose pseudoinverse, maps the
+adjusted query means to their fitted values: Xbu = Hy.
+This projection matrix is commonly called the ordinary-least-
+squares hat matrix. Its diagonal entry hc = Hcc measures
+query c’s leverage: holding the other query means fixed,
+increasing query c’s observed mean by one unit changes its
+own fitted mean by hc units. The leverages satisfy P
+c hc =
+rg, where rg is the rank of the utility fit.
+This notation makes explicit how much sampling vari-
+ation can be absorbed by estimating the utilities from the
+same query means used to compute Sg. The following lemma
+records its finite-sample baseline.
+Lemma 2 (Expected squared lack of fit) If query means
+are independent and Var(Y i
+c ) = σ2
+c, then
+E[Sg] =
+Qg
+X
+c=1
+(1 −hc)σ2
+c
+nc
++
+Qg
+X
+c=1
+δ2
+c.
+(10)
+Proof.
+Let Σ = diag(σ2
+1/n1, . . . , σ2
+Qg/nQg). Because U ⋆
+g
+is the least-squares population fit, δ is orthogonal to the
+columns of X, so Hδ = 0. Hence
+Sg = ∥δ + (I −H)ε∥2
+2.
+Taking expectations eliminates the cross term and gives
+E[Sg] = ∥δ∥2
+2 + tr{(I −H)Σ(I −H)}.
+Since I −H is symmetric and idempotent, the trace term
+equals tr{(I −H)Σ} = P
+c(1 −hc)σ2
+c/nc, proving Equa-
+tion 10. Under self-consistency, the expected squared statistic
+therefore contains only the sampling variation left after fit-
+ting U. Under the alternative, the squared discrepancies that
+
+
+--- Page 13 ---
+Model
+k
+n
+Mean | b
+R1,k| [95% CI]
+Claude Opus 4.8
+1
+4
+0.0 [0.0, 0.0]
+Claude Opus 4.8
+2
+4
+5.7 [1.7, 10.1]
+Claude Opus 4.8
+4
+4
+10.3 [3.0, 18.4]
+Claude Opus 4.8
+8
+4
+16.5 [2.1, 35.2]
+Claude Opus 4.8
+16
+4
+17.1 [3.2, 32.8]
+Gemini 3.5 Flash
+1
+4
+0.0 [0.0, 0.0]
+Gemini 3.5 Flash
+2
+4
+4.6 [2.3, 7.4]
+Gemini 3.5 Flash
+4
+4
+9.2 [4.7, 14.4]
+Gemini 3.5 Flash
+8
+4
+12.5 [3.9, 23.2]
+Gemini 3.5 Flash
+16
+4
+12.8 [3.1, 24.0]
+GPT-5.5
+1
+4
+0.0 [0.0, 0.0]
+GPT-5.5
+2
+4
+5.8 [3.4, 8.2]
+GPT-5.5
+4
+4
+8.6 [4.9, 12.1]
+GPT-5.5
+8
+4
+10.9 [3.9, 18.3]
+GPT-5.5
+16
+4
+11.6 [4.8, 19.6]
+GPT-OSS 120B
+1
+4
+0.0 [0.0, 0.0]
+GPT-OSS 120B
+2
+4
+8.3 [7.5, 9.1]
+GPT-OSS 120B
+4
+4
+18.3 [16.0, 20.7]
+GPT-OSS 120B
+8
+4
+25.2 [18.5, 31.6]
+GPT-OSS 120B
+16
+4
+36.2 [26.7, 45.7]
+Llama 3.3 70B
+1
+4
+0.0 [0.0, 0.0]
+Llama 3.3 70B
+2
+4
+0.5 [0.0, 1.4]
+Llama 3.3 70B
+4
+4
+5.4 [0.0, 10.7]
+Llama 3.3 70B
+8
+4
+12.1 [0.0, 24.1]
+Llama 3.3 70B
+16
+4
+10.5 [0.1, 20.9]
+Qwen 3.6 27B
+1
+4
+0.0 [0.0, 0.0]
+Qwen 3.6 27B
+2
+4
+3.6 [1.9, 5.2]
+Qwen 3.6 27B
+4
+4
+8.8 [3.1, 14.4]
+Qwen 3.6 27B
+8
+4
+17.1 [7.1, 26.0]
+Qwen 3.6 27B
+16
+4
+16.2 [6.3, 26.4]
+Table 7: Path-length stress-check summary. Mean | bR1,k| is reported as a percentage of the endpoint offers’ mean price, with
+bootstrap 95% intervals over four path instances. The diagnostic is separate from the main audit and is meant to quantify practical
+dollar-scale error as local decompositions get finer. The k = 1 rows are the direct-comparison baseline and therefore have zero
+decomposition residual by construction.
+no utility assignment can absorb add directly to that expecta-
+tion. Increasing the number of completions reduces the first
+term but not the second. We include this calculation to inter-
+pret the statistic’s finite-sample baseline; the bootstrap test
+does not estimate a common variance or use this formula as
+its reference distribution. Refitting the utility in every boot-
+strap draw automatically reproduces the sampling variation
+absorbed by the fit.
+For intuition, if all queries have n completions with com-
+mon response variance σ2, and the utility fit has rank rg,
+then
+E[T 2
+g ] = Qg −rg
+Qg
+σ2
+n + 1
+Qg
+Qg
+X
+c=1
+δ2
+c.
+The expectation is stated for T 2
+g because the expectation of
+the square root Tg has no equally simple form. These iden-
+tities require finite variances and independent query means,
+but not equal variances or Gaussian responses. We do not
+pool within-query variances into one common noise estimate
+because the response variance may differ across queries. In-
+stead, the querywise bootstrap below preserves each query’s
+empirical response distribution under the fitted null.
+We estimate the reference distribution of Tg under the fit-
+ted null with a within-query nonparametric bootstrap (Efron
+and Tibshirani 1993). We use this procedure because numer-
+ical LLM responses may be non-Gaussian and because their
+variances may differ across queries.
+Observed-data stage.
+Using all original, successfully
+parsed completions, compute each query mean Y c, fit bUg
+with Equation 6, and compute the observed RMSE Tg with
+Equation 7. For each query, also form a fixed resampling
+pool by subtracting Y c from each of its original completions.
+These centered values retain the query’s observed response
+variability but have mean zero. Thus, the observed RMSE
+measures disagreement among the original query means af-
+ter fitting bUg; it is not error relative to a person’s true utility
+or prediction error for individual completions.
+Bootstrap stage.
+For each bootstrap draw, independently
+resample with replacement from each query’s fixed cen-
+tered pool, using that query’s original number of successfully
+parsed completions. Add the resampled values to mc(bUg),
+the answer implied by the utility fitted to the original data.
+This produces a synthetic dataset whose query means satisfy
+the fitted self-consistency null apart from resampled finite-
+sample variation. Using only that synthetic dataset, refit the
+utility and recompute the RMSE, denoted T ∗(b)
+g
+. Refitting
+
+
+--- Page 14 ---
+Model
+Domain
+n
+Supported reversal
+Residual CI excludes 0
+25%-price lower bound
+Claude Opus 4.8
+flights
+18
+5 (27.8%)
+16 (88.9%)
+2 (11.1%)
+Claude Opus 4.8
+apartments
+18
+1 (5.6%)
+14 (77.8%)
+0 (0.0%)
+Claude Opus 4.8
+hotels
+12
+0 (0.0%)
+11 (91.7%)
+7 (58.3%)
+Gemini 3.5 Flash
+flights
+18
+2 (11.1%)
+13 (72.2%)
+0 (0.0%)
+Gemini 3.5 Flash
+apartments
+18
+2 (11.1%)
+14 (77.8%)
+0 (0.0%)
+Gemini 3.5 Flash
+hotels
+12
+0 (0.0%)
+10 (83.3%)
+2 (16.7%)
+GPT-5.5
+flights
+18
+1 (5.6%)
+18 (100.0%)
+2 (11.1%)
+GPT-5.5
+apartments
+18
+0 (0.0%)
+14 (77.8%)
+1 (5.6%)
+GPT-5.5
+hotels
+12
+0 (0.0%)
+8 (66.7%)
+4 (33.3%)
+GPT-OSS 120B
+flights
+18
+0 (0.0%)
+15 (83.3%)
+0 (0.0%)
+GPT-OSS 120B
+apartments
+18
+2 (11.1%)
+6 (33.3%)
+2 (11.1%)
+GPT-OSS 120B
+hotels
+12
+0 (0.0%)
+10 (83.3%)
+7 (58.3%)
+Llama 3.3 70B
+flights
+18
+4 (22.2%)
+15 (83.3%)
+2 (11.1%)
+Llama 3.3 70B
+apartments
+18
+1 (5.6%)
+16 (88.9%)
+0 (0.0%)
+Llama 3.3 70B
+hotels
+12
+0 (0.0%)
+11 (91.7%)
+8 (66.7%)
+Qwen 3.6 27B
+flights
+18
+0 (0.0%)
+5 (27.8%)
+0 (0.0%)
+Qwen 3.6 27B
+apartments
+18
+0 (0.0%)
+4 (22.2%)
+0 (0.0%)
+Qwen 3.6 27B
+hotels
+12
+1 (8.3%)
+11 (91.7%)
+9 (75.0%)
+Table 8: P2 results by domain. A supported reversal means that the offer-pair and item-query estimates have 95% intervals
+excluding zero in opposite directions. The final column counts comparisons whose 95% lower bound on absolute P2 disagreement
+is at least 25% of the two offers’ mean listed price. Across models, supported reversals occur in all three domains, and every
+model–domain combination contains supported cardinal disagreement.
+is necessary because the observed statistic also estimates
+the utility from the data and therefore absorbs some sam-
+pling variation. The original bUg and centered pools define
+the null-generating distribution; the synthetic query means,
+fitted utility, and RMSE are new in every draw.
+With B = 2000 bootstrap draws, the audit-group p-value
+is
+1 + PB
+b=1 I{T ∗(b)
+g
+≥Tg}
+B + 1
+,
+where T ∗(b)
+g
+is the refitted RMSE in bootstrap draw b and
+I{·} is the indicator function. Thus, the p-value is the fraction
+of RMSE values generated under the fitted self-consistency
+null that are at least as large as the observed RMSE, with the
+standard finite-bootstrap correction.
+Our model-level claim ranges over nine audit groups: all
+nine are self-consistent. Because rejecting any one group
+contradicts that claim, examining nine unadjusted 5% tests
+would increase the chance of a false positive. We therefore
+use a Bonferroni correction at α = 0.05, rejecting a group
+only when p ≤0.05/9 = 0.0056 (Dunn 1961). The union
+bound guarantees that the probability of falsely rejecting
+any self-consistent group is at most 5%, without requiring
+independence. At least one rejection rejects the joint claim
+that all nine groups are self-consistent; the count describes
+the breadth of the evidence. An audit with one prespecified
+group needs no correction. Table 9 reports the unadjusted
+group p-values for transparency.
+F.2
+Local residual uncertainty
+This appendix documents the uncertainty calculations behind
+the local rejections in Table 3 and the lower-bound curves in
+Figure 3.
+For query c, let nc be the realized number of finite com-
+pletions and let sc be their sample standard deviation. The
+query average is Y (c), with standard error sc/√nc. Queries
+with no finite response are excluded from residual analyses
+and counted in Table 6.
+Each P1 or P2 residual is a signed sum of three query aver-
+ages. Its constituent queries use disjoint LLM calls. Indexing
+those three queries by j = 1, 2, 3, we estimate
+c
+SE( bR) =
+
+
+
+3
+X
+j=1
+s2
+j
+nj
+
+
+
+1/2
+.
+The signs do not affect this variance calculation. Listed-price
+adjustments are fixed and therefore add no sampling variance.
+The
+threshold
+curves
+divide
+| bR|
+by
+the
+fixed
+mean-price
+scale
+sab
+=
+(p + q)/2.
+Consequently,
+SE( bR/sab) = SE( bR)/sab. Reported 95% intervals are
+normal-approximation (Wald) intervals bR ± 1.96 c
+SE( bR). A
+local rejection has an interval excluding zero. Dashed curves
+plot the comparison-specific nonnegative magnitude lower
+bounds
+max{| bR| −1.96 c
+SE( bR), 0}
+sab
+,
+and are not simultaneous confidence bands.
+Independence
+assumptions.
+Repeated
+completions
+within each fixed model–query pair are treated as inde-
+pendent and identically distributed; variances may differ
+across queries. We use temperature 1 and distinct seeds
+where available; the Opus 4.8 interface exposes neither.
+Different queries use separate prompts and calls. Two paths
+sharing the same source-target pair (a, b) share the direct
+Y ((a, b)) estimate, inducing positive correlation between
+their residuals; we do not model this dependence in the
+empirical threshold curves (they remain valid as empirical
+
+
+--- Page 15 ---
+Model
+Domain
+Utterance
+RMSE ($)
+RMSE (%)
+Boot. p
+Claude Opus 4.8
+apartments
+1
+28.2
+1.2
+< 0.001
+Claude Opus 4.8
+apartments
+2
+52.3
+2.2
+< 0.001
+Claude Opus 4.8
+apartments
+3
+34.5
+1.5
+< 0.001
+Claude Opus 4.8
+flights
+1
+10.7
+2.9
+< 0.001
+Claude Opus 4.8
+flights
+2
+26.5
+7.2
+< 0.001
+Claude Opus 4.8
+flights
+3
+13.5
+3.7
+< 0.001
+Claude Opus 4.8
+hotels
+1
+119.4
+21.7
+< 0.001
+Claude Opus 4.8
+hotels
+2
+90.7
+16.5
+< 0.001
+Claude Opus 4.8
+hotels
+3
+117.6
+21.4
+< 0.001
+Gemini 3.5 Flash
+apartments
+1
+48.0
+2.1
+< 0.001
+Gemini 3.5 Flash
+apartments
+2
+50.2
+2.2
+< 0.001
+Gemini 3.5 Flash
+apartments
+3
+44.2
+1.9
+< 0.001
+Gemini 3.5 Flash
+flights
+1
+4.4
+1.2
+< 0.001
+Gemini 3.5 Flash
+flights
+2
+10.0
+2.7
+< 0.001
+Gemini 3.5 Flash
+flights
+3
+8.6
+2.3
+< 0.001
+Gemini 3.5 Flash
+hotels
+1
+127.1
+23.1
+< 0.001
+Gemini 3.5 Flash
+hotels
+2
+74.6
+13.6
+< 0.001
+Gemini 3.5 Flash
+hotels
+3
+110.4
+20.1
+< 0.001
+GPT-5.5
+apartments
+1
+35.0
+1.5
+< 0.001
+GPT-5.5
+apartments
+2
+78.4
+3.4
+< 0.001
+GPT-5.5
+apartments
+3
+41.7
+1.8
+< 0.001
+GPT-5.5
+flights
+1
+8.2
+2.2
+< 0.001
+GPT-5.5
+flights
+2
+22.7
+6.2
+< 0.001
+GPT-5.5
+flights
+3
+13.0
+3.5
+< 0.001
+GPT-5.5
+hotels
+1
+129.9
+23.6
+< 0.001
+GPT-5.5
+hotels
+2
+83.3
+15.1
+< 0.001
+GPT-5.5
+hotels
+3
+103.9
+18.9
+< 0.001
+Table 9: Audit-group self-consistency tests. Each row fits one free utility value per audited item for a fixed model, domain, and
+utterance; numbers 1–3 refer to the domain-specific utterances in Appendix B.2. RMSE is the smallest root mean squared error.
+The percentage uses the mean of endpoint listed prices across that group’s offer-pair queries, weighted as they appear in the
+design; bootstrap p-values are unadjusted. The main text reports the number of audit groups rejected after applying Bonferroni
+correction.
+distributions of comparison-level residuals, but the points
+are not independent and identically distributed).
+
+
+--- Page 16 ---
+Model
+Domain
+Utterance
+RMSE ($)
+RMSE (%)
+Boot. p
+GPT-OSS 120B
+apartments
+1
+40.3
+1.7
+< 0.001
+GPT-OSS 120B
+apartments
+2
+111.5
+4.8
+< 0.001
+GPT-OSS 120B
+apartments
+3
+69.7
+3.0
+< 0.001
+GPT-OSS 120B
+flights
+1
+9.5
+2.6
+< 0.001
+GPT-OSS 120B
+flights
+2
+12.1
+3.3
+< 0.001
+GPT-OSS 120B
+flights
+3
+11.1
+3.0
+< 0.001
+GPT-OSS 120B
+hotels
+1
+128.6
+23.4
+0.0020
+GPT-OSS 120B
+hotels
+2
+104.3
+19.0
+< 0.001
+GPT-OSS 120B
+hotels
+3
+149.9
+27.3
+< 0.001
+Llama 3.3 70B
+apartments
+1
+139.8
+6.0
+< 0.001
+Llama 3.3 70B
+apartments
+2
+116.6
+5.0
+< 0.001
+Llama 3.3 70B
+apartments
+3
+170.6
+7.3
+< 0.001
+Llama 3.3 70B
+flights
+1
+18.3
+5.0
+< 0.001
+Llama 3.3 70B
+flights
+2
+17.1
+4.7
+< 0.001
+Llama 3.3 70B
+flights
+3
+18.8
+5.1
+< 0.001
+Llama 3.3 70B
+hotels
+1
+200.1
+36.4
+< 0.001
+Llama 3.3 70B
+hotels
+2
+197.3
+35.9
+< 0.001
+Llama 3.3 70B
+hotels
+3
+196.6
+35.8
+< 0.001
+Qwen 3.6 27B
+apartments
+1
+67.3
+2.9
+0.379
+Qwen 3.6 27B
+apartments
+2
+75.4
+3.2
+0.025
+Qwen 3.6 27B
+apartments
+3
+53.1
+2.3
+0.171
+Qwen 3.6 27B
+flights
+1
+21.1
+5.8
+0.010
+Qwen 3.6 27B
+flights
+2
+15.1
+4.1
+0.058
+Qwen 3.6 27B
+flights
+3
+19.1
+5.2
+< 0.001
+Qwen 3.6 27B
+hotels
+1
+276.5
+50.3
+0.0040
+Qwen 3.6 27B
+hotels
+2
+168.4
+30.6
+< 0.001
+Qwen 3.6 27B
+hotels
+3
+296.5
+53.9
+< 0.001
+Table 10: Audit-group self-consistency tests (continued). Columns and reporting conventions are as in Table 9.
