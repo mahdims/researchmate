@@ -1,0 +1,1902 @@
+--- Page 1 ---
+SeisEvo: Evolution of Seismic Data Reconstruction Algorithms
+by Agents
+Yingjie Xu1,2, Siwei Yu∗1, and Jianwei Ma1,3
+1School of Mathematics and Center of Geophysics, Harbin Institute of Technology, Harbin,
+Heilongjiang, China
+2Department of Mathematics, National University of Singapore, Singapore
+3School of Earth and Space Sciences, Peking University, Beijing, China
+Abstract
+Classical seismic data reconstruction relies on manually designed structural priors and iterative
+operators, whose coupled design space is far larger than manual trial and error can explore system-
+atically. Deep-learning methods encode the reconstruction rules in learned weights rather than in
+an explicit operator that can be inspected and modified. We propose SeisEvo (Seismic Algorithm
+Evolution), which does not optimize a single reconstruction result but searches for the algorithm that
+produces it. Starting from a classical reconstruction algorithm, an LLM-driven multi-agent search
+modifies only the components that the user has opened for editing, without prescribing the mecha-
+nism to be discovered. Candidates that violate the physical constraints of the task are rejected outright,
+and the remaining ones are scored by execution. The output is neither an agent system nor a neural
+network, but a standalone white-box algorithm that requires no agent or neural network at inference
+time. For interpolation without added noise, the search discovered a residual-gated, phase-aligned
+dip-consistency projection; Evo-POCS improves the SNR over classic POCS by 3.49 dB on average
+across missing ratios from 30% to 70%. For simultaneous interpolation and denoising, it discovered
+a reliability-grouped singular-value shrinkage; Evo-MSSA improves the average reconstruction SNR
+by more than 7 dB over classic MSSA and by more than 3 dB over a stronger rank-reduction baseline.
+Both operators retain their gains on data not used during the search. To the best of our knowledge, this
+is the first study to formulate the design of a seismic reconstruction operator as a constrained, LLM-
+driven program evolution task. Agentic algorithm evolution can thus complement deep learning in
+discovering explicit, inspectable, and deployable seismic processing algorithms.
+Keywords: Seismic data reconstruction; Algorithm evolution; Large language model agents; Inter-
+pretable operators
+1
+Introduction
+Seismic data reconstruction is an important processing step for improving the spatial sampling quality
+of seismic records and for restoring the continuity of subsurface reflection events. Because of surface
+obstacles, economic cost, and practical acquisition conditions, field seismic data commonly suffer from
+missing traces and irregular spatial sampling, which degrade the reliability of subsequent imaging, inver-
+sion, and interpretation [Herrmann and Hennenfent, 2008, Trad, 2009]. Since the missing samples are
+not observed, seismic data reconstruction is an underdetermined inverse problem, and prior information
+about seismic structure must be introduced to constrain the solution, such as transform-domain sparsity
+[Abma and Kabir, 2006, Herrmann and Hennenfent, 2008], local coherence [Spitz, 1991, Naghizadeh
+and Sacchi, 2007], and structured low-rank behavior [Oropeza and Sacchi, 2011]. Although data-driven
+∗Corresponding author: siweiyu@hit.edu.cn
+1
+arXiv:2608.18272v1  [physics.geo-ph]  18 Aug 2026
+
+
+--- Page 2 ---
+methods have advanced rapidly in recent years, many seismic reconstruction methods, as in many other
+seismic processing steps, still rely on explicitly designed mathematical operators and structural priors:
+how a prior is represented, through which computational operator it is imposed, and how the estimate is
+kept consistent with the observations are usually decided manually from domain experience. Reconstruc-
+tion performance therefore depends largely on how effectively these operators encode seismic structure.
+Classical reconstruction methods encode these structural priors explicitly as interpretable algorith-
+mic procedures. Based on transform-domain sparsity, the projection onto convex sets (POCS) method
+[Abma and Kabir, 2006] recovers missing traces by alternating transform-domain thresholding with data-
+consistency enforcement. Based on local coherence, prediction-filter and local-slope-based methods
+[Spitz, 1991, Naghizadeh and Sacchi, 2007, Xu et al., 2024] instead extrapolate missing traces directly
+from the predictable relation between neighboring traces. Based on structured low-rank behavior, mul-
+tichannel singular spectrum analysis (MSSA) [Oropeza and Sacchi, 2011] applies a truncated low-rank
+projection to block-Hankel embeddings, restoring the low-rank structure formed by coherent reflection
+events and suppressing the rank increase caused by missing traces and noise. These methods rest on
+explicit structural assumptions, follow transparent computational steps, and are easy to deploy. POCS
+with exponential hard thresholding [Gao et al., 2010] and block-Hankel MSSA with truncated singular
+value decomposition [Oropeza and Sacchi, 2011] are widely used as reference implementations of the
+two families, and are adopted as the seed algorithms in this work.
+Building on these classical templates, many manually designed improvements have been proposed.
+For POCS, they mainly concern the choice of the sparsifying transform [Wang et al., 2014, Zhang et al.,
+2015], the form of the thresholding or shrinkage function, and the threshold decay schedule used during
+the iterations [Gao et al., 2010, 2013]. For MSSA, they mainly concern the embedding and local window
+design, the rank selection, and the singular-value processing rule [Zhang et al., 2016, Wu and Bai, 2018],
+leading further to enhanced low-rank methods such as damped rank reduction [Huang et al., 2016, Chen
+et al., 2023] and optimally damped rank reduction (ODRR) [Chen et al., 2020]. These improvements are
+introduced through expert-guided, mechanism-specific design and are usually validated under specific
+acquisition conditions or noise levels. However, most studies address only one or a few dimensions of
+the design space, and their effectiveness depends on the particular data distribution, sampling density, and
+signal-to-noise ratio, so they may require retuning or redesign under different conditions. Moreover, these
+design factors interact: the threshold form and the decay schedule, or the rank selection and the singular-
+value shrinkage, jointly determine performance, so adjusting each factor in isolation is not sufficient for
+exploring their combined effects. The design space left open by these classical templates is therefore far
+larger than manual exploration can systematically cover.
+In recent years, deep learning has provided an alternative route for seismic data reconstruction. By
+learning data-driven reconstruction mappings or priors, such methods have been applied to seismic data
+interpolation and noise suppression [Yu et al., 2019, Wang et al., 2019, Kaur et al., 2021, Cheng et al.,
+2025a]. To reduce the reliance on paired complete data, unsupervised and self-supervised methods fur-
+ther construct training signals from unlabeled observations or from the data to be reconstructed them-
+selves [Liu et al., 2021, Meng et al., 2022, Abedi and Pardo, 2022, Chen and Liu, 2024, Xu et al., 2026].
+Seismic foundation models have also emerged, which learn general seismic representations through large-
+scale self-supervised pretraining and transfer them to different downstream tasks such as interpolation,
+denoising, and inversion [Sheng et al., 2025, Cheng et al., 2025b].
+These methods differ in nature from classical reconstruction algorithms. The performance of su-
+pervised methods depends on the data distribution covered by the training set, and their generalization
+needs to be re-examined when the acquisition conditions, noise levels, or geological structures differ ap-
+preciably from the training data. Unsupervised and self-supervised methods reduce the reliance on fully
+labeled data, but their performance is still affected by the network architecture, the regularization, and
+the training strategy. For most end-to-end methods, the main reconstruction rules are distributed across
+the network weights and the training procedure, and are therefore difficult to write down, inspect, and
+modify under given constraints in the way classical operators are. Deep learning has thus not removed
+manual design; it has moved part of the design effort from the reconstruction operator to the network
+2
+
+
+--- Page 3 ---
+architecture, the loss function, and the training strategy. Classical and deep-learning methods still share
+a common feature: both optimize within a computational structure that is defined in advance by humans.
+In most existing studies on seismic reconstruction, the task-relevant algorithmic structure is still designed
+manually, and treating the algorithmic structure itself as the object of search remains rare.
+In recent years, large language model (LLM)-driven program search and evolution have opened a
+new possibility for algorithm design. These methods represent a candidate algorithm as executable code,
+let an LLM propose modifications, and then run and score each candidate with an automated evaluator,
+using the resulting feedback to guide the subsequent search. FunSearch showed that this paradigm can
+discover improved mathematical constructions and heuristics in combinatorial mathematics and combi-
+natorial optimization [Romera-Paredes et al., 2024]. EoH and ReEvo subsequently improved heuristic
+generation, the use of feedback, and search efficiency, although the object of evolution there is typically
+a heuristic rule inside a fixed algorithmic pipeline [Liu et al., 2024, Ye et al., 2024]. In an applied setting,
+Eureka evolved reward code and obtained reward functions that outperform human-engineered ones on
+most robotic control tasks [Ma et al., 2024]. AlphaEvolve further extended the paradigm to entire code
+bases and more general algorithm optimization tasks, and applied it to problems such as matrix multi-
+plication, data center scheduling, and hardware design [Novikov et al., 2025]. Unlike end-to-end neural
+approaches, such a search returns a program that can be executed and inspected on its own rather than a
+set of learned network weights; interpretability, however, is not obtained automatically, but depends on
+how the program is represented and on the constraints imposed during the search.
+These advances indicate that the algorithm itself can become the object of search. Seismic data re-
+construction offers a well-suited setting for this paradigm. First, reconstruction quality can be measured
+directly by metrics such as SNR and SSIM on the prescribed search-time blocks for which complete
+references are available, so that each candidate can be executed and assigned an explicit score. Second,
+classical reconstruction algorithms have a clear and modular structure, so that mechanisms such as the
+thresholding rule, the decay schedule, and the low-rank projection can be designated individually as ed-
+itable components. Third, seismic reconstruction carries admissibility conditions that are explicit and
+decidable: how the observations are used, whether the sampling mask is left unchanged, and whether the
+output is real-valued are all determined once the task is given, and can therefore be checked programmat-
+ically.
+Applying this paradigm to seismic reconstruction, however, is not a matter of simply running a generic
+search. When domain legality conditions are absent, an increase in score does not necessarily correspond
+to an improvement of the algorithm: a candidate may reach a physically meaningless score by corrupting
+the observations or altering the sampling mask; it may raise a metric through unexplained free constants
+or dataset-specific shortcuts rather than by finding a new mechanism. For seismic reconstruction, le-
+gality depends not only on mathematical and numerical correctness but also on physical measurement
+conditions, so how these conditions are formalized and enforced as part of the search is itself part of
+the problem. To date, the use of LLM-driven program evolution to systematically discover standalone,
+white-box seismic reconstruction operators remains largely unexplored, and validation across different
+mathematical mechanisms and different reconstruction task settings is especially lacking.
+To address these issues, we propose SeisEvo (Seismic Algorithm Evolution), a domain-grounded
+framework for the autonomous discovery of seismic reconstruction algorithms. SeisEvo takes the recon-
+struction algorithm itself, rather than a particular reconstructed result, as the object of search: instead of
+optimizing the output of a single reconstruction, it searches for an algorithm that produces high-quality re-
+constructions. A run is specified by a domain expert through a transparent classical seed algorithm 𝐴0, an
+editable operator surface S, a reconstruction-quality objective 𝑂, a constraint set C, and a search budget
+𝑇. Here S states which mechanisms may be modified, such as the thresholding rule, the decay sched-
+ule, and the low-rank projection, whereas the task-specific data-fidelity requirements remain constrained
+throughout the search. The expert thus does not specify the final form of the operator in advance, but
+defines the search boundary, the physical contracts, and the scoring rules, leaving the mechanism itself
+to be found by the search.
+SeisEvo uses the Evolutionary Ensemble of Agents (EvE) [Yu and Yang, 2026b], a decentralized
+3
+
+
+--- Page 4 ---
+evolutionary framework that organizes multiple coding agents to iteratively propose and refine candidate
+programs. EvE and EvE-based workflows have been used for scientific problems including fluid-control
+design, operator learning, and PDE symbolic discovery [Sun et al., 2026, Yang et al., 2026, Yu and
+Yang, 2026a]. Here it serves as the generic multi-agent search backend. Our contribution lies in the
+domain-specific framework for seismic algorithm evolution, including the algorithm representation, the
+editable operator surface, the legality constraints, the execution-based scoring, and the external validation
+protocol. When the search ends, the highest-scoring legal candidate is returned as 𝐴★, a standalone white-
+box reconstruction operator. Its computational steps and introduced parameters can be written down,
+inspected, and reproduced, and it requires no agent, prompt, or neural network at inference time. We
+instantiate SeisEvo on two classical algorithm families with different mathematical foundations: POCS
+based on Fourier-domain sparsity and MSSA based on block-Hankel low-rank structure. The resulting
+operators are referred to as Evo-POCS and Evo-MSSA, respectively.
+This paper makes three main contributions. First, we propose SeisEvo, an algorithm evolution frame-
+work for seismic data reconstruction that formulates the design of a reconstruction algorithm as a domain-
+constrained autonomous discovery task. Starting from a classical seed algorithm, SeisEvo searches for
+new operator mechanisms that improve reconstruction quality, while task-specific data-fidelity require-
+ments remain enforced throughout the search. Second, we establish an executable search and validation
+protocol that uses hard legality gates and requires mechanism-level changes with traceable parameter ori-
+gins. External data are accessed only after the search, once the selected operator has been fixed. Third,
+we validate SeisEvo on two classical algorithm families with different mathematical foundations. For
+interpolation of a field dataset without added synthetic noise, Evo-POCS improves the SNR over classic
+POCS by 3.49 dB on average across missing ratios from 30% to 70%. For simultaneous interpolation
+and denoising, Evo-MSSA improves the mean reconstruction SNR by more than 7 dB over classic MSSA
+and by more than 3 dB over the ODRR baseline over the tested noise range. Both evolved operators retain
+their performance gains on synthetic and field data that were not used during the search. To the best of
+our knowledge, this is the first reported application of LLM-driven constrained program evolution to the
+discovery of standalone seismic reconstruction operators.
+The remainder of this paper is organized as follows. Section 2 introduces the seismic reconstruction
+problem and the SeisEvo framework, including the task specification and constraint design. Section 3
+presents the POCS and MSSA case studies and their experimental results. Section 4 discusses what
+the search contributed, the scope and cost of the protocol, and the open problems it leaves. Section 5
+concludes the paper.
+2
+Method
+2.1
+Seismic data reconstruction problem
+Let 𝑋denote a complete seismic volume of size 𝑛𝑡×𝑛𝑥×𝑛𝑦, and let 𝑀be a binary sampling mask of the
+same size, where 𝑀(𝑡, 𝑥, 𝑦) = 1 indicates an acquired sample and 𝑀(𝑡, 𝑥, 𝑦) = 0 a missing one. Since
+traces are missing as whole columns, 𝑀is constant along the time axis. Let 𝑁denote additive noise on
+the acquired samples. The observed incomplete volume is
+𝑌= 𝑀⊙(𝑋+ 𝑁),
+(1)
+where ⊙denotes element-wise multiplication, and 𝑁= 0 gives the noise-free interpolation setting. The
+task is to estimate a complete volume b𝑋from (𝑌, 𝑀). Because the missing traces are unobserved, the
+problem is underdetermined, and it is commonly formulated as a regularized inverse problem,
+b𝑋= arg min
+𝑍
+1
+2
+𝑌−𝑀⊙𝑍
+2
+𝐹+ 𝜆𝑅(𝑍),
+(2)
+where the first term enforces fidelity to the acquired traces and 𝑅(𝑍) is a regularization term encoding
+prior knowledge about the structure of seismic data, balanced by 𝜆. Two representative and widely used
+4
+
+
+--- Page 5 ---
+priors are transform-domain sparsity and structured low rank: the former assumes that seismic data admit
+compact representations in a suitable transform domain, while the latter assumes that coherent seismic
+events give rise to approximately low-rank structures after suitable embedding, which missing traces and
+noise tend to break.
+Problem (2) motivates a broad class of iterative schemes that alternate between enforcing the assumed
+prior and honoring the observations,
+𝑍( 𝑗+1) = Pdata
+
+T ( 𝑗)
+prior(𝑍( 𝑗))
+
+,
+(3)
+where T ( 𝑗)
+prior is an iteration-dependent operator enforcing the seismic prior, and Pdata is the task-specified
+data-fidelity step. In noise-free interpolation it is the hard projection
+Pdata(𝑈) = 𝑌+ (1 −𝑀) ⊙𝑈,
+(4)
+which restores the acquired traces exactly; when the acquired samples are noisy, the hard projection is
+replaced by a task-specific relaxed fidelity step that balances the observations and the current prediction.
+Its concrete form is given in the corresponding case study. POCS and MSSA are two representative
+classical solvers associated with these priors and serve as the seed algorithms in this work: POCS realizes
+T ( 𝑗)
+prior through transform-domain thresholding, encoding the sparsity prior, while MSSA realizes it through
+a truncated low-rank projection of block-Hankel embeddings, encoding the low-rank prior.
+Taking these two algorithms as templates, numerous studies have developed further improvements.
+Improvements to POCS mostly focus on the sparsifying transform, the thresholding or shrinkage function,
+and the decay schedule [Gao et al., 2010, Wang et al., 2014, Zhang et al., 2015, Dong et al., 2025], with
+hard thresholding and exponential decay as the standard baseline. Improvements to MSSA mostly focus
+on the rank-reduction operator and rank selection [Huang et al., 2016, Zhang et al., 2016, Bayati and Trad,
+2023], with truncated SVD and a fixed rank as the standard baseline. Such designs are interpretable and
+often effective, but each modification explores only a small portion of the possible design choices: tuning
+relies heavily on expert experience, and a setting that works under one sampling or noise condition rarely
+transfers unchanged to another. The design space left open by these templates is far larger than what
+manual exploration can cover.
+The recent emergence of LLM-based coding agents makes it feasible to explore this design space
+automatically. Motivated by this, we propose SeisEvo, which turns the open design space into a search
+space while keeping the mask-based structure of the task-specific data-fidelity step and the physical-
+legality constraints fixed. We instantiate it on the two seed algorithms introduced above: POCS with the
+sparsity prior and MSSA with the low-rank prior. These two solvers are mechanistically distinct, which
+lets us verify that the framework operates beyond a single algorithm family. The framework is detailed
+next.
+2.2
+The SeisEvo framework
+We introduce SeisEvo (Seismic Algorithm Evolution), a framework for the autonomous discovery of
+interpretable seismic reconstruction algorithms. SeisEvo treats the reconstruction algorithm itself, rather
+than a particular reconstructed result, as the object of search. Given a transparent classical seed algorithm
+𝐴0 of the form (3), a SeisEvo run with round budget 𝑇is written as
+𝐴★= SeisEvo (𝐴0, S, 𝑂, C; 𝑇) ,
+(5)
+where S denotes the editable parts of the algorithm, such as the thresholding function, the decay schedule,
+or the low-rank projection, while the mask-based structure of the task-specific data-fidelity step remains
+fixed. 𝑂is the objective, a measured reconstruction-quality score, and C is the constraint set, covering
+physical-legality constraints, parameter-provenance rules, anti-leakage requirements, and the search-time
+scoring protocol. The budget 𝑇is the number of search rounds. The returned 𝐴★is the highest-scoring
+legal candidate, namely the evolved white-box algorithm.
+5
+
+
+--- Page 6 ---
+The defining principle is that the task specification states what counts as a legal and worthwhile
+algorithm, not what the algorithm should be. The objective 𝑂and constraint set C determine only how
+candidates are admitted and scored. They contain no candidate code, no target operator, and no fixed
+implementation template, so the mechanism itself is left for the search to discover.
+The output is a standalone white-box algorithm whose computational steps and introduced parameters
+can be inspected and executed without agents, prompts, or neural networks at inference time.
+A SeisEvo run consists of four stages: task instantiation, candidate generation, gating and scoring,
+and evidence binding and context update (Fig. 1). Stage 1 is performed once by a human. Stages 2 to
+4 form a closed loop that repeats for 𝑇rounds. The four stages answer four questions in order: what
+algorithm is worth searching for, what to try next, whether a candidate qualifies to be compared, and
+what a completed trial counts as evidence for. External validation is not part of the loop; it is performed
+once on the final algorithm after the search ends.
+Stage 1: Task instantiation (human). A human defines what counts as a legal and worthwhile algo-
+rithm, not what the algorithm should be. This includes the seed algorithm 𝐴0, the editable components
+S, the objective 𝑂, and the constraint set C defined above.
+Stage 2: Candidate generation (agents). Multiple coding agents work in parallel. Each agent reads
+sampled high-scoring candidates, failed candidates, diverse candidates, and the current search context. It
+then proposes new candidates by editing the algorithm only within S. Agents may also propose updates to
+the search context for later rounds, but these are treated as prospective hypotheses rather than adjudicated
+evidence. To support attribution and inspection, every candidate carries a mandatory rationale: what
+mechanism it changes, where each new parameter comes from, and why the change may help.
+Stage 3: Gating and scoring (framework). Physical legality is a hard gate, not a soft penalty. Can-
+didates are rejected outright if they violate the task-specified data-consistency requirements, for example
+by breaking observed traces or altering the sampling mask in interpolation, or if they fail to run or diverge
+numerically. Surviving candidates are run on the search-time sub-blocks, scored by a common metric,
+and then admitted to the candidate pool. Rejected and failed candidates are kept as negative examples.
+Stage 4: Evidence binding and context update (framework). The framework records each can-
+didate’s rationale, score, or failure log. It then updates which candidates and mechanism rationales are
+more likely to be shown to agents in the next round. This stage produces no new algorithmic hypothe-
+ses and contains no language-model judgment; it applies fixed programmatic rules to execution-derived
+scores and failure records. Agents only propose; all adjudication is done by the framework from real
+execution.
+After 𝑇rounds, the highest-scoring legal candidate under 𝑂is frozen as the evolved algorithm 𝐴★,
+which then proceeds to external validation outside the search.
+6
+
+
+--- Page 7 ---
+Figure 1: The SeisEvo framework. A one-time task instantiation (seed algorithm and specification) is
+followed by a closed loop of candidate generation, gating and scoring, and evidence binding with context
+update, repeated for𝑇rounds. The best candidate is returned as a standalone white-box operator. External
+validation, including full-volume generalization and robustness tests under different sampling and noise
+conditions, is performed once after the search and is not part of the loop.
+Algorithm 1 SeisEvo design run
+Require: seed algorithm 𝐴0; editable surface S; objective 𝑂; constraint set C; rounds 𝑇
+Ensure: evolved white-box algorithm 𝐴★
+1: Stage 1 (human): instantiate (𝐴0, S, 𝑂, C)
+2: pool ←{𝐴0}
+3: for 𝑡= 1, . . . ,𝑇do
+4:
+Stage 2 (agents): agents read sampled candidates, failure records, and context, then propose new
+candidates by editing only within S, each with a rationale and parameter provenance
+5:
+Stage 3 (framework): reject candidates that violate C, fail to run, or diverge; otherwise run them
+on search-time sub-blocks, score them by 𝑂, and add them to the pool
+6:
+Stage 4 (framework): record each candidate’s rationale and outcome; update next-round context
+and read priorities by fixed programmatic rules
+7: end for
+8: return the best-scoring candidate 𝐴★under 𝑂
+2.3
+Task specification
+Besides the seed algorithm 𝐴0 and the editable surface S, a SeisEvo run is specified by the objective 𝑂
+and the constraint set C. Together they state what counts as a valid and worthwhile algorithm, without
+prescribing the mechanism to be found.
+Objective 𝑂. A scalar reconstruction-quality score. It may be a single metric, such as the signal-
+to-noise ratio (SNR), or a weighted combination of several metrics, such as SNR together with SSIM
+or MSE. A composite scalar objective may guide the search toward more robust results than a single
+metric alone [Novikov et al., 2025]. The concrete scoring design is task-dependent and is given in the
+experiments.
+7
+
+
+--- Page 8 ---
+Physical legality. For the interpolation tasks considered here, observed traces must be preserved
+exactly; for noisy reconstruction tasks, this hard projection can be replaced by a noise-aware fidelity
+rule. In addition, every candidate must leave the sampling mask unchanged, return a real-valued volume,
+and keep the fixed input–output interface. These are hard gates: violating any one rejects the candidate
+outright. Dataset-specific shortcuts and any use of test data during the search are likewise forbidden.
+Interpretability rules. Two rules keep the discovered algorithm auditable. First, no pure parame-
+ter tuning: the specification prohibits candidates whose only claimed change is retuning existing scalar
+constants, for example making a threshold decay faster. Changing the functional form of a threshold,
+schedule, or projection counts as a mechanism-level modification. Second, parameter provenance: every
+new free parameter must be inherited from the seed protocol, derived from observed statistics or mathe-
+matical bounds, introduced solely for numerical stability, or selected from a predeclared finite structural
+set. Unexplained free constants are forbidden. The first rule prevents progress by tuning numbers; the
+second requires an origin for any number that does change.
+Scoring during the search. Candidates are scored only on search-time sub-blocks extracted from
+the data; the external test volumes are never touched until the search has ended.
+These rules form the common basis shared by both case studies. The framework does not fix the exact
+form of the constraints: for a different task, the expert may add further physical or numerical constraints,
+such as preserving a given frequency band or bounding amplitude changes, which act as hard gates in
+the same way.
+When the search ends, the highest-scoring legal candidate 𝐴★is frozen as the evolved algorithm: a
+standalone white-box solver that runs without any agent, prompt, or neural network at inference time. Be-
+cause candidates are scored only on search-time sub-blocks during the search, we validate 𝐴★once after
+the search to examine whether its performance generalizes beyond the data used to guide the search. In
+the experiments, this validation combines full-volume generalization and robustness tests under different
+sampling and noise conditions. We instantiate the protocol on POCS and MSSA, yielding Evo-POCS
+and Evo-MSSA.
+3
+Numerical experiments
+3.1
+Experimental protocol
+The data used for evolution are 64 × 64 × 64 sub-blocks extracted from complete 3D seismic volumes.
+During the search, candidate algorithms are generated, scored, and used to update the context only on
+these sub-blocks. After the search ends, the discovered algorithm is tested on seismic data outside this
+set to assess its generalization.
+Figure 2: Search-time seismic sub-blocks extracted from complete 3D volumes.
+8
+
+
+--- Page 9 ---
+In seismic data reconstruction, the signal-to-noise ratio (SNR) is a common measure of reconstruction
+quality; we report SNR together with the structural similarity (SSIM) and the mean squared error (MSE):
+SNR = 10 log10
+∥𝑋∥2
+𝐹
+∥𝑋−b𝑋∥2
+𝐹
+,
+(6)
+MSE =
+1
+𝑁sam
+∥𝑋−b𝑋∥2
+𝐹,
+(7)
+SSIM(𝑋, b𝑋) =
+(2𝜇𝑋𝜇b𝑋+ 𝑐1)(2𝜎𝑋b𝑋+ 𝑐2)
+(𝜇2
+𝑋+ 𝜇2
+b𝑋+ 𝑐1)(𝜎2
+𝑋+ 𝜎2
+b𝑋+ 𝑐2) ,
+(8)
+where 𝑋is the original complete data and b𝑋the reconstruction, 𝑁sam is the total number of samples, and
+𝜇and 𝜎denote means and (co)variances, and 𝑐1, 𝑐2 are small constants that avoid a zero denominator.
+A higher SNR, a lower MSE, and an SSIM closer to one indicate better reconstruction. For multiple
+volumes or cases, each metric is computed per case and then averaged.
+3.2
+SeisEvo test on POCS for interpolation
+Task instantiation. The first case study instantiates SeisEvo on the POCS family for interpolation of
+randomly missing traces without adding synthetic noise. In this setting, no additional noise term is
+introduced in Eq. (1), i.e., 𝑁= 0, so the observation reduces to 𝑌= 𝑀⊙𝑋, where 𝑀is a random spatial
+sampling mask that drops whole traces. The four inputs of the method are instantiated as follows. The
+seed 𝐴0 is classic exponential hard-threshold POCS. The editable surface S contains the per-iteration
+thresholding and shrinkage rules, the decay schedule, and any added projection or correction operator,
+but not the input–output interface or the observed-trace restoration. The constraint set C requires the
+observed traces to be restored exactly, the sampling mask to be preserved, and the output to be real-
+valued. It also forbids test-set leakage and unexplained free parameters. The objective is
+𝑂POCS = 0.7 clip
+SNR
+18 , 0, 1
+
++ 0.3 SSIM,
+(9)
+where 18 dB is an empirical reference used during the search to scale the SNR term to a range comparable
+with SSIM.
+Classic POCS seed. The seed is classic POCS [Abma and Kabir, 2006], with the exponential thresh-
+old decay widely adopted in later work [Gao et al., 2010]. After a temporal Fourier transform, each
+frequency slice is reconstructed by alternating a sparse projection in the spatial-frequency domain with
+an exact observed-trace projection in the data domain. For a frequency slice 𝑈( 𝑗)
+𝑘, one iteration is
+𝑉( 𝑗)
+𝑘
+= F −1 h
+𝐻𝜏𝑘, 𝑗
+
+F 𝑈( 𝑗)
+𝑘
+i
+,
+(10)
+𝑈( 𝑗+1)
+𝑘
+= 𝑌𝑘+ (1 −𝑀) ⊙𝑉( 𝑗)
+𝑘
+,
+(11)
+where F is the 2D spatial Fourier transform over a frequency slice, 𝐻𝜏is hard thresholding, and 𝑌𝑘is
+the observed frequency slice. The threshold 𝜏𝑘, 𝑗decays exponentially from 90% to 1% of the maximum
+transform-domain amplitude over 30 reconstruction iterations. The same threshold schedule and iteration
+count are used by classic POCS and Evo-POCS. Equation (11) is the data-consistency projection of Eq. (4)
+applied per frequency slice.
+This seed exploits Fourier-domain sparsity but does not explicitly use other properties of seismic data.
+Its reconstruction is therefore limited when dipping or laterally continuous events are not well represented
+by Fourier thresholding alone. The next part describes the addition that SeisEvo discovers on top of this
+seed.
+Search process. Starting from the classic POCS seed, SeisEvo runs for 20 rounds. Figure 3 shows the
+search-time objective 𝑂POCS as a function of the search round. The objective rises quickly from 0.713 at
+9
+
+
+--- Page 10 ---
+the seed within the first ten rounds, reaches its best value of 0.909 at round 14, and stays unchanged over
+the remaining six rounds, indicating that the 20-round budget is sufficient for this task. Correspondingly,
+the SNR on the training sub-blocks improves from 11.32 to 15.88 dB and SSIM from 0.911 to 0.972. This
+gain comes from a new structural step introduced by the SeisEvo search, not from retuning the threshold
+or decay parameters.
+Seed (POCS)
+Evo-POCS
+Figure 3: Search-time objective 𝑂POCS over 20 search rounds. The score rises from 0.713 at the classic
+POCS seed to 0.909 at round 14 and remains unchanged afterwards.
+Evo-POCS. The new structural step introduced by the search is a data-driven local dip-consistency
+correction, applied after each Fourier thresholding step. In one sentence, Evo-POCS is classic POCS
+constrained by local dip consistency: it moves a missing sample toward a local wavefield prediction only
+where one dip direction is clearly more self-consistent than the others.
+Algorithm 2 summarizes the deployed Evo-POCS at the frequency-slice level. In each iteration, after
+the classic POCS sparse projection, a local phase relation is estimated from observed neighboring traces
+for a fixed set of candidate dip directions; each direction predicts the missing sample by phase-aligned
+continuation; the directions whose predictions best match the observed samples are combined into a
+consensus prediction; and a confidence weight, set by how clearly the best direction outperforms the
+rest, controls how far the estimate moves toward this prediction. The observed traces are restored exactly
+at each step. Implementation details of the phase coefficient, residual weighting, and fallback rules are
+given in Appendix A.
+10
+
+
+--- Page 11 ---
+Algorithm 2 Evo-POCS reconstruction for one frequency slice
+Require: observed slice 𝑌𝑘, mask 𝑀, iterations 𝐽, direction bank D
+Ensure: reconstructed slice 𝑈𝑘
+1: estimate local phase coefficients 𝑐𝑑(𝑢) for each direction 𝑑∈D from observed trace pairs
+⊲
+depends only on 𝑌𝑘and 𝑀
+2: 𝑈(0)
+𝑘
+←𝑌𝑘
+3: for 𝑗= 0, . . . , 𝐽−1 do
+4:
+𝑉←Fourier hard-threshold sparse projection of 𝑈( 𝑗)
+𝑘
+⊲classic POCS step
+5:
+for each direction 𝑑∈D do
+6:
+predict 𝑃𝑑from 𝑉by phase-aligned continuation
+7:
+measure residual 𝑅𝑑on observed samples
+8:
+end for
+9:
+form consensus 𝑃★from selected lowest-residual directions
+10:
+set confidence map 𝜅from residual contrast
+11:
+𝑉←𝑉+ 𝜅⊙(𝑃★−𝑉)
+⊲dip-consistency correction
+12:
+𝑈( 𝑗+1)
+𝑘
+←𝑌𝑘+ (1 −𝑀) ⊙𝑉
+⊲restore observed traces
+13: end for
+14: return 𝑈(𝐽)
+𝑘
+After all frequency slices are reconstructed, an inverse temporal Fourier transform gives the real-
+valued volume. The correction is not an explicit isotropic smoothing operator, nor does it retune the
+threshold; instead, it uses the directional continuity present in the data itself, deciding along which direc-
+tion and by how much to correct each missing sample directly from the observed data. Every part of the
+operator has a clear seismic meaning: the Fourier threshold corresponds to the sparsity assumption, the
+observed-trace projection keeps the measured data unchanged, the candidate direction set represents the
+local dip of seismic events, the phase estimate compensates the phase difference between neighboring
+traces, and the residual and confidence ensure that the dip prior is trusted only along the directions the
+observed data support. Unlike existing methods that rely on dip continuity, the operator in Evo-POCS
+was discovered autonomously by SeisEvo: without any prescribed mechanism, the search constructed
+the full procedure of directional estimation, consensus, and gating directly from the observed data, and
+integrated it into the POCS framework with a clear improvement.
+Reconstruction results. Figure 4 compares classic POCS and Evo-POCS on a 64×64×64 sub-block
+under 50% random sampling. Panel (a) is the original complete data, (d) the 50% randomly sampled
+data, and (b) and (c) the reconstructions by classic POCS and Evo-POCS, respectively. Both methods
+reconstruct the data effectively, but Evo-POCS clearly yields better continuity of the local events, and is
+notably smoother on the time slices. The error panels (e) and (f) further highlight this difference: Evo-
+POCS produces less leakage, a smaller reconstruction error, and lower residual noise. Quantitatively, the
+SNR on this sub-block improves from 11.78 dB for classic POCS to 18.26 dB, SSIM from 0.895 to 0.986,
+and MSE decreases from 2.3 × 10−3 to 5.0 × 10−4.
+11
+
+
+--- Page 12 ---
+Figure 4: Reconstruction comparison on a 64×64×64 synthetic sub-block under 50% random sampling.
+(a) Original complete data; (b) POCS reconstruction; (c) Evo-POCS reconstruction; (d) 50% randomly
+sampled data; (e) POCS error; (f) Evo-POCS error.
+Generalization test. To further assess the generalization of Evo-POCS, we test reconstruction on
+several out-of-distribution synthetic and field datasets. On these data, which were not used during the
+search, Evo-POCS improves over classic POCS by more than 3 dB on average. Figure 5 shows the
+reconstruction on one field dataset (256 × 120 × 64) under 50% random sampling. Evo-POCS again
+gives clearly better event continuity and a smaller reconstruction error. The improvement is especially
+visible above the first arrivals, where Evo-POCS suppresses the noise introduced by classic POCS and
+markedly reduces the error in that region. Quantitatively, the SNR improves from 9.23 dB for classic
+POCS to 12.79 dB, and SSIM from 0.980 to 0.992.
+Figure 6 further shows the reconstruction on a slice at 𝑌= 0.65 km together with the corresponding
+𝐹-𝐾spectra. Both methods reconstruct the data effectively, but the advantage is clearer in this slice:
+Evo-POCS gives stronger event continuity and less noise, and its 𝐹-𝐾spectrum is closer to that of the
+original data, with the sampling aliasing better suppressed.
+12
+
+
+--- Page 13 ---
+Figure 5: Reconstruction comparison on a 256 × 120 × 64 field dataset under 50% random sampling.
+(a) Original; (b) POCS; (c) Evo-POCS; (d) sampled data; (e) POCS error; (f) Evo-POCS error. The
+Evo-POCS reconstruction error is smaller than that of classic POCS.
+We further evaluate the sensitivity to the missing ratio on the same field dataset. Table 1 reports
+the SNR comparison between POCS and Evo-POCS for missing ratios from 30% to 70%. Evo-POCS
+consistently outperforms POCS at all missing ratios, with SNR gains from 1.58 to 5.42 dB and an average
+gain of 3.49 dB. This result shows that the improvement is not limited to a single sampling density. The
+SNR gain gradually decreases as the missing ratio becomes more severe. This behavior is expected
+because the evolved dip-consistency correction relies on the structural evidence carried by the observed
+traces; when fewer traces are available, the local dip information becomes less reliable and the prior has
+weaker support. Nevertheless, Evo-POCS still improves over POCS even when 70% of the traces are
+missing.
+3.3
+SeisEvo test on MSSA for simultaneous interpolation and denoising
+Task instantiation. The second case study instantiates SeisEvo on the MSSA family for simultaneous
+interpolation and denoising of 3D seismic data. The observations follow the noisy sampling model in
+Eq. (1), 𝑌= 𝑀⊙(𝑋+ 𝑁), where 𝑀is a random spatial sampling mask that retains 50% of the complete
+traces. The entries of 𝑁are independent zero-mean Gaussian variables, 𝑁∼N (0, 𝜎2), with 𝜎=
+𝛼max |𝑋| and 𝛼∼U(0.01, 0.20). Thus, the noise level is scaled to the amplitude of each data block
+13
+
+
+--- Page 14 ---
+Original
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+Time (s)
+Sampled
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+POCS
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+Evo-POCS
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1
+Original F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+Frequency (Hz)
+Sampled F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+POCS F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+Evo-POCS F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+-0.1
+-0.08
+-0.06
+-0.04
+-0.02
+0
+0.02
+0.04
+0.06
+0.08
+0.1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+Figure 6: Reconstruction and 𝐹-𝐾comparison on a slice at 𝑌= 0.65 km. (a)–(d) original, sampled,
+POCS, and Evo-POCS reconstructions; (e)–(h) their 𝐹-𝐾spectra. Evo-POCS gives better event continu-
+ity and an 𝐹-𝐾spectrum closer to the original.
+Table 1: SNR comparison between classic POCS and Evo-POCS on the field dataset under different
+missing-trace ratios. ΔSNR is computed as SNREvo-POCS −SNRPOCS.
+Missing ratio (%)
+POCS (dB)
+Evo-POCS (dB)
+ΔSNR (dB)
+30
+9.62
+15.04
++ 5.42
+40
+9.48
+13.73
++ 4.25
+50
+9.23
+12.79
++ 3.56
+60
+8.88
+11.52
++ 2.64
+70
+8.41
+9.99
++ 1.58
+Average
+9.12
+12.61
++ 3.49
+and varies across the search cases. As in the POCS case study, the search uses 100 seismic sub-blocks
+of size 64 × 64 × 64. Candidate algorithms are generated and scored only on these sub-blocks, and the
+external test data are not used during the search.
+The seed 𝐴0 is a fixed-window implementation of the classical block-Hankel MSSA low-rank model.
+The editable surface S includes singular-value processing and rank selection, the Hankel low-rank pro-
+jection, and the rule used to estimate observation reliability in the soft data update. The temporal Fourier
+transform, Hankel embedding, overlap averaging, input–output interface, and mask-based form of the
+data update remain fixed. The constraint set C requires the sampling mask to remain unchanged and the
+output to be finite and real-valued. It also forbids test-set leakage and unexplained free parameters.
+Unlike the POCS case without added synthetic noise, this joint task assigns different roles to the
+two data subsets: the acquired traces require denoising, whereas the missing traces require interpolation.
+We therefore separate the SNR-related assessment into the observed-trace denoising gain 𝐺obs and the
+missing-trace reconstruction SNR SNRmiss, while SSIM measures structural fidelity over the complete
+14
+
+
+--- Page 15 ---
+reconstruction:
+𝑂MSSA = 0.35 clip
+𝐺obs
+18 , 0, 1
+
++ 0.35 clip
+SNRmiss
+18
+, 0, 1
+
++ 0.30 SSIM,
+(12)
+where 𝐺obs is the SNR gain of the reconstructed observed traces over the noisy input, and SNRmiss is
+evaluated only on the missing traces. The 18 dB reference scales the two SNR terms to ranges comparable
+with SSIM during the search; it is not a prescribed reconstruction target.
+MSSA seed. In practical seismic processing, MSSA is often applied within local spatial windows.
+Local processing limits the size of the block-Hankel matrix and reduces the cost of repeated low-rank
+decomposition. It also makes the low-rank approximation more appropriate because seismic events are
+closer to locally linear within a limited spatial aperture [Wu and Bai, 2018]. Following this practice, we
+use a computationally compact, fixed-window implementation of classical block-Hankel MSSA [Oropeza
+and Sacchi, 2011] as the seed. Here, “compact” refers only to the use of a small local Hankel embedding.
+Throughout this paper, we denote this seed simply as MSSA.
+After a temporal Fourier transform, each frequency slice is processed independently. For the 𝑘th
+frequency slice 𝑈( 𝑗)
+𝑘, its low-rank estimate is
+𝐿( 𝑗)
+𝑘
+= H† h
+P
+
+H
+
+𝑈( 𝑗)
+𝑘
+i
+,
+(13)
+where H is the spatial block-Hankel embedding, P is the low-rank projection, and H† maps the projected
+Hankel matrix back to the spatial frequency slice by overlap averaging. The MSSA seed and all candidate
+algorithms use a fixed 6 × 6 Hankel window, a rank limit of 16, and 30 reconstruction iterations.
+Because the observed traces are noisy, the seed does not restore them exactly. Instead, it applies the
+soft data-consistency update
+𝑈( 𝑗+1)
+𝑘
+= 𝑀⊙
+h
+𝛾𝑘, 𝑗𝑌𝑘+  1 −𝛾𝑘, 𝑗
+ 𝐿( 𝑗)
+𝑘
+i
++ (1 −𝑀) ⊙𝐿( 𝑗)
+𝑘,
+(14)
+where 𝛾𝑘, 𝑗∈[0, 1] balances the noisy observation 𝑌𝑘and the low-rank estimate 𝐿( 𝑗)
+𝑘. This implemen-
+tation retains the central low-rank model of classical MSSA while allowing the acquired traces to be
+corrected during denoising.
+Search process. Starting from the MSSA seed, SeisEvo runs for 20 search rounds. Figure 7 shows
+the search-time objective 𝑂MSSA over the search. The score increases from 0.320 for the seed to 0.563
+for the best candidate. Correspondingly, the observed-trace denoising gain 𝐺obs increases from 3.06 to
+7.71 dB, the missing-trace reconstruction SNR SNRmiss from 3.83 to 8.59 dB, and the overall SSIM from
+0.619 to 0.819. Although the overall reconstruction SNR is not included directly in the search objective,
+it also increases from 4.37 to 9.17 dB. These concurrent gains show that the search improves observed-
+trace denoising, missing-trace interpolation, and structural fidelity together, rather than improving one
+component at the expense of another.
+15
+
+
+--- Page 16 ---
+Seed (MSSA)
+Evo-MSSA
+Figure 7: Search-time objective 𝑂MSSA over 20 search rounds. The score increases from 0.320 for MSSA
+to 0.563 for the best candidate.
+Evo-MSSA. The main structural change found by SeisEvo is a reliability-grouped singular-value
+shrinkage. In one sentence, Evo-MSSA is MSSA with data-driven patch grouping: rather than fitting all
+Hankel patches with one fixed-rank subspace, it groups them by local observation reliability and fits each
+group with its own low-rank subspace. The fixed Hankel window, rank limit, and reconstruction count
+remain unchanged from the MSSA seed.
+Algorithm 3 summarizes the deployed operator for one frequency slice. The noisy observation 𝑌𝑘is
+fixed throughout the iterations and serves as both the initial value and the anchor of the soft data update.
+In the first iteration, when no previous reliability field is available, Evo-MSSA applies a global MP–GD
+shrinkage. Here, MP–GD denotes a singular-value shrinkage whose noise scale is estimated from the
+lower spectral tail and calibrated by the Marchenko–Pastur law, while its threshold coefficient is given
+by the Gavish–Donoho optimal hard-threshold form [Marchenko and Pastur, 1967, Gavish and Donoho,
+2014].
+From the second iteration onward, the Hankel columns are divided at the empirical mean of the patch
+reliability derived from Γ( 𝑗−1)
+𝑘
+. Each group is projected using its own singular spectrum and matrix as-
+pect ratio, and the projected columns are placed back in their original positions. The resulting low-rank
+slice is then compared with 𝑌𝑘on the observed traces. Overlapping-support averaging and a centered
+cross-iteration Cesàro average convert these residuals into the current reliability field Γ( 𝑗)
+𝑘, which con-
+trols the soft update. The complete MP–GD, grouping, reliability, and fallback expressions are given in
+Appendix B.
+16
+
+
+--- Page 17 ---
+Algorithm 3 Evo-MSSA reconstruction for one frequency slice
+Require: fixed noisy observed slice 𝑌𝑘; mask 𝑀; iterations 𝐽; Hankel operator H
+Ensure: reconstructed slice 𝑈𝑘
+1: 𝑈(0)
+𝑘
+←𝑌𝑘; Γ(−1)
+𝑘
+←∅
+2: for 𝑗= 0, . . . , 𝐽−1 do
+3:
+𝜋𝑗←𝑗/(𝐽−1)
+4:
+𝐵( 𝑗)
+𝑘
+←H (𝑈( 𝑗)
+𝑘)
+5:
+if 𝑗= 0 then
+6:
+e𝐵( 𝑗)
+𝑘
+←MPGD(𝐵( 𝑗)
+𝑘)
+7:
+else
+8:
+e𝐵( 𝑗)
+𝑘
+←GroupMPGD(𝐵( 𝑗)
+𝑘, Γ( 𝑗−1)
+𝑘
+)
+9:
+end if
+10:
+𝐿( 𝑗)
+𝑘
+←H †( e𝐵( 𝑗)
+𝑘)
+11:
+Γ( 𝑗)
+𝑘
+←ConsensusTrust(𝑌𝑘, 𝐿( 𝑗)
+𝑘, 𝑀, 𝜋𝑗)
+12:
+𝑈( 𝑗+1)
+𝑘
+←𝑀⊙[Γ( 𝑗)
+𝑘
+⊙𝑌𝑘+ (1 −Γ( 𝑗)
+𝑘) ⊙𝐿( 𝑗)
+𝑘] + (1 −𝑀) ⊙𝐿( 𝑗)
+𝑘
+13: end for
+14: return 𝑈(𝐽)
+𝑘
+The three modules in Algorithm 3 have distinct roles. MPGD adapts the shrinkage to the measured
+spectrum and matrix shape; GroupMPGD permits patches with different reliability to use different sub-
+spaces; and ConsensusTrust stabilizes the residual-based reliability estimate in space and across iter-
+ations. The evolved mechanism introduces no manually tuned continuous parameter. The two-group
+structure, empirical-mean split, robust residual scale, and MP plug-in remain explicit structural choices
+rather than assumptions hidden in learned weights.
+Reconstruction results. Figure 8 compares MSSA and Evo-MSSA on a 64 × 64 × 64 synthetic
+sub-block with 50% randomly missing traces and Gaussian noise. Panel (a) shows the original complete
+data, panel (d) the noisy incomplete data, panels (b) and (c) the reconstructions obtained by MSSA and
+Evo-MSSA, and panels (e) and (f) their corresponding errors. Both methods recover the main seismic
+events across the missing traces. However, visible residual noise remains in the MSSA result. Evo-MSSA
+produces more continuous events, weaker background noise, and a smoother reconstruction. The error
+panels further show that Evo-MSSA leaves less residual noise and a smaller overall reconstruction error.
+The input SNR of the noisy incomplete data is 1.91 dB. MSSA increases the SNR to 7.03 dB, whereas
+Evo-MSSA reaches 11.09 dB, an improvement of 4.06 dB over MSSA. The MSE is also reduced from
+6.74 × 10−3 for MSSA to 2.65 × 10−3 for Evo-MSSA. These results show that the Evo-MSSA opera-
+tor obtained through the SeisEvo search clearly improves on the MSSA seed. It recovers events across
+missing traces while more effectively attenuating noise on the observed traces.
+17
+
+
+--- Page 18 ---
+Figure 8: Reconstruction comparison on a 64 × 64 × 64 synthetic sub-block with 50% randomly missing
+traces and Gaussian noise. (a) Original complete data; (b) MSSA reconstruction; (c) Evo-MSSA recon-
+struction; (d) noisy data with 50% randomly missing traces; (e) MSSA error; (f) Evo-MSSA error.
+Generalization test. To further assess the generalization of Evo-MSSA, we test simultaneous interpo-
+lation and denoising on several synthetic and field datasets that were not used during the search. Across
+these unseen datasets, Evo-MSSA improves the overall reconstruction SNR over MSSA by more than
+4 dB on average. This result shows that the mechanism found by SeisEvo is not limited to the sub-blocks
+used during the search and can generalize to unseen synthetic and field seismic data.
+Figure 9 shows a representative result on a 256 × 120 × 64 field dataset outside the search set. Panel
+(a) shows the complete data after noise injection, whereas panel (d) shows the same noisy data after
+50% of the traces are removed. The SNR of the noisy incomplete input is 2.95 dB. MSSA increases the
+reconstruction SNR to 10.88 dB, whereas Evo-MSSA reaches 14.49 dB, a gain of 3.61 dB over MSSA.
+The corresponding MSE decreases from 9.84 × 10−5 for MSSA to 3.92 × 10−5 for Evo-MSSA. Both
+methods recover the main seismic events, but the Evo-MSSA result is smoother and shows stronger noise
+attenuation. The difference is clearer in the error panels: visible residual noise remains after MSSA
+reconstruction, whereas Evo-MSSA produces a weaker and cleaner reconstruction error.
+18
+
+
+--- Page 19 ---
+Figure 9: Reconstruction comparison on a 256×120×64 field dataset with 50% randomly missing traces
+and Gaussian noise. (a) Noisy complete data; (b) MSSA reconstruction; (c) Evo-MSSA reconstruction;
+(d) noisy incomplete data; (e) MSSA error; (f) Evo-MSSA error.
+Comparison with ODRR. To determine whether the improvement extends beyond the seed method,
+we further compare Evo-MSSA with the optimally damped rank-reduction method (ODRR) [Chen et al.,
+2020, 2023]. Following the recommended parameter range, a small validation sweep selected 𝐾= 3.
+Except for the damping setting specific to ODRR, the reconstruction parameters shared by the methods
+were kept unchanged.
+We vary the noise scale 𝛼from 0.01 to 0.05 on the same field dataset with 50% randomly missing
+traces. Table 2 reports the overall reconstruction SNR. Evo-MSSA achieves the highest SNR at every
+noise level, and its advantage becomes more pronounced at higher noise levels. Averaged over the five
+noise levels, Evo-MSSA reaches 10.70 dB, exceeding MSSA and ODRR by 7.15 and 3.31 dB, respec-
+tively. These results show that SeisEvo improves the classical MSSA seed and remains effective relative
+to the ODRR baseline.
+Figure 10 provides a visual comparison at 𝛼= 0.05. Under this low-input-SNR condition, simultane-
+ous interpolation and denoising are difficult. The MSSA reconstruction remains dominated by noise, and
+most seismic events are barely identifiable. ODRR recovers part of the event structure, but substantial
+residual noise and spatial artifacts remain. Evo-MSSA gives the clearest result: the main events remain
+visible and show better continuity. Nevertheless, its error volume still contains coherent signal energy
+and random noise, indicating signal leakage and residual noise. This comparison shows that Evo-MSSA
+is more robust than MSSA and ODRR under this low-input-SNR condition, while also revealing its lim-
+itations in this challenging case.
+19
+
+
+--- Page 20 ---
+Table 2: Overall reconstruction SNR on the field dataset under different noise scales.
+Noise scale 𝛼
+MSSA (dB)
+ODRR (dB)
+Evo-MSSA (dB)
+Gain over
+ODRR (dB)
+0.01
+10.88
+12.61
+14.49
++1.88
+0.02
+5.77
+8.84
+12.05
++3.21
+0.03
+2.58
+7.13
+10.32
++3.19
+0.04
+0.23
+5.50
+8.96
++3.46
+0.05
+-1.71
+2.85
+7.70
++4.85
+Average
+3.55
+7.39
+10.70
++3.31
+Figure 10: Reconstruction comparison on a 256×120×64 field dataset at noise scale 𝛼= 0.05 with 50%
+randomly missing traces. (a) Noisy complete data; (b) MSSA reconstruction; (c) ODRR reconstruction;
+(d) Evo-MSSA reconstruction; (e) noisy sampled data; (f) MSSA error; (g) ODRR error; (h) Evo-MSSA
+error.
+Figure 11 further compares the slice at𝑌= 1.75 km and the corresponding 𝐹–𝐾spectra. At 𝛼= 0.05,
+random noise and missing traces make the original events almost unidentifiable in the noisy sampled data.
+Its 𝐹–𝐾spectrum also contains little identifiable signal energy. MSSA does not effectively separate the
+signal from noise: its reconstruction remains dominated by noise, and the corresponding 𝐹–𝐾spectrum
+shows the same behavior. ODRR recovers part of the main events and their spectral structures, but
+substantial residual noise remains.
+In comparison, Evo-MSSA recovers clearer and more continuous main events and further suppresses
+the effects of random noise and missing traces. Its 𝐹–𝐾energy is more concentrated around the main
+signal structures and is closer to that of the original data. However, some weak events and spectral
+energy are still attenuated, indicating remaining signal loss under this low-input-SNR condition. The
+20
+
+
+--- Page 21 ---
+slice comparison is consistent with the full-volume results and quantitative metrics, further showing the
+improved interpolation and denoising performance of Evo-MSSA at low SNR.
+(a) Original
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.2
+0.4
+0.6
+0.8
+1
+Time (s)
+(b) Noisy sampled data
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.2
+0.4
+0.6
+0.8
+1
+(c) MSSA
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.2
+0.4
+0.6
+0.8
+1
+(d) ODRR
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.2
+0.4
+0.6
+0.8
+1
+(e) Evo-MSSA
+20
+40
+60
+80
+100
+120
+Trace number
+0
+0.2
+0.4
+0.6
+0.8
+1
+(f) Original F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+Frequency (Hz)
+(g) Noisy sampled data F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+(h) MSSA F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+(i) ODRR F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+(j) Evo-MSSA F-K
+-0.5
+0
+0.5
+Wavenumber (1/m)
+0
+20
+40
+60
+80
+100
+120
+-0.1
+-0.05
+0
+0.05
+0.1
+0
+1
+2
+3
+4
+5
+6
+7
+8
+Figure 11: Slice and 𝐹–𝐾spectrum comparison on a 256 × 120 × 64 field dataset at 𝑌= 1.75 km, with
+noise scale 𝛼= 0.05 and 50% randomly missing traces. (a) Original; (b) noisy sampled data; (c) MSSA;
+(d) ODRR; (e) Evo-MSSA; (f)–(j) the corresponding 𝐹–𝐾spectra of (a)–(e), respectively.
+Taken together, the two case studies start from Fourier-sparse POCS and low-rank MSSA and yield
+Evo-POCS and Evo-MSSA, respectively. In the POCS case, Evo-POCS retains the Fourier sparse pro-
+jection and data-consistency constraint while mainly adding a data-driven dip-consistency correction,
+which improves the continuity of reconstructed events. In the MSSA case, Evo-MSSA improves the con-
+ventional low-rank reconstruction through adaptive singular-value shrinkage, reliability grouping, and
+cross-iteration consensus. It also maintains an advantage over ODRR, especially at higher noise levels.
+The two cases address different reconstruction tasks: Evo-POCS considers interpolation of randomly
+missing traces without added synthetic noise, whereas Evo-MSSA considers simultaneous interpolation
+and denoising with randomly missing traces and Gaussian noise. In their respective tasks, both evolved
+algorithms clearly outperform their classical seeds and maintain consistent improvements on data outside
+the search set. These results indicate that the mechanisms discovered by SeisEvo can work with algo-
+rithm families based on different mathematical principles and under different observation conditions and
+reconstruction objectives, rather than being limited to the sub-blocks used during search. Overall, the
+experiments support the effectiveness of SeisEvo on two classical seismic reconstruction families and
+two different reconstruction tasks.
+4
+Discussion
+What the search actually contributed.
+The discovered mechanisms are not conceptually new. In-
+terpolation that exploits dip continuity, and adaptive shrinkage of singular values, each have their own
+research background in seismic processing. The value of SeisEvo does not lie in proposing a previously
+unseen prior, but in the fact that the specific form of these mechanisms was constructed by the search
+without the form of the operator being prescribed, and was integrated automatically into the iteration of
+a classical solver. In Evo-POCS, the directional candidate set, the phase estimation from observed trace
+pairs, the residual-weighted directional consensus, and the confidence gating were not given by the speci-
+21
+
+
+--- Page 22 ---
+fication; in Evo-MSSA, neither was the structure that divides the Hankel columns by local reliability and
+projects each group with its own subspace. These elements were built up and selected under the physical-
+legality and parameter-provenance constraints. The resulting operators remain explicit algorithms that
+can be written down, inspected at the operator level, related to interpretable seismic mechanisms, and
+tested independently. This is what distinguishes algorithm evolution from replacing a solver with an
+implicit mapping: it changes the way an algorithm is designed, not the way an algorithm is expressed.
+Scope and cost of the protocol.
+More generally, the conditions on which SeisEvo relies, namely an
+executable quality measure, explicit physical contracts, and a classical algorithm with a clear and mod-
+ular structure, are also present in seismic denoising, deconvolution, and inversion, so the protocol may
+extend to other steps of seismic signal processing. The main cost at present is offline search computation:
+discovering an operator requires many candidate executions and is therefore substantially more expen-
+sive than running a fixed hand-designed solver. This cost is paid only during discovery; once frozen, the
+operator requires no agent, prompt, or neural network at inference time. The present evidence, however,
+is restricted to seismic data reconstruction; extension to these tasks remains a hypothesis to be tested
+rather than a demonstrated capability.
+Design of the objective and evaluator.
+This work makes the constraint set and the editable operator
+surface explicit and part of the search protocol, but the seed and the objective are fixed before each run,
+and the effect of their choice has not been studied systematically. The objective encodes part of the
+human judgement of quality as an executable scoring rule. The two case studies use different scoring
+structures: the POCS search combines the reconstruction SNR with the structural similarity, whereas the
+MSSA search further separates noise suppression at the observed positions from reconstruction quality
+at the missing ones. The associated weights and normalizing references belong to an evaluation proto-
+col that is identical for all candidates; they are fixed before the search and held by the evaluator, and no
+candidate program may modify them. The objective plays a role comparable to the loss function of a
+learning method, in that both prescribe the optimization preference, but it guides a search over discrete
+programs and operator mechanisms rather than the optimization of network weights. It therefore need
+not be differentiable and may include piecewise measures and discrete quality judgements, while legal-
+ity checks are enforced separately through the constraint set. Different objectives consequently create
+different search pressures: raising the SNR, preserving structure, suppressing noise, and limiting signal
+leakage are not always mutually consistent. An executable evaluator thus does more than record per-
+formance; it defines the selection pressure under which a program evolves [Novikov et al., 2025]. The
+executable form of the objective can itself become an object of search, as in the automatic design and
+evolution of reward code [Ma et al., 2024]. In the present runs, the best-so-far scores exhibit late-stage
+plateaus, but a single trajectory per case is not sufficient to decide whether the budget is already adequate,
+whether candidate diversity is being exhausted, or whether the room for observable improvement under
+the current evaluation protocol has simply become small. Separating these possibilities would require
+repeated independent searches, controlled experiments with longer budgets, and explicit stopping rules
+based on performance gain, candidate diversity, and computational cost.
+From offline discovery to continual discovery.
+The SNR and the structural similarity used here both
+require a complete reference, so the present protocol suits offline algorithm discovery when a complete
+reference is available or when degraded observations can be constructed from complete data, whereas
+the traces that are genuinely missing in an acquired survey are themselves unobservable. For interpola-
+tion, part of the observed traces can be hidden and used for self-supervised validation; for simultaneous
+interpolation and denoising, the hidden traces are themselves noisy, so additional assumptions about
+noise independence, repeated observations, or noise statistics are needed. Spectral consistency, local
+coherence, and the quality of subsequent imaging can also serve as substitutes, but they remain proxy
+objectives and may introduce their own bias into the search, which is consistent with the preceding ob-
+servation that the scoring design shapes the mechanism that is found. A separate issue is the dependence
+22
+
+
+--- Page 23 ---
+on the seed and the search backend. Each case study here examines a single classical seed with a fixed
+backend; whether different seeds would arrive at comparable mechanisms, and how far objectives and
+constraints with more specific geophysical meaning, such as band preservation, amplitude fidelity, or
+a forward-modelling residual, would shape the direction of the search, remain to be examined. If the
+discovery process is to continue, for instance by taking a discovered operator as the seed of a further
+run, then repeatedly evaluating against the same external data would gradually make that data part of
+the search and cost it its role as independent validation. Beyond this, what evolves in this work is the
+reconstruction solver rather than the search mechanism itself. Adaptive optimization of candidate gen-
+eration, experience organization, and budget allocation is a natural extension: as long as the evaluator
+and the hard constraints stay fixed, the legality decisions and the scores of executed candidates remain
+reproducible under fixed programmatic rules. If the objective or the legality rules were to co-evolve as
+well, however, the standard of evaluation would become a moving target, and a fixed outer validation pro-
+tocol that does not participate in the evolution would be required; otherwise an increase in score would
+no longer necessarily correspond to an improvement of the algorithm itself.
+5
+Conclusions
+We proposed SeisEvo (Seismic Algorithm Evolution), an algorithm evolution framework for seismic
+data reconstruction. Rather than optimizing a single reconstructed volume, SeisEvo searches for the
+reconstruction algorithm itself. A domain expert defines a classical seed algorithm, the components
+that may be edited, the reconstruction objective, and the legality constraints; an LLM-based multi-agent
+search then improves executable candidates within those bounds. The final output is a standalone white-
+box operator that requires no agent, prompt, or neural network at inference time.
+We instantiated SeisEvo on two classical algorithm families with different mathematical foundations.
+For interpolation of field data without added synthetic noise, Evo-POCS improves the SNR over classic
+POCS by 3.49 dB on average across missing ratios from 30% to 70%, with the gain decreasing from 5.42
+dB at 30% missing to 1.58 dB at 70% missing. For simultaneous interpolation and denoising, Evo-MSSA
+improves the average reconstruction SNR by more than 7 dB over classic MSSA and by more than 3 dB
+over the ODRR baseline, under 50% randomly missing traces and across the tested noise levels. Both
+evolved operators maintain their performance gains on synthetic and field data not used during the search.
+These results suggest a different role for domain expertise in geophysical algorithm design: the expert
+defines what constitutes a legal and useful algorithm, while the mechanism itself is discovered through
+search, and the resulting operators remain explicit, inspectable, and directly deployable. SeisEvo there-
+fore indicates the potential of agentic algorithm evolution as a complementary path to deep learning for
+discovering interpretable geophysical processing algorithms.
+Acknowledgments
+This work was supported in part by Deep Earth Probe and Mineral Resources Exploration - National
+Science and Technology Major Project under Grant No. 2024ZD1002700, in part by the NSFC under
+Grant No. 42574172. Yingjie Xu acknowledges the support of the China Scholarship Council program
+(CSC No. 202506120138).
+A
+Mathematical formulation of the dip-consistency correction in Evo-POCS
+This appendix gives the mathematical form of the dip-consistency correction in Evo-POCS. All opera-
+tions are performed on a single frequency slice. Let 𝑌𝑘be the observed frequency slice used in Eq. (11),
+𝑀the sampling mask, U the current iterate, and 𝑢= (𝑥, 𝑦) a spatial location. Shifted locations 𝑢± 𝑑that
+fall outside the slice are excluded from the local sums below.
+23
+
+
+--- Page 24 ---
+Direction bank
+The correction is applied over a fixed set of candidate dip directions, each a small
+integer spatial offset:
+D = {(1, 0), (0, 1), (1, 1), (1, −1), (2, 1), (1, 2),
+(2, −1), (1, −2), (2, 0), (0, 2), (2, 2), (2, −2)}.
+(A.1)
+These twelve offsets, with steps at most two, form a discrete set of local dip directions for seismic events.
+Local phase coeﬀicient
+For each direction 𝑑= (𝑑𝑥, 𝑑𝑦), a complex phase coefficient 𝑐𝑑(𝑢) is estimated
+from observed trace pairs, describing the phase rotation between neighboring traces along that direction.
+Within a 7 × 7 window N7(𝑢) centered at 𝑢,
+𝑐𝑑(𝑢) =
+Í
+𝑣∈N7(𝑢) 𝑌𝑘(𝑣+ 𝑑) 𝑌𝑘(𝑣) 𝑀(𝑣+ 𝑑)𝑀(𝑣)
+Í
+𝑣∈N7(𝑢) 𝑌𝑘(𝑣+ 𝑑) 𝑌𝑘(𝑣) 𝑀(𝑣+ 𝑑)𝑀(𝑣)
+ + 𝜖
+,
+(A.2)
+where 𝜖is a small constant that prevents division by zero. The normalization makes 𝑐𝑑(𝑢) have approxi-
+mately unit modulus, so it acts mainly as a phase rotation; the mask product 𝑀(𝑣+ 𝑑)𝑀(𝑣) ensures that
+only trace pairs observed at both ends are used. Since 𝑐𝑑(𝑢) depends only on the observed slice and the
+mask, it is computed once before the iterations.
+Directional prediction and residual
+Given the current iterate U, each direction predicts the current
+location by symmetric phase-aligned continuation from its two neighbors:
+𝑃𝑑(U)(𝑢) = 1
+2
+h
+𝑐𝑑(𝑢) U(𝑢+ 𝑑) + 𝑐𝑑(𝑢) U(𝑢−𝑑)
+i
+.
+(A.3)
+Indeed, if the local wavefield satisfies U(𝑢+ 𝑑) = 𝑒i𝜙𝑑U(𝑢), then 𝑐𝑑(𝑢) ≈𝑒−i𝜙𝑑under Eq. (A.2). Conse-
+quently, both 𝑐𝑑(𝑢)U(𝑢+ 𝑑) and 𝑐𝑑(𝑢)U(𝑢−𝑑) predict U(𝑢); the conjugate in the second term provides
+the reverse-direction phase alignment. The reliability of this prediction is measured by its residual on
+observed samples, within a 3 × 3 window N3(𝑢):
+𝑅𝑑(𝑢) =
+Í
+𝑣∈N3(𝑢) 𝑀(𝑣) |𝑌𝑘(𝑣) −𝑃𝑑(U)(𝑣)|2
+Í
+𝑣∈N3(𝑢) 𝑀(𝑣) + 𝜖
+.
+(A.4)
+A smaller residual indicates that the direction better matches the local dip of the events.
+Consensus prediction
+Let ¯𝑅(𝑢) be the mean residual over the twelve directions, and let 𝑑1, 𝑑2, 𝑑3 be
+the three directions with the smallest residuals. They are combined into a consensus prediction using
+cubic residual-margin weights:
+𝑤𝑖(𝑢) =
+ ¯𝑅(𝑢) −𝑅𝑑𝑖(𝑢)
+3
++ ,
+𝑃★(U)(𝑢) =
+Í3
+𝑖=1 𝑤𝑖(𝑢) 𝑃𝑑𝑖(U)(𝑢)
+Í3
+𝑖=1 𝑤𝑖(𝑢) + 𝜖
+,
+(A.5)
+where [·]+ takes the non-negative part. Directions with smaller residuals receive larger weights, so the
+most self-consistent direction dominates the prediction.
+Confidence gate and update
+The strength of the correction is controlled by a confidence 𝜅(𝑢), which
+measures how much the best direction improves over the mean residual:
+𝜅(𝑢) = clip
+ ¯𝑅(𝑢) −𝑅min(𝑢)
+¯𝑅(𝑢) + 𝜖
+, 0, 1
+
+,
+𝑅min(𝑢) = min
+𝑑∈D 𝑅𝑑(𝑢).
+(A.6)
+24
+
+
+--- Page 25 ---
+When one direction clearly outperforms the rest, 𝜅is close to one and the correction is strong; when the
+residuals are similar, 𝜅is close to zero and the correction is weak. Writing UPOCS for the output of the
+classic POCS sparse projection (i.e., 𝑉( 𝑗)
+𝑘
+in Eq. (10)), one full Evo-POCS update is
+U( 𝑗+1) = 𝑌𝑘+ (1 −𝑀) ⊙
+h
+UPOCS + 𝜅⊙
+
+𝑃★(UPOCS) −UPOCSi
+.
+(A.7)
+The outer term 𝑌𝑘+ (1 −𝑀) ⊙(·) restores the observed traces exactly, so only the missing traces are
+updated by the correction.
+Fallback rules
+When a 7×7 window contains no usable observed trace pair, 𝑐𝑑(𝑢) falls back to a global
+phase estimate for the slice; when a 3 × 3 window contains no observed sample, the residual 𝑅𝑑(𝑢) is
+replaced by a self-consistency measure across directions. These fallbacks help keep the operator stable
+where observations are sparse.
+Real output
+After all slices are processed, Hermitian symmetry is imposed before the inverse temporal
+Fourier transform, which gives a real-valued volume.
+B
+Mathematical formulation of Evo-MSSA
+This appendix gives the detailed form of the three modules summarized in Algorithm 3. All operations
+below are performed on one temporal frequency slice. The noisy observed slice 𝑌𝑘and mask 𝑀remain
+fixed over the 30 reconstruction iterations, whereas 𝑈( 𝑗)
+𝑘
+is the current iterate.
+Local Hankel embedding
+For a slice 𝑈( 𝑗)
+𝑘, the operator H extracts all overlapping 6×6 spatial patches,
+vectorizes them, and places them as columns of
+𝐵( 𝑗)
+𝑘
+= H (𝑈( 𝑗)
+𝑘) =
+
+𝑏1, . . . , 𝑏𝑛𝑝
+
+,
+𝑏𝑝∈C36.
+(B.1)
+Here, 𝑛𝑝is the number of overlapping patches. The associated operator H† returns the columns to their
+original patch locations and forms a weighted overlap-add reconstruction using a separable Hanning taper
+on the 6 × 6 support, normalized pointwise by the accumulated taper weights. Thus, H† denotes tapered
+overlap-averaging reconstruction, not a Moore–Penrose pseudoinverse.
+MP–GD singular-value shrinkage
+Consider either the complete Hankel matrix or one of its column
+groups, denoted by 𝐵𝑔∈C𝑚𝑔×𝑛𝑔. Its left Gram decomposition is
+𝐵𝑔𝐵H
+𝑔= 𝑄𝑔diag
+
+𝑠2
+𝑔,1, . . . , 𝑠2
+𝑔,𝑟𝑔
+
+𝑄H
+𝑔,
+𝑠𝑔,1 ≥· · · ≥𝑠𝑔,𝑟𝑔≥0,
+(B.2)
+where (·)H is the conjugate transpose and 𝑟𝑔= min(𝑚𝑔, 𝑛𝑔). Let T𝑔be the lower half of this singular
+spectrum, and let 𝜂𝑔= min(𝑚𝑔, 𝑛𝑔)/max(𝑚𝑔, 𝑛𝑔) be the measured matrix aspect ratio. If 𝑞MP
+𝑔
+denotes
+the 25th percentile of the Marchenko–Pastur eigenvalue law [Marchenko and Pastur, 1967], the matrix
+noise scale is
+b𝜎𝐵,𝑔= median(T𝑔)
+q
+𝑞MP
+𝑔
+.
+(B.3)
+The 25th percentile appears because the median of the lower half of the full spectrum is its first quartile.
+If the plug-in estimate is unavailable, the implementation uses the largest finite value among the tail
+median, its MAD-based scale, and the numerical floor 𝜖.
+Let 𝜔★(𝜂𝑔) be the closed-form Gavish–Donoho optimal hard-threshold coefficient [Gavish and Donoho,
+2014]. Evo-MSSA sets 𝜃𝑔= 𝜔★(𝜂𝑔)b𝜎𝐵,𝑔and forms the quadratic shrinkage weights
+𝑤𝑔,𝑖=
+"
+1 −
+
+𝜃𝑔
+𝑠𝑔,𝑖+ 𝜖
+2#
++
+.
+(B.4)
+25
+
+
+--- Page 26 ---
+Let 𝑟★
+𝑔= min(16, 𝑟𝑔) be the inherited rank limit after accounting for the available matrix rank, and let
+𝑄𝑔,𝑟★
+𝑔contain the corresponding leading left singular vectors. The MP–GD projection is
+MPGD(𝐵𝑔) = 𝑄𝑔,𝑟★
+𝑔diag(𝑤𝑔,1, . . . , 𝑤𝑔,𝑟★
+𝑔) 𝑄H
+𝑔,𝑟★
+𝑔𝐵𝑔,
+(B.5)
+with components beyond the inherited rank limit assigned zero weight. In the implementation, trailing
+zero-weight components are omitted. If all weights vanish, the projected group is zero, after which
+overlap averaging and the soft update proceed unchanged. The MP law therefore calibrates the noise
+scale, the Gavish–Donoho form sets the threshold location, and Eq. (B.4) performs the actual shrinkage.
+These quantities are used only as data-dependent calibration scales; no optimality is claimed for the
+resulting quadratic shrinkage on the correlated Hankel matrices considered here.
+Reliability-grouped projection
+No previous reliability field is available at 𝑗= 0, so Eq. (B.5) is
+applied to the complete matrix 𝐵(0)
+𝑘. For 𝑗≥1, let W𝑝be the spatial support of column 𝑏𝑝. Its mean
+reliability and the resulting two groups are
+𝜉( 𝑗−1)
+𝑝
+=
+1
+|W𝑝|
+Õ
+𝑢∈W𝑝
+Γ( 𝑗−1)
+𝑘
+(𝑢),
+¯𝜉( 𝑗−1) = 1
+𝑛𝑝
+𝑛𝑝
+Õ
+𝑝=1
+𝜉( 𝑗−1)
+𝑝
+,
+I ( 𝑗)
+−
+= {𝑝: 𝜉( 𝑗−1)
+𝑝
+< ¯𝜉( 𝑗−1)},
+I ( 𝑗)
++
+= {𝑝: 𝜉( 𝑗−1)
+𝑝
+≥¯𝜉( 𝑗−1)}.
+(B.6)
+Each group is projected using its own spectrum and aspect ratio, and its columns are then returned to
+their original positions:
+e𝐵( 𝑗)
+𝑘,:, I ( 𝑗)
+±
+= MPGD
+
+𝐵( 𝑗)
+𝑘,:, I ( 𝑗)
+±
+
+.
+(B.7)
+This operation is denoted by GroupMPGD in Algorithm 3.
+Residual-based reliability
+Let 𝐸( 𝑗)
+𝑘
+= 𝑌𝑘−𝐿( 𝑗)
+𝑘
+be the prediction residual, evaluated only where
+𝑀= 1. Let 𝐾be the 6 × 6 all-ones support kernel and ∗denote reflected-boundary spatial convolution.
+The local observed mass, residual power, and observed power are
+𝑚𝐾= 𝐾∗𝑀,
+𝑃𝐸= 𝐾∗
+
+𝑀⊙|𝐸( 𝑗)
+𝑘
+|2
+,
+𝑃𝑌= 𝐾∗
+
+𝑀⊙|𝑌𝑘|2
+.
+(B.8)
+The global MP noise scale from the first projection is retained as a per-frequency anchor. With 𝑑𝑀=
+(𝑛𝑥𝑛𝑦)−1 Í
+𝑢𝑀(𝑢) denoting the sampling density, the corresponding noise power on observed samples
+is
+b𝑣𝑘=
+(b𝜎(0)
+𝐵,𝑘)2
+𝑛𝑝𝑑𝑀+ 𝜖.
+(B.9)
+Two bounded local signal fractions are then
+𝑎obs = clip
+
+1 −
+𝑃𝐸
+𝑃𝑌+ 𝜖, 0, 1
+
+,
+𝑎noise = clip
+
+1 −
+b𝑣𝑘
+𝑃𝐸/(𝑚𝐾+ 𝜖) + 𝜖, 0, 1
+
+.
+(B.10)
+Writing 𝜋𝑗= 𝑗/(𝐽−1) for iteration progress, the raw local reliability and its overlapping-support average
+are
+𝑎( 𝑗)
+raw = (1 −𝜋𝑗)𝑎obs + 𝜋𝑗𝑎noise,
+𝑎( 𝑗)
+sp = 𝐾∗(𝑀⊙𝑎( 𝑗)
+raw)
+𝑚𝐾+ 𝜖
+.
+(B.11)
+26
+
+
+--- Page 27 ---
+Cross-iteration consensus
+Let the observed-sample mean and centered spatial deviation be
+𝜇𝑗=
+Í
+𝑢𝑀(𝑢)𝑎( 𝑗)
+sp (𝑢)
+Í
+𝑢𝑀(𝑢) + 𝜖
+,
+𝐷𝑗= 𝑎( 𝑗)
+sp −𝜇𝑗.
+(B.12)
+Evo-MSSA forms a centered Cesàro average across iterations,
+𝐷𝑗=
+
+
+𝐷0,
+𝑗= 0,
+𝐷𝑗−1 + 𝐷𝑗−𝐷𝑗−1
+𝑗+ 1
+,
+𝑗≥1,
+Γ( 𝑗)
+loc = clip(𝜇𝑗+ 𝐷𝑗, 0, 1).
+(B.13)
+This average reduces iteration-to-iteration fluctuations without introducing a forgetting factor.
+For robustness to complex residual outliers, let E ( 𝑗)
+𝑘
+= {𝐸( 𝑗)
+𝑘
+(𝑢) : 𝑀(𝑢) = 1}, 𝑛𝐸= |E ( 𝑗)
+𝑘|, and
+𝑐𝐸= median(ℜE ( 𝑗)
+𝑘) + i median(ℑE ( 𝑗)
+𝑘). For 𝑛𝐸> 0, define 𝑣mean = 𝑛−1
+𝐸
+Í
+𝑒∈E ( 𝑗)
+𝑘
+|𝑒−𝑐𝐸|2 and
+𝑣rob =
+median
+
+|E ( 𝑗)
+𝑘
+−𝑐𝐸|2
+log 2
+,
+e𝜋𝑗= 𝜋𝑗+ 1 −𝜋𝑗
+𝑛𝐸
+,
+Γ( 𝑗)
+rob = (1 −e𝜋𝑗) + e𝜋𝑗clip
+
+1 −
+
+1 −1
+𝑛𝐸
+
+𝑣rob
+𝑣mean + 𝜖, 0, 1
+
+.
+(B.14)
+Both 𝜋𝑗and its finite-sample correction e𝜋𝑗gradually move the update from conservative retention of
+observed samples to residual- and noise-calibrated weighting.
+The MP-anchored signal fraction and the final map used by ConsensusTrust are
+𝜁𝑘= clip
+
+1 −
+b𝑣𝑘
+Í
+𝑢𝑀(𝑢)
+Í
+𝑢𝑀(𝑢)|𝑌𝑘(𝑢)|2 + 𝜖, 0, 1
+
+,
+Γ( 𝑗)
+𝑘
+= (1 −𝜁𝑘)Γ( 𝑗)
+loc + 𝜁𝑘Γ( 𝑗)
+rob .
+(B.15)
+Soft update and fallback rules
+Overlap averaging gives 𝐿( 𝑗)
+𝑘
+= H†( e𝐵( 𝑗)
+𝑘), and the next iterate is
+𝑈( 𝑗+1)
+𝑘
+= 𝑀⊙
+h
+Γ( 𝑗)
+𝑘
+⊙𝑌𝑘+ (1 −Γ( 𝑗)
+𝑘) ⊙𝐿( 𝑗)
+𝑘
+i
++ (1 −𝑀) ⊙𝐿( 𝑗)
+𝑘.
+(B.16)
+Thus, large reliability values retain more of the noisy observation, whereas small values place more
+weight on the low-rank prediction. The observed traces are never hard-restored.
+The first iteration, a malformed reliability field, nonfinite patch scores, a group with fewer columns
+than Hankel rows, or a failed group eigendecomposition triggers the global MP–GD projection. Invalid
+spectral estimates use the finite tail-median/MAD fallback. If the observed-residual set is empty, the
+slice-level reliability falls back to the observed signal fraction; an invalid reconstructed frequency slice
+falls back to the observed slice. The final operator uses all 30 reconstruction iterations. After all positive
+frequency slices are processed, the inverse real Fourier transform produces a real-valued reconstructed
+volume.
+References
+Mohammad Mahdi Abedi and David Pardo. A multidirectional deep neural network for self-supervised
+reconstruction of seismic data. IEEE Transactions on Geoscience and Remote Sensing, 60:1–9, 2022.
+doi: 10.1109/TGRS.2022.3227212.
+Ray Abma and Nurul Kabir. 3D interpolation of irregular data with a POCS algorithm. Geophysics, 71
+(6):E91–E97, 2006. doi: 10.1190/1.2356088.
+27
+
+
+--- Page 28 ---
+Farzaneh Bayati and Daniel Trad. 3-D data interpolation and denoising by an adaptive weighting rank-
+reduction method using multichannel singular spectrum analysis algorithm. Sensors, 23(2):577, 2023.
+Gui Chen and Yang Liu. Combining unsupervised deep learning and Monte Carlo dropout for seismic
+data reconstruction and its uncertainty quantification. Geophysics, 89(1):WA53–WA65, 2024. doi:
+10.1190/geo2022-0632.1.
+Yangkang Chen, Min Bai, Zhe Guan, Qingchen Zhang, Mi Zhang, and Hang Wang. Five-dimensional
+seismic data reconstruction using the optimally damped rank-reduction method. Geophysical Journal
+International, 222(3):1824–1845, 2020. doi: 10.1093/gji/ggaa190.
+Yangkang Chen, Weilin Huang, Liuqing Yang, Yapo Abolé Serge Innocent Oboué, Omar M. Saad,
+and Yunfeng Chen. DRR: An open-source multi-platform package for the damped rank-reduction
+method and its applications in seismology.
+Computers & Geosciences, 180:105440, 2023.
+doi:
+10.1016/j.cageo.2023.105440.
+Ming Cheng, Jun Lin, Xintong Dong, and Tie Zhong. A multitask deep-learning model for the denoising,
+interpolation, and wavefield separation of distributed acoustic sensing-vertical seismic profiling data.
+Geophysics, 90(6):V559–V568, 2025a. doi: 10.1190/geo2024-0531.1.
+Shijun Cheng, Randy Harsuko, and Tariq Alkhalifah. A generative foundation model for an all-in-one seis-
+mic processing framework. Surveys in Geophysics, 46(6):1173–1215, 2025b. doi: 10.1007/s10712-
+025-09912-9.
+Lieqian Dong, Mugang Zhang, Yingjie Xu, Changhui Wang, Siwei Yu, and Yingming Zhang. Robust
+reconstruction of non-uniformly sampled 3D seismic data with outliers. Journal of Geophysics and
+Engineering, 22(2):560–573, 2025.
+Jian-Jun Gao, Xiao-Hong Chen, Jing-Ye Li, Guo-Chang Liu, and Jian Ma. Irregular seismic data recon-
+struction based on exponential threshold model of POCS method. Applied Geophysics, 7(3):229–238,
+2010.
+Jianjun Gao, Aaron Stanton, Mostafa Naghizadeh, Mauricio D. Sacchi, and Xiaohong Chen.
+Con-
+vergence improvement and noise attenuation considerations for beyond alias projection onto con-
+vex sets reconstruction.
+Geophysical Prospecting, 61(S1):138–151, 2013.
+doi: 10.1111/j.1365-
+2478.2012.01103.x.
+Matan Gavish and David L. Donoho. The optimal hard threshold for singular values is 4/
+√
+3. IEEE
+Transactions on Information Theory, 60(8):5040–5053, 2014. doi: 10.1109/TIT.2014.2323359.
+Felix J. Herrmann and Gilles Hennenfent. Non-parametric seismic data recovery with curvelet frames.
+Geophysical Journal International, 173(1):233–248, 2008. doi: 10.1111/j.1365-246X.2007.03698.x.
+Weilin Huang, Runqiu Wang, Yangkang Chen, Huijian Li, and Shuwei Gan. Damped multichannel
+singular spectrum analysis for 3D random noise attenuation. Geophysics, 81(4):V261–V270, 2016.
+Harpreet Kaur, Nam Pham, and Sergey Fomel. Seismic data interpolation using deep learning with
+generative adversarial networks. Geophysical Prospecting, 69(2):307–326, 2021. doi: 10.1111/1365-
+2478.13055.
+Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao Lu, and Qingfu Zhang.
+Evolution of heuristics: Towards efficient automatic algorithm design using large language model. In
+Proceedings of the 41st International Conference on Machine Learning, volume 235 of Proceedings
+of Machine Learning Research, pages 32201–32223. PMLR, 2024. URL https://proceedings.
+mlr.press/v235/liu24bs.html.
+28
+
+
+--- Page 29 ---
+Qun Liu, Lihua Fu, and Meng Zhang. Deep-seismic-prior-based reconstruction of seismic data using
+convolutional neural networks. Geophysics, 86(2):V131–V142, 2021. doi: 10.1190/geo2019-0570.1.
+Yecheng Jason Ma, William Liang, Guanzhi Wang, De-An Huang, Osbert Bastani, Dinesh Jayaraman,
+Yuke Zhu, Linxi Fan, and Anima Anandkumar. Eureka: Human-level reward design via coding large
+language models. In The Twelfth International Conference on Learning Representations, 2024. URL
+https://openreview.net/forum?id=IEduRUO55F.
+Vladimir A. Marchenko and Leonid A. Pastur.
+Distribution of eigenvalues for some sets
+of random matrices.
+Mathematics of the USSR-Sbornik,
+1(4):457–483,
+1967.
+doi:
+10.1070/SM1967v001n04ABEH001994.
+Fanlei Meng, QinYin Fan, and Yue Li.
+Self-supervised learning for seismic data reconstruc-
+tion and denoising.
+IEEE Geoscience and Remote Sensing Letters, 19:1–5, 2022.
+doi:
+10.1109/LGRS.2021.3068132.
+Mostafa Naghizadeh and Mauricio D Sacchi. Multistep autoregressive reconstruction of seismic records.
+Geophysics, 72(6):V111–V118, 2007.
+Alexander Novikov, Ngân Vũ, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wagner,
+Sergey Shirobokov, Borislav Kozlovskii, Francisco JR Ruiz, Abbas Mehrabian, et al. AlphaEvolve:
+A coding agent for scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131, 2025. doi:
+10.48550/arXiv.2506.13131.
+Vicente Oropeza and Mauricio D. Sacchi.
+Simultaneous seismic data denoising and reconstruc-
+tion via multichannel singular spectrum analysis.
+Geophysics, 76(3):V25–V32, 2011.
+doi:
+10.1190/1.3552706.
+Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M. Pawan
+Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar Fawzi,
+Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from program search with large
+language models. Nature, 625(7995):468–475, 2024. doi: 10.1038/s41586-023-06924-6.
+Hanlin Sheng, Xinming Wu, Xu Si, Jintao Li, Sibo Zhang, and Xudong Duan. Seismic foundation
+model: A next generation deep-learning model in geophysics. Geophysics, 90(2):IM59–IM79, 2025.
+doi: 10.1190/geo2024-0262.1.
+Simon Spitz. Seismic trace interpolation in the F-X domain. Geophysics, 56(6):785–794, 1991. doi:
+10.1190/1.1443096.
+Boai Sun, Wenjin Guo, Zongmin Yu, and Liu Yang. Self-evolving scientific agent discovers generalizable
+physically-reasoned fluid control. arXiv preprint arXiv:2606.08405, 2026.
+Daniel Trad. Five-dimensional interpolation: Recovering from acquisition constraints. Geophysics, 74
+(6):V123–V132, 2009.
+Benfeng Wang, Ru-Shan Wu, Yu Geng, and Xiaohong Chen. Dreamlet-based interpolation using POCS
+method. Journal of Applied Geophysics, 109:256–265, 2014.
+Benfeng Wang, Ning Zhang, Wenkai Lu, and Jialin Wang. Deep-learning-based seismic data interpola-
+tion: A preliminary result. Geophysics, 84(1):V11–V20, 2019. doi: 10.1190/geo2017-0495.1.
+Juan Wu and Min Bai. Adaptive rank-reduction method for seismic data reconstruction. Journal of
+Geophysics and Engineering, 15(4):1688–1703, 2018. doi: 10.1093/jge/aabc74.
+Ying-Jie Xu, Wen-Chuang Wang, Si-Wei Yu, and Jian-Wei Ma. Unsupervised anti-aliasing interpolation
+of regularly sampled seismic data via soft dynamic time warping divergence distance. Petroleum
+Science, 2026. doi: 10.1016/j.petsci.2026.06.031. In press.
+29
+
+
+--- Page 30 ---
+Yingjie Xu, Siwei Yu, Lieqian Dong, and Jianwei Ma. Dealiased seismic data interpolation by dynamic
+matching. Geophysics, 89(5):V361–V376, 2024. doi: 10.1190/geo2023-0249.1.
+Minghui Yang, Ling Guo, and Liu Yang. Harness in-context operator learning with chain of operators.
+arXiv preprint arXiv:2606.12318, 2026.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon Kim, Jinkyoo Park,
+and Guojie Song. ReEvo: Large language models as hyper-heuristics with reflective evolution. In
+Advances in Neural Information Processing Systems, volume 37, pages 43571–43608. Curran Asso-
+ciates, Inc., 2024. URL https://proceedings.neurips.cc/paper_files/paper/2024/hash/
+4ced59d480e07d290b6f29fc8798f195-Abstract-Conference.html.
+Siwei Yu, Jianwei Ma, and Wenlong Wang. Deep learning for denoising. Geophysics, 84(6):V333–V350,
+2019. doi: 10.1190/geo2018-0668.1.
+Zongmin Yu and Liu Yang. Agentic symbolic search: Characterizing pdes beyond hand-crafted expres-
+sions, meshes, and neural networks. arXiv preprint arXiv:2606.20467, 2026a.
+Zongmin Yu and Liu Yang. Evolutionary ensemble of agents. arXiv preprint arXiv:2605.09018, 2026b.
+doi: 10.48550/arXiv.2605.09018. URL https://arxiv.org/abs/2605.09018.
+Dong Zhang, Yangkang Chen, Weilin Huang, and Shuwei Gan. Multi-step damped multichannel singu-
+lar spectrum analysis for simultaneous reconstruction and denoising of 3D seismic data. Journal of
+Geophysics and Engineering, 13(5):704–721, 2016.
+Hua Zhang, Xiaohong Chen, and Hongxing Li. 3D seismic data reconstruction based on complex-valued
+curvelet transform in frequency domain. Journal of Applied Geophysics, 113:64–73, 2015.
+30
