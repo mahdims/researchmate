@@ -1,10 +1,37 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-08-20
+**Last Updated:** 2026-08-25
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-25 (3 papers)
+
+### [FormuEvo: LLM-Guided Evolution for Discovering Solver-Efficient Mixed-Integer Programming Formulations](https://arxiv.org/abs/2608.23353)
+
+**2026-08-24** | Tsinghua University, Nanyang Technological University, Singapore Management University | M=9 P=9 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* LLM-guided evolutionary optimization over the symbolic space of MIP formulations, represented as executable modeling programs, via iterative generation, evaluation, and selection with LLM-driven crossover, mutation, and repair operations. | *LLM role:* generates formulations, diagnoses solver feedback, repairs code, abstracts experience, distills knowledge
+
+> FormuEvo is an LLM-guided evolutionary framework that discovers solver-efficient mixed-integer programming (MIP) formulations by searching the symbolic space of executable modeling programs. Backed by strong empirical results, it accelerates solvers by up to 5.5x compared to expert-designed formulations and existing LLM-based cutting plane generation baselines across diverse OR benchmarks. THE KEY INSIGHT is the 'solver-informed diagnosis' mechanism, which translates fine-grained solver statistics (e.g., root gap, branch-and-bound node count, presolve reductions) into interpretable verbal gradients to guide LLM mutation, coupled with a structured memory of Condition-Strategy-Effect triplets. This is highly relevant to our work in LLM evolutionary search; adopting internal solver statistics as dense feedback signals rather than relying solely on end-to-end runtime fitness can drastically improve sample efficiency and search direction.
+
+### [Eureka: Task-Conditioned Meta-Agent Orchestration for Scientific Discovery](https://arxiv.org/abs/2608.19047)
+
+**2026-08-19** | Duke University, Shanghai Jiao Tong University, Hokkaido University, South China Normal University, Guangdong University of Technology, ManXis | M=8 P=7 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Task-conditioned Meta-Agent architecture with dynamic obligation graph, receding-horizon planning, architecture promotion, minimal sufficient architecture compilation, and governed evolution | *LLM role:* semantic_decomposition
+
+> ManXis introduces Eureka, a task-conditioned Meta-Agent architecture that dynamically compiles long-horizon tasks into obligation graphs and forms specialized Macro-Agents with tailored state, memory, and verifiers during execution. The results are backed by extensive empirical validation, including a 57.8% reduction in median context usage across 12,000 dependency-update tasks and successful application to open mathematical conjectures. The key insight is governed evolution: rather than continuously mutating the agent, the system uses a mathematically grounded cost-benefit threshold to trigger architecture evolution only when the expected amortized savings exceed the fixed cost of diagnosis and migration. This is highly relevant to LLM evolutionary search and multi-agent optimization, as it provides a rigorous, actionable framework for improving sample efficiency, managing persistent memory, and dynamically scaling agent architectures.
+
+### [AsmEvo: Agentic Assembly-Level Optimization of AMD GPU Kernels with Functional Equivalence Verification](https://arxiv.org/abs/2608.20711)
+
+**2026-08-21** | Advanced Micro Devices, Inc. (AMD), Southern University of Science and Technology | M=7 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Long-horizon agentic search driver for assembly transformations under external correctness-gated verification | *LLM role:* heuristic_generator
+
+> AsmEvo uses a long-horizon LLM agent to optimize compiled AMD GPU kernels at the assembly level, relying on the original binary as a differential oracle to verify functional equivalence before measuring performance. The paper presents strong empirical results on real hardware (MI308X/MI300X), achieving up to 3.88x speedups on KernelBench and 1.18x geometric-mean speedups on production vLLM/SGLang Triton kernels. The key insight is the strict separation between the LLM proposer and a deterministic, correctness-gated verification harness (using real-dispatch capture for a non-hackable fitness signal), which prevents the search from exploiting fast but incorrect programs. This is highly relevant for our work in LLM evolutionary search and LLM serving optimization, as the architecture for verified composition and anti-stall memory can be directly adapted to improve the robustness and sample efficiency of our own agentic search frameworks.
+
 
 #### 2026-08-20 (3 papers)
 

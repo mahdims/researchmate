@@ -1,10 +1,21 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-08-18
+**Last Updated:** 2026-08-25
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-25 (1 papers)
+
+### [PowerSlider: Exploiting Phase Asymmetry for LLM Serving under Demand Response](https://arxiv.org/abs/2608.21719)
+
+**2026-08-22** | Microsoft Azure Research, Cornell University, Cornell Tech | M=8 P=9 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Karush–Kuhn–Tucker (KKT) online solver for convex-relaxed joint allocation | *LLM role:* none
+
+> POWERSLIDER optimizes LLM serving under dynamic power caps by disaggregating the pipeline into Prefill, Think, and Answer stages and using a KKT online solver to dynamically adjust GPU allocation and frequencies based on phase asymmetry. The results are rigorously backed by empirical data, demonstrating 1.64x higher goodput than the best baseline at a 30% power cap reduction while solving the allocation problem in just 7.7ms. The key insight is that reasoning workloads break standard prefill-decode disaggregation due to massive KV-cache accumulation during the 'thinking' phase; isolating this into a three-stage pipeline allows an online convex solver to aggressively scale down frequencies for memory-bound decode stages without starving compute-bound prefill. This is highly relevant for our research in OR formulations for LLM serving scheduling, as it provides both a necessary architectural paradigm shift for reasoning models and a mathematically rigorous, millisecond-scale optimization approach.
+
 
 #### 2026-08-18 (1 papers)
 

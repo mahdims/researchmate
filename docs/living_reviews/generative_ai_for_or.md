@@ -1,10 +1,21 @@
 # Living Review: Generative AI for OR
 
-**Last Updated:** 2026-08-20
+**Last Updated:** 2026-08-25
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-25 (1 papers)
+
+### [Improving Natural-Language Combinatorial-Optimization Accuracy in Resource-Constrained Language Models via Formal Abstractions](https://arxiv.org/abs/2608.18409)
+
+**2026-08-19** | UC Berkeley, Independent Researcher | M=6 P=8 I=7 *discuss*
+
+*Method:* Neuro-symbolic framework (SDDL) for natural-language to solver-aligned representation translation | *LLM role:* formalization_translator
+
+> Sharma et al. introduce SDDL, a 7-primitive domain-specific language that allows resource-constrained LLMs to translate natural-language scheduling problems into formal representations, which are then deterministically compiled to CP-SAT. The results are backed by rigorous evaluation, showing that Qwen3.5-27B improves from 21.7% feasibility when generating raw solver code to 55.3% when using SDDL on a 300-instance benchmark. The key insight is that bounding the LLM's generation space to a closed vocabulary of domain constructs removes error-prone variable declarations and API syntax, shifting the burden of correct solver encoding to a deterministic compiler. This is highly relevant for our work in symbolic OR modeling and LLM reasoning evaluation, offering a concrete methodology for improving formalization accuracy without relying exclusively on frontier models.
+
 
 #### 2026-08-20 (1 papers)
 
