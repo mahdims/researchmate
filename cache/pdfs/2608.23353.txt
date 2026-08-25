@@ -1,0 +1,3894 @@
+--- Page 1 ---
+FormuEvo: LLM-Guided Evolution for Discovering Solver-Efficient
+Mixed-Integer Programming Formulations
+Haofeng Yuan1, Jianing Peng1, Jieyi Bi2, Ni Zhang3, Shiji Song1, †, Zhiguang Cao3
+1Department of Automation, BNRist, Tsinghua University
+2College of Computing and Data Science, Nanyang Technological University
+3School of Computing and Information Systems, Singapore Management University
+yhf22@mails.tsinghua.edu.cn, pjn24@mails.tsinghua.edu.cn, jieyi001@e.ntu.edu.sg
+ni.zhang.2025@phdcs.smu.edu.sg, shijis@mail.tsinghua.edu.cn, zgcao@smu.edu.sg
+Abstract
+Mixed-integer programming (MIP) lies at the
+core of operations research and industrial opti-
+mization. While large language models (LLMs)
+have recently shown promise in automated MIP
+modeling from natural language, they prioritize
+semantic correctness but overlook formulation
+strength, severely bottlenecking the efficiency
+of downstream solvers. We propose FormuEvo,
+an LLM-guided evolutionary framework for
+automated discovery of solver-efficient MIP
+formulations. FormuEvo frames MIP formula-
+tion design as evolutionary optimization over
+the symbolic space of MIP formulations, rep-
+resented as executable modeling programs, by
+iteratively generating, evaluating, and selecting
+stronger candidates via LLM-driven crossover,
+mutation, and repair operations. To move be-
+yond blind exploration, FormuEvo introduces
+a solver-informed diagnosis mechanism that
+exploits fine-grained solver statistics as verbal
+gradients for targeted refinement. Additionally,
+a structured memory abstracts prior experience
+into reusable modeling strategies, avoiding re-
+dundant exploration while enabling zero-shot
+transfer to unseen problems and bootstrapping
+smaller LLMs. Experiments across diverse lin-
+ear and non-linear problems demonstrate that
+FormuEvo discovers formulations that signif-
+icantly outperform both expert-designed for-
+mulations and existing LLM-based approaches,
+accelerating solvers by up to 5.5×, with dis-
+tilled knowledge transferring effectively across
+problems and model scales.
+1
+Introduction
+Mixed-integer programming (MIP) plays a funda-
+mental role in decision-making across domains
+such as manufacturing, transportation, and man-
+agement (Bixby, 2012; Wolsey, 2020; Clautiaux
+†Corresponding author.
+Code: https://github.com/Xyz-yuanhf/formuevo
+(c) FormuEvo: LLM-Guided Evolution of MIP Formulations
+MIP Fomulation
+(a) Human Expert
+(b) Fine-tuned LLM
+MIP Fomulation (Program)
+Fine-tune
+MIP Solver
+Solver-Informed
+Diagnosis
+Memory
+Figure 1: MIP formulation design via (a) human experts,
+(b) LLM fine-tuning with end-to-end generation, and (c)
+the LLM-guided evolution framework of FormuEvo.
+and Ljubi´c, 2025). The practical success of MIP
+has been largely driven by decades of advances
+in powerful solvers such as Gurobi (Gurobi, 2026)
+and COPT (Ge et al., 2022), which integrate sophis-
+ticated algorithmic components including branch-
+and-bound, cutting planes, and various heuristics
+to solve problems of growing scale and complexity.
+A well-established principle in mathematical
+programming is that a single optimization prob-
+lem may admit multiple mathematically equivalent
+MIP formulations, which guarantee the same opti-
+mal solution but can differ by orders of magnitude
+in computational efficiency (Wolsey, 2020). Con-
+sequently, the practical tractability of MIP depends
+not only on constructing a mathematically correct
+formulation, but also on designing one that is com-
+putationally strong, namely, whose structural prop-
+erties enable MIP solvers to operate efficiently.
+Despite its fundamental importance, discovering
+arXiv:2608.23353v1  [cs.CL]  24 Aug 2026
+
+
+--- Page 2 ---
+solver-efficient MIP formulations has long been re-
+garded as one of the most challenging and expertise-
+intensive problems in operations research (Vielma,
+2015). Even experienced experts require substan-
+tial domain knowledge and structural insights to
+craft a strong formulation (Fig. 1(a)). This chal-
+lenge is further complicated by the fact that model-
+ing intuitions can become outdated: with the devel-
+opment of modern MIP solvers, classical modeling
+strategies once regarded as “best practices”, such
+as certain strengthening constraints or symmetry-
+breaking rules, can inadvertently interfere with the
+advanced presolving procedures, cut generation,
+and heuristic routines, leading to counter-intuitive
+performance degradation (Achterberg and Wunder-
+ling, 2013; Salvagnin, 2018). This motivates a new
+automated approach capable of discovering solver-
+efficient MIP formulations and adaptable to the
+advancing algorithmic internals of modern solvers.
+Large language models (LLMs) have recently
+demonstrated remarkable promise in automating
+MIP modeling from natural language (Wang et al.,
+2025; Qian et al., 2025; Zhou et al., 2026). By
+fine-tuning based on curated formulation datasets,
+they have effectively bridged the gap between nat-
+ural language problem descriptions and executable
+MIP modeling programs via end-to-end generation
+(Fig. 1(b)). However, their objective is correctness
+and executability, namely, producing a formulation
+that accurately encodes the target problem and can
+be successfully solved by a downstream solver. As
+a result, the formulations they generate, though
+correct, are often computationally naive, falling
+far short of strong formulations required for large-
+scale real-world optimization.
+To address this gap, we propose FormuEvo,
+a novel LLM-guided evolutionary framework for
+automated discovery of solver-efficient MIP for-
+mulations. Rather than treating formulation de-
+sign as single-pass generation, FormuEvo reframes
+it as evolutionary optimization over the symbolic
+space of MIP formulations, which are represented
+as executable modeling programs. Given a natu-
+ral language problem description and a formula-
+tion template, FormuEvo maintains a population of
+candidate formulations, iteratively applying LLM-
+driven crossover, mutation, and repair operations
+guided directly by the solver performance, pro-
+gressively evolving toward solver-efficient formu-
+lations (Fig. 1(c)). To move beyond blind explo-
+ration, FormuEvo introduces two key mechanisms:
+1) a solver-informed diagnosis mechanism, where a
+diagnostic LLM converts fine-grained solver statis-
+tics into interpretable verbal gradients, guiding
+evolution toward targeted refinement, and 2) a
+structured memory, which abstracts prior experi-
+ence into reusable modeling strategies, avoiding
+redundant exploration while further enabling zero-
+shot transfer to unseen problems and bootstrapping
+smaller LLMs by distilling a generalizable knowl-
+edge base. Our main contributions are as follows:
+• We propose FormuEvo, an LLM-guided evolu-
+tionary framework for automated discovery of
+solver-efficient MIP formulations.
+• We introduce a solver-informed diagnosis mech-
+anism that leverages fine-grained solver statistics
+for targeted, solver-aware evolution.
+• We develop a structured memory that distills
+reusable knowledge, enabling efficient search
+and transfer across problem and model scales.
+• FormuEvo discovers non-obvious MIP formula-
+tions that outperform the state-of-the-art base-
+lines, accelerating MIP solvers by up to 5.5×.
+2
+Related Work
+2.1
+MIP Modeling and Formulation
+Designing strong MIP formulations is a long-
+standing challenge in operations research (Wolsey,
+2020). Classical strengthening techniques include
+valid inequalities and cutting planes (Nemhauser
+and Wolsey, 1988; Cornuéjols, 2008), symmetry-
+breaking constraints (Margot, 2009), and extended
+variables and reformulations (Conforti et al., 2013).
+However, with rapid development of modern MIP
+solvers, classical techniques can sometimes con-
+flict with sophisticated solver internals and lead to
+counter-intuitive performance degradation (Achter-
+berg and Wunderling, 2013; Salvagnin, 2018),
+motivating the need for automated, adaptive ap-
+proaches to formulation design.
+2.2
+LLM for Automated MIP Modeling
+Recent advances in LLMs have automated MIP
+modeling from natural language through structured
+formulations (Ramamonjison et al., 2022), agent
+systems (AhmadiTeshnizi et al., 2024), or fine-
+tuning (Huang et al., 2025; Wang et al., 2026; Zhou
+et al., 2026). Despite improving domain fidelity,
+they suffer from two major flaws. First, they oper-
+ate at the instance level, generating formulations
+with parameters tied to particular instances rather
+than discovering generalized, instance-agnostic for-
+mulations at the problem level. Second, as these
+
+
+--- Page 3 ---
+open-loop methods prioritize mathematical correct-
+ness rather than formulation strength, the generated
+formulations are structurally weak and inefficient
+for large-scale optimization.
+2.3
+LLM-Guided Evolutionary Search
+LLM-guided evolutionary search has emerged as a
+powerful paradigm for automated algorithm design
+and heuristic discovery (Liu et al., 2024; Novikov
+et al., 2025). FunSearch (Romera-Paredes et al.,
+2024) pioneered this by using LLMs as evolution-
+ary operators over executable code, while subse-
+quent works (Ye et al., 2024, 2025; Zhang et al.,
+2026; Hou et al., 2026; Gungordu et al., 2026)
+extended this framework for combinatorial heuris-
+tic design. However, little work has adapted this
+paradigm to MIP formulation. The most closely re-
+lated work, EvoCut (Yazdani et al., 2025), applies
+LLM-based evolution to cutting plane generation.
+However, EvoCut remains limited to local relax-
+ation tightening on an existing model and lacks
+the capability of holistic structural redesign. In
+contrast, FormuEvo evolves over the global sym-
+bolic space of MIP formulations, and incorporates
+solver-informed diagnosis and structured memory
+to enable systematic and directed improvement.
+3
+FormuEvo
+3.1
+Problem Formalization
+Given a problem p described in natural language,
+an MIP formulation can be modeled as:
+min
+x,y
+c(x, y)
+s.t.
+gi(x, y) ≤0,
+i = 1, . . . , m,
+hj(x, y) = 0,
+j = 1, . . . , n,
+x ∈X ⊆Rq,
+y ∈Y ⊆Zr,
+(1)
+where x and y denote continuous and integer de-
+cision variables, c(x, y) is the objective function,
+and gi(x, y), hj(x, y) denote inequality and equal-
+ity constraints, respectively. In practice, the MIP
+formulation is instantiated as executable programs
+(e.g., Python code with Gurobi) that specify these
+components and can be directly executed by an
+MIP solver. We denote by F the symbolic space
+of MIP formulations of problem p, namely, the set
+of all semantically correct and syntactically valid
+programs encoding problem p. By definition, any
+two formulations f1, f2 ∈F, possibly involving
+different structures of variables and constraints, are
+equivalent in the sense of optimization, which guar-
+antees the same optimal solution for problem p.
+Existing LLM-based approaches treat MIP mod-
+eling as a satisfaction problem, aiming to generate
+any formulation that can be successfully solved by
+a downstream MIP solver and produce the correct
+solution. However, they largely overlook a funda-
+mental principle in mathematical optimization: al-
+though formulations in F are mathematically equiv-
+alent, they can induce dramatically different solver
+behaviors and computational efficiency. In practice,
+two equivalent formulations may differ by orders
+of magnitude in runtime due to differences in re-
+laxation tightness, symmetry structure, and even
+solver-specific implementation details. Motivated
+by this, we reframe MIP formulation design as an
+optimization problem over the symbolic space of
+MIP formulations toward minimizing the down-
+stream computational cost:
+f⋆= arg min
+f∈F
+ϕ(f),
+(2)
+where ϕ(f) evaluates the computational cost (e.g.,
+runtime) of formulation f with a downstream MIP
+solver. This defines an optimization problem over
+a vast, discrete, and highly structured symbolic
+space, where the objective is non-differentiable
+and expensive to evaluate. Therefore, we frame the
+discovery of solver-efficient MIP formulations as
+an evolutionary search, with LLMs as operators to
+navigate the symbolic space of MIP formulations.
+3.2
+LLM-Guided Evolutionary Search
+FormuEvo takes a natural language description and
+a formulation template f0 as input, maintaining a
+population Pt = {f1, . . . , fN} of N candidate for-
+mulations at generation t. To effectively explore the
+vast and structured symbolic space F, FormuEvo
+employs an evolutionary loop coordinated by five
+specialized LLM modules: 1) a generator LLM that
+produces new candidate formulations, 2) a diagnos-
+tic LLM that interprets solver feedback to guide
+generation, 3) a repair LLM that debugs failed for-
+mulations, 4) a reflector LLM that abstracts evo-
+lution experience into structural memories, and 5)
+a distiller LLM that distills accumulated memory
+into transferable knowledge for unseen problems.
+The overall framework is illustrated in Fig. 2.
+Initialization.
+Given the problem description and
+a formulation template, the evolution starts by
+prompting the generator LLM to produce N candi-
+date formulations as the initial population P0. The
+
+
+--- Page 4 ---
+import          as
+       gurobipy    gp
+m = gp.Model()
+return m
+# To add variables
+# To add constraints
+# To set objective
+The Traveling Salesman
+Problem (TSP) aims to
+determine a closed-loop
+route ...
+Inputs
+Problem
+Description
+Formulation
+Template
+</>
+Initialization
+...
+Evolution with Diagnostic Guidance
+Formu 1
+</>
+Formu 2
+</>
+Formu N
+</>
+Generator
+LLM
+Parent 1
+</>
+Parent 2
+</>
+Diagonstic
+LLM
+Crossover
+Mutation
+Memory
+Retrieval
+Offspring
+Formulation
+</>
+×
+Generator
+LLM
+Diagonstic
+LLM
+Memory
+Retrieval
+Offspring
+Formulation
+</>
+Generator
+LLM
+Elite
+</>
+Evaluation
+MIP
+Solver
+Solver-Informed
+Feedback
+- Presolve info
+- Root node gap
+- B&B node num
+- ...
+Repair
+LLM
+If failed
+Select Top-N
+(by Runtime)
+Memory
+Library
+Reflector
+LLM
+...
+Distiller
+LLM
+Distilled
+Knowledge
+Transfer to   new problems
+Population
+(Formulation)
+Formu 1
+</>
+Formu 2
+</>
+Formu 3
+</>
+Formu N
+</>
+...
+- Runtime
+- Condition:...
+- Strategy:...
+- Effect:...
+Mem 1
+- Condition:...
+- Strategy:...
+- Effect:...
+Mem 2
+Figure 2: The overview of FormuEvo. FormuEvo iteratively evolves formulations through LLM-driven crossover,
+mutation, and repair toward better solver efficiency, guided by solver-informed diagnosis and structured memory.
+generator is encouraged to explore diverse formula-
+tion variants, such as alternative variables, logically
+equivalent but structurally different constraints, as
+well as variations in implementation details, to pre-
+vent premature convergence to sub-optimal local
+regions in the symbolic space.
+Evaluation.
+Each candidate formulation f ∈Pt
+is evaluated by executing it on a downstream MIP
+solver (e.g., Gurobi) over a set of instances of prob-
+lem p. If execution fails due to compilation errors
+or correctness violations (by verifying whether the
+solved objective values match the ground-truth op-
+timal value), the error tracebacks and solver logs
+are fed into a repair LLM, which attempts to fix
+the candidate formulation while preserving its in-
+tended modeling logic. Candidates exceeding the
+maximum repair budget are discarded, ensuring
+that all maintained formulations strictly belong to
+F. Notably, since the generator LLM may produce
+bold yet error-prone formulation variants, the repair
+operations can still be valuable for exploration.
+For each successfully evaluated formulation, its
+fitness is measured by the solver cost ϕ(f), com-
+puted as the shifted geometric mean (SGM) of per-
+instance runtimes, a standard evaluation metric for
+solver performance. Meanwhile, the reflector LLM
+abstracts the modeling decisions and solver feed-
+back from each evaluated formulation into reusable
+strategies, which are stored in a structured memory
+library for future retrieval (Section 3.4).
+Evolution.
+At each generation, FormuEvo pre-
+serves the top-N formulations according to their
+fitness. The next generation is produced through
+two LLM-based operators: crossover and mutation.
+For crossover, two distinct parent formulations
+are sampled from the current population Pt, with
+probability according to their fitness rank. They
+are first processed by the diagnostic LLM to pro-
+duce a structural diagnosis (Section 3.3). Guided
+by this diagnosis, the generator LLM produces an
+offspring formulation that integrates complemen-
+tary strengths or explores an orthogonal modeling
+direction. For mutation, a high-performing elite
+is selected. Similar to the crossover workflow, the
+diagnostic LLM analyzes the elite formulation and
+pinpoints specific refinement opportunities to ex-
+plore its structural neighborhood. Guided by this
+targeted diagnosis, the generator LLM then imple-
+ments directed refinements instead of blind pertur-
+bation to produce a mutated offspring.
+All offspring candidates are subject to the evalu-
+ation and repair procedure described above. This
+process iterates for T generations, to evolve the
+population toward increasingly solver-efficient for-
+mulations. The best formulation across all genera-
+tions is returned as the final formulation ˆf⋆.
+3.3
+Solver-Informed Diagnosis
+A key bottleneck of evolutionary search is that it
+overly relies on a scalar fitness signal to guide the
+evolution (Romera-Paredes et al., 2024; Shi et al.,
+2026). In our case, the runtime fitness can indicate
+whether a formulation is slow, but provides little
+insight into why it is slow, making the search space
+exploration highly sample-inefficient.
+To overcome this bottleneck, FormuEvo intro-
+duces a solver-informed diagnosis mechanism. We
+note that modern MIP solvers are not mere black-
+box evaluators; instead, they expose rich, fine-
+
+
+--- Page 5 ---
+grained internal statistics during optimization, such
+as presolving outcomes, relaxation quality, and
+branching dynamics (right of Fig. 2). These statis-
+tics reflect important solver behaviors and reveal
+structural bottlenecks that a single runtime cannot
+capture. For example, a weak relaxation may in-
+dicate excessive fractional solutions that require
+strengthening, while a large branch-and-bound tree
+may suggest a highly symmetric structure.
+To exploit this fine-grained feedback for targeted,
+solver-informed evolution, the diagnostic LLM
+takes the parent or elite formulations alongside
+their solver statistics to produce a structured verbal
+diagnosis before crossover or mutation. The diag-
+nosis identifies major computational bottlenecks,
+attributes them to specific structural properties, and
+proposes targeted directions for improvement. For
+instance, if parent fi is compact but suffers from
+weak relaxations that induce excessive branching,
+while parent fj yields stronger bounds but incurs
+costly presolving, the diagnostic LLM may guide
+the generator LLM to selectively incorporate the
+bound-tightening constraints of fj where they mat-
+ter most, while retaining the compact structure of
+fi elsewhere. This diagnosis functions as an in-
+terpretable verbal gradient, guiding the generator
+LLM toward principled, solver-informed structural
+improvement rather than undirected exploration.
+3.4
+Structured Memory
+We note that in long-horizon evolutionary search,
+LLMs are prone to redundant exploration, such as
+repeatedly revisiting failed modifications or forget-
+ting effective sub-structures that can be directly
+retrieved for future refinements. To mitigate this
+issue, FormuEvo incorporates a structured memory
+library to abstract, organize, and store both success-
+ful and failed experiences into reusable modeling
+strategies for guiding future evolution steps.
+Specifically, after each evaluation, the reflec-
+tor LLM abstracts the modeling modifications and
+solver feedback between parent and offspring for-
+mulations into a structured memory entry with
+three fields: 1) a condition that describes the prob-
+lem context and formulation characteristics under
+which the strategy was applied; 2) a strategy that
+captures the specific modeling decision or struc-
+tural modification; and 3) an effect that summarizes
+its observed impact on solver behavior and opti-
+mization performance. This structured format, as
+illustrated in Fig. 3, enables precise retrieval and
+reuse of prior experience. During subsequent evolu-
+Memory i
+Replace big-M constraints with tighter convex hull
+representations or problem-specific valid inequalities.
+</Strategy>
+Big-M constraints are present and the LP relaxation is
+weak with a large integrality gap.
+</Condition>
+[+] LP relaxation bound is tightened by 76%, and the
+number of branch-and-bound nodes is reduced
+</Effect>
+Figure 3: Example of a structured memory entry.
+tion, the diagnostic LLM retrieves relevant memory
+entries based on the current bottleneck conditions
+and incorporates them as additional context to en-
+rich the diagnosis, leveraging prior experience to
+prune the search space and avoid known pitfalls.
+While the memory efficiently accelerates the
+search within a single problem, we note that opti-
+mization problems often share common modeling
+logic and structural properties (e.g., routing logic,
+assignment constraints), even when their mathemat-
+ical formulations may appear different. Therefore,
+upon completion of the evolutionary search, we
+introduce a distiller LLM to summarize the accu-
+mulated memory library into high-level problem-
+agnostic knowledge by removing instance-specific
+details. This distilled knowledge base not only
+enables FormuEvo to perform efficient zero-shot
+transfer when tasked with entirely unseen optimiza-
+tion problems, but can also serve as a lightweight
+yet high-quality reasoning resource for bootstrap-
+ping smaller LLMs with domain expertise distilled
+from a more powerful model (see Section 4.3).
+4
+Experiments
+4.1
+Experiment Setup
+Benchmarks.
+We evaluate FormuEvo on classi-
+cal mixed-integer linear programming (MILP) and
+non-linear programming (MINLP) benchmarks, in-
+cluding: traveling salesman problem (TSP), job-
+shop scheduling problem (JSSP), bin packing prob-
+lem (BPP), capacitated facility location problem
+(CFLP), and non-linear quadratic assignment prob-
+lem (QAP). These problems span diverse optimiza-
+tion structures, covering routing, scheduling, pack-
+ing, location, and assignment. To further assess
+the capability of FormuEvo beyond well-studied
+textbook settings, we additionally consider two
+challenging and less explored optimization tasks:
+neural network verification (NNV) (Tjeng et al.,
+2019) and a mathematical challenge derived from
+
+
+--- Page 6 ---
+IMO 2025 Problem 6 (Art of Problem Solving
+Wiki, 2025), where human-designed formulation
+priors are limited or absent. Following prior prac-
+tices (Gleixner et al., 2021), instances for classical
+problems are categorized into three levels: Easy,
+Medium, and Hard. The Easy set consists of small
+instances used for training and validating in evolu-
+tion, while the Medium and Hard sets contain larger
+instances held out to test the final performance. For
+the two novel optimization problems, we use Easy
+instances for evolution, and evaluate final perfor-
+mance on a separate set of Hard instances. More
+detailed problem descriptions and the correspond-
+ing instance splits are provided in Appendix A.
+Baselines.
+We compare FormuEvo with two cat-
+egories of baselines. First, we include both stan-
+dard and state-of-the-art expert-designed formula-
+tions from the operations research literature, trac-
+ing the advancement of human expertise. For in-
+stance, TSP baselines range from the textbook
+MTZ formulation (Miller et al., 1960), to the
+stronger single-commodity flow (SCF) formula-
+tion (Gavish and Graves, 1978), up to the MCF-
+RLT (Balma et al., 2018), which achieves the the-
+oretically tightest known relaxation bound, repre-
+senting the current limits of human design. We
+also compare with recent LLM-based modeling ap-
+proaches, including ORLM (Huang et al., 2025)
+and StepORLM (Zhou et al., 2026), to demon-
+strate the gap between correctness-oriented gen-
+eration and efficiency-oriented evolution. Finally,
+we include EvoCut (Yazdani et al., 2025), an
+LLM-guided cutting-plane generation method, to
+highlight the difference between local formulation
+strengthening and our exploration of the broad sym-
+bolic space of MIP formulations. Additional in-
+troductions for the baseline formulations of each
+problem are also provided in Appendix A.
+Implementation.
+All experiments are conducted
+in Python using Gurobi 10.0 as the downstream
+MIP solver, with a single thread and default param-
+eters, on a server equipped with AMD EPYC 9654
+processors. We use a population size of N = 8
+and evolve for T = 5 generations, producing 8 off-
+spring per generation via crossover and mutation
+with a mutation rate of 0.3. Memory-augmented
+generation is applied with probability 0.7 to avoid
+search overfitting toward previously explored re-
+gions. Each candidate is evaluated on 100 Easy
+instances, with fitness measured by SGM runtime
+with a 1-second shift (Gleixner et al., 2021). Failed
+candidates receive one repair attempt. Operator
+prompts are provided in Appendix B.
+FormuEvo uses GPT-5.4-mini as the backbone
+LLM (a comparison across different backbones is
+reported in Section 4.5). ORLM and StepORLM
+use their fine-tuned LLMs, and are allowed the
+same number of generation attempts as FormuEvo
+for a fair comparison. For EvoCut, we adopt the
+reported formulation from their original paper on
+problems covered by their benchmark, noting that
+EvoCut uses a stronger backbone model than ours.
+For problems outside their benchmark suite, we
+rerun EvoCut using the same backbone and experi-
+mental settings as FormuEvo.
+4.2
+Main Results
+Tables 1, 2 present results on classical MILP and
+MINLP benchmarks and the two novel problems,
+respectively. We report three metrics: 1) “Time”,
+SGM runtime over 100 test instances and 5 indepen-
+dent runs, with a per-instance time limit of 600 sec-
+onds; 2) “Wins”, the number of instances on which
+a formulation achieves the best runtime among all
+formulations; and 3) “Solved”, the number of in-
+stances solved to optimality within the time limit.
+Overall, FormuEvo discovers formulations that
+outperform both expert-designed and LLM-based
+baselines, with acceleration of up to 5.5× over the
+best baselines. The best discovered formulations
+are presented in Appendix A. Moreover, FormuEvo
+attains the best runtime on the majority of instances
+across nearly all benchmarks, demonstrating ro-
+bustness across diverse optimization structures. Be-
+yond the numerical improvements, the results re-
+veal several important insights.
+First, FormuEvo successfully discovers formu-
+lations that outperform not only textbook models
+but also highly optimized expert-designed formu-
+lations, often by substantial margins. For instance,
+in TSP, while the human-designed MCF-RLT for-
+mulation has the theoretically tightest relaxation
+bound, it completely fails (0/100 solved) on Hard
+instances. This highlights a known but often over-
+looked fact: theoretical tightness does not neces-
+sarily translate to solver efficiency, as a heavily
+extended formulation can overwhelm the compu-
+tation in MIP solvers. In contrast, FormuEvo is
+efficiency-oriented and guided by solver-informed
+statistics, enabling targeted optimization toward the
+practical computational objective of solvers.
+Second, the results of ORLM and StepORLM
+further illustrate the gap between correctness and
+
+
+--- Page 7 ---
+Table 1: Performance on classical MILP and MINLP problems.
+Easy
+Medium
+Hard
+Formulation
+Time↓
+Wins↑
+Time↓
+Wins↑
+Time↓
+Wins↑
+Solved↑
+TSP
+MTZ (1960)
+0.9578
+0/100
+6.1826
+5/100
+95.1315
+0/100
+62/100
+SCF (1978)
+0.3079
+3/100
+1.0065
+10/100
+8.3315
+3/100
+100/100
+MCF-RLT (2018)
+3.2729
+0/100
+84.1649
+0/100
+600.0570
+0/100
+0/100
+ORLM (2025)
+0.9575
+2/100
+6.3270
+0/100
+92.5953
+0/100
+62/100
+StepORLM (2026)
+1.7667
+0/100
+17.0081
+0/100
+173.8792
+0/100
+64/100
+EvoCut (2025)
+0.5268
+8/100
+2.5013
+6/100
+13.8359
+17/100
+92/100
+FormuEvo (Ours)
+0.1410 (+54.2%) 87/100
+0.5640 (+44.0%)
+79/100
+3.9469 (+52.6%)
+80/100 100/100
+JSSP
+Disj. (1960)
+0.3264
+19/100
+1.8389
+9/100
+17.6653
+25/100
+98/100
+Enh. Disj. (2016)
+0.4886
+1/100
+7.9405
+0/100
+158.1492
+0/100
+77/100
+ORLM (2025)
+600.0012
+0/100
+600.0032
+0/100
+600.0019
+0/100
+0/100
+StepORLM (2026)
+0.3040
+28/100
+1.7270
+22/100
+18.7024
+20/100
+99/100
+EvoCut (2025)
+0.3005
+19/100
+1.7627
+20/100
+18.1329
+14/100
+98/100
+FormuEvo (Ours)
+0.2781 (+7.5%)
+33/100
+1.5316 (+11.3%)
+49/100 15.4237 (+12.7%) 41/100
+98/100
+BPP
+Kant. (1960)
+18.6428
+0/100
+191.9222
+0/100
+351.7605
+0/100
+28/100
+AF (1999)
+0.2710
+0/100
+0.9930
+1/100
+4.9778
+1/100
+100/100
+VPSolver (2016)
+0.0610
+53/100
+0.4064
+40/100
+1.4425
+38/100 100/100
+ORLM (2025)
+18.3614
+0/100
+287.7057
+0/100
+341.1659
+0/100
+24/100
+StepORLM (2026)
+12.3430
+0/100
+117.0032
+0/100
+95.0336
+1/100
+42/100
+EvoCut (2025)
+3.0279
+0/100
+26.7969
+4/100
+29.0496
+5/100
+60/100
+FormuEvo (Ours)
+0.0543 (+11.0%) 47/100
+0.3418 (+15.9%)
+55/100
+0.8384 (+41.9%)
+55/100 100/100
+CFLP
+Agg. (1965)
+2.7178
+19/100
+22.5520
+8/100
+87.3078
+6/100
+96/100
+Disagg. (1989)
+4.8283
+0/100
+31.4982
+0/100
+113.4126
+1/100
+95/100
+Enh. Disagg. (2021)
+5.0126
+0/100
+33.1480
+0/100
+113.5033
+1/100
+95/100
+ORLM (2025)
+2.8439
+0/100
+24.0395
+0/100
+88.4319
+2/100
+95/100
+StepORLM (2026)
+3.2663
+1/100
+26.8000
+3/100
+104.8201
+3/100
+94/100
+EvoCut (2025)
+2.7698
+5/100
+17.1088
+14/100
+59.4309
+16/100 100/100
+FormuEvo (Ours)
+1.6258 (+40.2%) 75/100 11.6952 (+31.6%) 75/100 44.3447 (+25.4%) 71/100 100/100
+QAP
+KB Quad. (1957)
+9.9323
+0/100
+23.7309
+0/100
+538.7275
+0/100
+28/100
+McC. Lin. (1976)
+9.5458
+0/100
+67.9480
+0/100
+600.0062
+0/100
+0/100
+AJ Lin. (1994)
+1.2154
+1/100
+8.0087
+0/100
+237.7423
+0/100
+97/100
+XY-KB Lin. (2006)
+0.4044
+28/100
+1.6163
+25/100
+37.8213
+28/100 100/100
+IPQAPR (2010)
+0.3929
+35/100
+1.6883
+26/100
+40.2989
+19/100 100/100
+ORLM (2025)*
+-
+-
+-
+-
+-
+-
+-
+StepORLM (2026)
+9.7489
+0/100
+68.3794
+0/100
+600.0061
+0/100
+0/100
+EvoCut (2025)
+10.1303
+0/100
+23.9718
+0/100
+538.5478
+0/100
+28/100
+FormuEvo (Ours)
+0.3936 (-0.2%)
+36/100
+1.5648 (+3.2%)
+49/100
+34.5034 (+8.8%)
+53/100 100/100
+*ORLM failed to produce a correct formulation for QAP.
+efficiency. Although they successfully generate
+correct and executable formulations on standard
+MILPs, their outputs largely remain naive textbook
+formulations, which are weak and scale poorly in
+practice. Moreover, both approaches fail to pro-
+duce valid formulations for the novel NNV and
+IMO problems. This also underscores the limited
+generalization of fine-tuning approaches to more
+complex problems beyond their training distribu-
+tion. See Appendix C.5 for further discussion.
+Third, EvoCut, which strengthens fixed formula-
+tions through LLM-generated cutting planes, yields
+moderate improvements over baseline formulations
+but remains fundamentally limited by the underly-
+
+
+--- Page 8 ---
+Table 2: Performance on two novel MIP problems.
+Formulation
+Time↓
+Wins↑
+Solved↑
+NNV
+Std. Formu. (2019)
+69.5200
+9/100
+71/100
+ORLM / StepORLM
+-
+-
+-
+EvoCut (2025)
+67.6093
+13/100
+73/100
+FormuEvo (Ours)
+21.4139
+(+68.3%)
+78/100
+86/100
+IMO
+Std. Formu. (2025)
+114.0912
+0/4
+3/4
+ORLM / StepORLM
+-
+-
+-
+EvoCut (2025)
+99.4400
+0/4
+3/4
+FormuEvo (Ours)
+17.9341
+(+82.0%)
+4/4
+4/4
+Table 3: Ablation study of FormuEvo components.
+Method
+Easy
+Medium
+Hard
+TSP
+Best Baseline
+0.3079
+1.0065
+8.3315
+FormuEvo
+0.1410
+0.5640
+3.9469
+w/o Memory
+0.1776
+0.6102
+4.6649
+w/o Diagnosis
+0.2308
+0.7350
+6.5207
+JSSP
+Best Baseline
+0.3005
+1.7270
+17.6653
+FormuEvo
+0.2781
+1.5316
+15.4237
+w/o Memory
+0.2846
+1.5698
+16.3223
+w/o Diagnosis
+0.3048
+1.7648
+18.0159
+ing model structure. For instance, on BPP, EvoCut
+improves upon standard formulations but remains
+significantly weaker than both VPSolver and For-
+muEvo, because the primary bottleneck of BPP lies
+in its assignment structure rather than LP relaxation
+strength. Similarly, on QAP, the standard quadratic
+formulation defines a Birkhoff polytope that al-
+ready represents the convex hull (von Neumann,
+1953), and EvoCut fails to achieve any improve-
+ment through strengthening cuts. In contrast, For-
+muEvo breaks through this limitation by searching
+over the entire symbolic space of MIP formulations,
+enabling the discovery of structural reformulations
+such as alternative linearizations and variable exten-
+sion that fundamentally alter the search landscape
+rather than merely modifying a fixed one.
+4.3
+Transfer Performance
+We evaluate the transferability of distilled knowl-
+edge to unseen problems and smaller LLMs. Fig. 4
+shows evolution trajectories using a smaller LLM
+(GPT-5.4-nano), with distilled knowledge aggre-
+gated from all problems except the target. With-
+out transfer, GPT-5.4-nano exhibits substantially
+slower convergence and higher final runtime, strug-
+gling to move beyond the baseline formulations. In
+contrast, when augmented with the distilled knowl-
+0
+8
+16
+24
+32
+40
+48
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Runtime
+TSP
+gpt-5.4-mini (original)
+gpt-5.4-nano (w/ trans)
+gpt-5.4-nano (w/o trans)
+0
+8
+16
+24
+32
+40
+48
+0.27
+0.28
+0.29
+0.30
+0.31
+0.32
+0.33
+0.34
+JSSP
+gpt-5.4-mini (original)
+gpt-5.4-nano (w/ trans)
+gpt-5.4-nano (w/o trans)
+Num of generated formulations
+Figure 4: Transfer performance on smaller LLMs.
+Table 4: Impact of different backbone LLMs.
+Method
+Cost
+Easy
+Medium
+Hard
+TSP
+Best Baseline
+-
+0.3079
+1.0065
+8.3315
+GPT-5.4-mini
+∼$2
+0.1410
+0.5640
+3.9469
+Claude-Sonnet-4.6
+∼$10
+0.1017
+0.4777
+4.0148
+DeepSeek-V4-Flash ∼$0.5 0.1498
+0.6283
+5.3068
+JSSP
+Best Baseline
+-
+0.3005
+1.7270
+17.6653
+GPT-5.4-mini
+∼$3
+0.2781
+1.5316
+15.4237
+Claude-Sonnet-4.6
+∼$16
+0.2808
+1.5319
+15.8340
+DeepSeek-V4-Flash ∼$0.8 0.3050
+1.6399
+16.1327
+edge, GPT-5.4-nano significantly narrows the gap,
+achieving convergence trajectories and final per-
+formance close to the larger GPT-5.4-mini model.
+These results suggest that the distilled knowledge
+can serve as a lightweight but effective reasoning
+source, compensating for the capacity of smaller
+models by providing structured domain expertise
+that would otherwise be difficult to infer indepen-
+dently, which offers a practical pathway toward
+strong MIP formulation discovery at lower costs.
+4.4
+Ablation Study on Key Components
+We analyze the contributions of two key compo-
+nents: solver-informed diagnosis and memory, by
+comparing FormuEvo against two ablated variants.
+As shown in Table 3, removing either component
+leads to clear performance degradation, indicating
+that the diagnosis mechanism plays a crucial role
+in providing the directional signal for FormuEvo,
+while the memory reuse also facilitates the evolu-
+tion by improving the search efficiency.
+4.5
+Impact of Different LLM Backbones
+We further evaluate FormuEvo with different back-
+bone LLMs (Table 4). All three consistently out-
+perform the best baselines on both problems, with
+only modest differences in formulation quality and
+
+
+--- Page 9 ---
+generalization, where no backbone model consis-
+tently dominates across all settings. These results
+indicate that the gains stem primarily from the evo-
+lutionary framework and are robust to the choice of
+backbone. We adopt GPT-5.4-mini as the default
+because it offers the best overall trade-off between
+performance and API cost.
+Additional analyses on different downstream
+solvers, backbone LLMs, and evolutionary hyper-
+parameters are provided in Appendix C.2 - C.4.
+5
+Conclusions
+We presented FormuEvo, an LLM-guided evolu-
+tionary framework for automatically discovering
+solver-efficient MIP formulations, which incor-
+porates solver-informed diagnosis and structured
+memory for directed and systematic improvement.
+Experiments show that FormuEvo successfully dis-
+covers formulations that significantly outperform
+state-of-the-art baselines, accelerating modern MIP
+solvers by up to 5.5×. Notably, FormuEvo is trans-
+ferable to unseen problems and smaller LLMs by
+distilling a generalizable knowledge base, demon-
+strating its generalizability and applicability.
+Limitations
+FormuEvo focuses on discovering static MIP for-
+mulations that can be directly solved by off-the-
+shelf general-purpose MIP solvers, which repre-
+sents the most commonly adopted approach in real-
+world practice. However, for many large-scale or
+highly complex optimization problems, advanced
+problem-specific solution approaches in operations
+research often rely on dynamic relaxation or de-
+composition algorithms, such as column gener-
+ation, which iteratively adds variables by solv-
+ing a pricing sub-problem, and Benders decom-
+position, which relaxes the original problem and
+then alternates between a master problem and sub-
+problems to progressively tighten the formulation.
+These methods typically require iterative interac-
+tions between master problems and sub-problems,
+along with dynamic generation of variables and
+constraints during the solving process. In such
+approaches, formulation design and algorithm de-
+velopment are inherently coupled: the effective-
+ness of the formulation depends on the decompo-
+sition strategy, while the decomposition procedure
+itself is tightly determined by the underlying for-
+mulation structure. Extending FormuEvo beyond
+static formulations to jointly evolve reformulations
+and decomposition-based solution algorithms is a
+promising but substantially more challenging direc-
+tion. We leave this extension for future work.
+Acknowledgments
+This work was done during the first author’s intern-
+ship at Singapore Management University. This
+work is supported in part by the BNRist Project
+(No: BNR2024TD03003), the National Natural
+Science Foundation of China (No: 42327901),
+and the Program of China Scholarship Council
+(No: 202506210230). This research is supported
+by the National Research Foundation Singapore
+under the AI Singapore Programme (AISG Award
+No: AISG3-RPGV-2025-017). We would also like
+to thank the AI4Opt group for helpful discussions,
+and the reviewers for their valuable feedback.
+References
+Tobias Achterberg and Roland Wunderling. 2013.
+Mixed integer programming: Analyzing 12 years of
+progress. In Facets of Combinatorial Optimization,
+pages 449–481. Springer.
+Warren P Adams and Terri A Johnson. 1994.
+Im-
+proved linear programming-based lower bounds for
+the quadratic assignment problem. DIMACS Series
+in Discrete Mathematics and Theoretical Computer
+Science, 16:43–77.
+Ali AhmadiTeshnizi, Wenzhi Gao, and Madeleine Udell.
+2024. OptiMUS: Scalable optimization modeling
+with (MI)LP solvers and large language models. In
+International Conference on Machine Learning.
+Art of Problem Solving Wiki. 2025. 2025 IMO Problem
+6.
+https://artofproblemsolving.com/wiki/
+index.php/2025_IMO_Problems/Problem_6. Ac-
+cessed: May 2026.
+Pasquale Avella, Maurizio Boccia, Sara Mattia, and Fab-
+rizio Rossi. 2021. Weak flow cover inequalities for
+the capacitated facility location problem. European
+Journal of Operational Research, 289(2):485–494.
+Michel Louis Balinski. 1965. Integer programming:
+Methods, uses, computations. Management Science,
+12(3):253–313.
+Ali Balma, Safa Ben Salem, Mehdi Mrad, and Talel
+Ladhari. 2018. Strong multi-commodity flow formu-
+lations for the asymmetric traveling salesman prob-
+lem. European Journal of Operational Research,
+271(1):72–79.
+Robert E Bixby. 2012. A brief history of linear and
+mixed-integer programming computation. In Opti-
+mization Stories, pages 107–121.
+
+
+--- Page 10 ---
+Filipe Brandao and Joao Pedro Pedroso. 2016. Bin
+packing and related problems: General arc-flow for-
+mulation with graph compression.
+Computers &
+Operations Research, 69:56–67.
+François Clautiaux and Ivana Ljubi´c. 2025. Last fifty
+years of integer linear programming: A focus on
+recent practical advances. European Journal of Op-
+erational Research, 324(3):707–731.
+Michele Conforti, Gérard Cornuéjols, and Giacomo
+Zambelli. 2013. Extended formulations in combina-
+torial optimization. Annals of Operations Research,
+204(1):97–143.
+Gérard Cornuéjols. 2008. Valid inequalities for mixed
+integer linear programs.
+Mathematical Program-
+ming, 112(1):3–44.
+Bezalel Gavish and Stephen C Graves. 1978. The trav-
+elling salesman problem and related problems. MIT
+Operations Research Center.
+Dongdong Ge, Qi Huangfu, Zizhuo Wang, Jian Wu, and
+Yinyu Ye. 2022. Cardinal optimizer (COPT) user
+guide. arXiv preprint arXiv:2208.14314.
+Ambros Gleixner, Gregor Hendel, Gerald Gamrath, To-
+bias Achterberg, Michael Bastubbe, Timo Berthold,
+Philipp Christophel, Kati Jarck, Thorsten Koch, Jeff
+Linderoth, Marco Lübbecke, Hans D. Mittelmann,
+Derya Ozyurt, Ted K. Ralphs, Domenico Salvagnin,
+and Yuji Shinano. 2021. MIPLIB 2017: Data-driven
+compilation of the 6th mixed-integer programming
+library. Mathematical Programming Computation,
+13(3):443–490.
+Oguzhan Gungordu, Siheng Xiong, and Faramarz Fekri.
+2026. Pathwise: Planning through world model for
+automated heuristic design via self-evolving LLMs.
+In International Conference on Machine Learning.
+Gurobi. 2026. Gurobi Optimizer Reference Manual.
+https://www.gurobi.com. Accessed: May 2026.
+Christopher
+Hojny,
+Mathieu
+Besançon,
+Ksenia
+Bestuzheva, Sander Borst, João Dionísio, Johannes
+Ehls, Leon Eifler, Mohammed Ghannam, Ambros
+Gleixner, Adrian Göß, Alexander Hoen, Jacob von
+Holly-Ponientzietz, Rolf van der Hulst, Dominik
+Kamp, Thorsten Koch, Kevin Kofler, Jurgen Lentz,
+Marco Lübbecke, Stephen J. Maher, and 15 others.
+2025. The SCIP optimization suite 10.0. Technical
+report, Optimization Online.
+Zhinan Hou, Xingchen Li, Yankai Zhang, Tianxun Li,
+and Keyou You. 2026. LLM4Branch: Large lan-
+guage model for discovering efficient branching poli-
+cies of integer programs. In International Conference
+on Machine Learning.
+Chenyu Huang, Zhengyang Tang, Shixi Hu, Ruoqing
+Jiang, Xin Zheng, Dongdong Ge, Benyou Wang, and
+Zizhuo Wang. 2025. ORLM: A customizable frame-
+work in training large models for automated optimiza-
+tion modeling. Operations Research, 73(6):2986–
+3009.
+Leonid V Kantorovich. 1960. Mathematical methods
+of organizing and planning production. Management
+Science, 6(4):366–422.
+Tjalling C Koopmans and Martin Beckmann. 1957. As-
+signment problems and the location of economic ac-
+tivities. Econometrica: Journal of the Econometric
+Society, pages 53–76.
+Wen-Yang Ku and J Christopher Beck. 2016. Mixed
+integer programming models for job shop scheduling:
+A computational analysis. Computers & Operations
+Research, 73:165–173.
+Janny MY Leung and Thomas L Magnanti. 1989.
+Valid inequalities and facets of the capacitated plant
+location problem.
+Mathematical Programming,
+44(1):271–291.
+Fei Liu, Tong Xialiang, Mingxuan Yuan, Xi Lin, Fu Luo,
+Zhenkun Wang, Zhichao Lu, and Qingfu Zhang.
+2024. Evolution of heuristics: Towards efficient au-
+tomatic algorithm design using large language model.
+In International Conference on Machine Learning.
+Alan S Manne. 1960. On the job-shop scheduling prob-
+lem. Operations Research, 8(2):219–223.
+François Margot. 2009. Symmetry in integer linear
+programming.
+50 Years of Integer Programming
+1958–2008: From the Early Years to the State-of-the-
+Art, pages 647–686.
+Garth P McCormick. 1976. Computability of global
+solutions to factorable nonconvex programs: Part
+I—convex underestimating problems. Mathematical
+Programming, 10(1):147–175.
+Clair E Miller, Albert W Tucker, and Richard A Zemlin.
+1960. Integer programming formulation of traveling
+salesman problems. Journal of the ACM, 7(4):326–
+329.
+George L Nemhauser and Laurence A Wolsey. 1988.
+Integer and Combinatorial Optimization, volume 18.
+Wiley New York.
+Alexander Novikov, Ngân V˜u, Marvin Eisenberger, Em-
+ilien Dupont, Po-Sen Huang, Adam Zsolt Wagner,
+Sergey Shirobokov, Borislav Kozlovskii, Francisco
+J. R. Ruiz, Abbas Mehrabian, M. Pawan Kumar, Abi-
+gail See, Swarat Chaudhuri, George Holland, Alex
+Davies, Sebastian Nowozin, Pushmeet Kohli, and
+Matej Balog. 2025. AlphaEvolve: A coding agent for
+scientific and algorithmic discovery. arXiv preprint
+arXiv:2506.13131.
+Cheng Qian, Hongyi Du, Hongru Wang, Xiusi Chen,
+Yuji Zhang, Avirup Sil, Chengxiang Zhai, Kathleen
+McKeown, and Heng Ji. 2025.
+ModelingAgent:
+Bridging LLMs and mathematical modeling for real-
+world challenges. In Findings of the Association
+for Computational Linguistics: EMNLP 2025, pages
+1599–1633.
+
+
+--- Page 11 ---
+Rindra Ramamonjison, Haley Li, Timothy Yu, Shiqi He,
+Vishnu Rengan, Amin Banitalebi-Dehkordi, Zirui
+Zhou, and Yong Zhang. 2022. Augmenting opera-
+tions research with auto-formulation of optimization
+models from problem descriptions. In Conference on
+Empirical Methods in Natural Language Processing:
+Industry Track, pages 29–62.
+Bernardino
+Romera-Paredes,
+Mohammadamin
+Barekatain,
+Alexander Novikov,
+Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R.
+Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar
+Fawzi, Pushmeet Kohli, and Alhussein Fawzi. 2024.
+Mathematical discoveries from program search with
+large language models. Nature, 625(7995):468–475.
+Domenico Salvagnin. 2018. Symmetry breaking in-
+equalities from the schreier-sims table. In Interna-
+tional Conference on the Integration of Constraint
+Programming, Artificial Intelligence, and Operations
+Research, pages 521–529. Springer.
+Yiding Shi, Jianan Zhou, Wen Song, Jieyi Bi, Yaoxin
+Wu, Zhiguang Cao, and Jie Zhang. 2026. Generaliz-
+able heuristic generation through LLMs with meta-
+optimization. In International Conference on Learn-
+ing Representations.
+Marius M Solomon. 1987. Algorithms for the vehicle
+routing and scheduling problems with time window
+constraints. Operations Research, 35(2):254–265.
+Eric Taillard. 1993.
+Benchmarks for basic schedul-
+ing problems. European Journal of Operational Re-
+search, 64(2):278–285.
+Vincent Tjeng, Kai Y. Xiao, and Russ Tedrake. 2019.
+Evaluating robustness of neural networks with mixed
+integer programming. In International Conference
+on Learning Representations.
+JM Valério de Carvalho. 1999.
+Exact solution of
+bin-packing problems using column generation and
+branch-and-bound. Annals of Operations Research,
+86(0):629–659.
+Juan Pablo Vielma. 2015. Mixed integer linear pro-
+gramming formulation techniques. SIAM Review,
+57(1):3–57.
+John von Neumann. 1953. A certain zero-sum two-
+person game equivalent to the optimal assignment
+problem. Contributions to the Theory of Games II,
+28:5–12.
+Yilin Wang, Heng Zhou, Dongxing Mao, Linjie Li, Jin-
+gru Tan, Haochen Han, Zhengyuan Yang, Alex Jin-
+peng Wang, and Min Li. 2026. OR-PRM: A process
+reward model for algorithmic problem in operations
+research. In International Conference on Learning
+Representations.
+Zhiyuan Wang, Bokui Chen, Yinya Huang, Qingxing
+Cao, Ming He, Jianping Fan, and Xiaodan Liang.
+2025. ORMind: A cognitive-inspired end-to-end
+reasoning framework for operations research. In An-
+nual Meeting of the Association for Computational
+Linguistics: Industry Track, pages 104–131.
+Laurence A Wolsey. 2020. Integer Programming. John
+Wiley & Sons.
+Yong Xia and Ya-Xiang Yuan. 2006. A new lineariza-
+tion method for quadratic assignment problems. Op-
+timisation Methods and Software, 21(5):805–818.
+Milad Yazdani, Mahdi Mostajabdaveh, Samin Aref, and
+Zirui Zhou. 2025. EvoCut: Strengthening integer pro-
+grams via evolution-guided language models. arXiv
+preprint arXiv:2508.11850.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto,
+Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and Guo-
+jie Song. 2024. ReEvo: Large language models as
+hyper-heuristics with reflective evolution. Advances
+in Neural Information Processing Systems, 37:43571–
+43608.
+Huigen Ye, Hua Xu, An Yan, and Yaoyang Cheng. 2025.
+Large language model-driven large neighborhood
+search for large-scale MILP problems. In Interna-
+tional Conference on Machine Learning.
+Huizhen Zhang, Cesar Beltran-Royo, and Miguel Con-
+stantino. 2010. Effective formulation reductions for
+the quadratic assignment problem. Computers &
+Operations Research, 37(11):2007–2016.
+Ni Zhang, Zhiguang Cao, Jianan Zhou, Cong Zhang,
+and Yew-Soon Ong. 2026. An agentic framework
+with LLMs for solving complex vehicle routing prob-
+lems. In International Conference on Learning Rep-
+resentations.
+Chenyu Zhou, Tianyi Xu, Jianghao Lin, and Dongdong
+Ge. 2026. StepORLM: A self-evolving framework
+with generative process supervision for operations re-
+search language models. In International Conference
+on Learning Representations.
+
+
+--- Page 12 ---
+A
+Problems and Formulations
+This appendix details the benchmark problems used
+in our experiments, including the descriptions, stan-
+dard formulations, baselines, and the best formula-
+tions discovered by FormuEvo. Detailed instance
+splits in the experiments are shown in Table 5.
+Table 5: Instance splits for experiments.
+Problem Category
+Configuration
+TSP
+Easy
+30 cities
+Medium
+50 cities
+Hard
+100 cities
+JSSP
+Easy
+8 jobs, 8 machines
+Medium
+10 jobs, 10 machines
+Hard
+12 jobs, 12 machines
+BPP
+Easy
+100 items, 150 capacity
+Medium
+150 items, 300 capacity
+Hard
+200 items, 400 capacity
+CFLP
+Easy
+100 facilities, 200 customers
+Medium
+200 facilities, 400 customers
+Hard
+300 facilities, 600 customers
+QAP
+Easy
+8 facilities / locations
+Medium
+9 facilities / locations
+Hard
+10 facilities / locations
+NNV
+Easy
+MLP dim [20, 80, 10]
+Hard
+MLP dim [40, 160, 20]
+IMO
+Easy
+Grid size {3, 4, 5, 6}
+Hard
+Grid size {7, 8, 9, 10}
+A.1
+Traveling Salesman Problem (TSP)
+Problem description
+The traveling salesman problem aims to determine
+an optimal Hamiltonian cycle (route) to visit a set
+of n cities exactly once and return to the starting
+city. The problem is defined on a complete graph
+where each pair of cities (i, j) is associated with a
+travel distance (or cost) cij. The decision involves
+sequencing the visits to ensure that every city is
+entered exactly once and exited exactly once. The
+selected route must form a single continuous tour
+covering all n cities. Any disconnected, smaller
+loops (subtours) that do not include all cities are
+strictly prohibited. The objective is to minimize
+the total travel distance of the complete tour.
+Standard MIP formulation
+• V = {1, 2, . . . , n}: the set of n cities.
+• C = V \ {1}: the set of cities except city 1.
+• cij: travel distance from city i to city j.
+• xij: decision variable that equals 1 if and only if
+the route travels directly from node i to node j.
+• ui: auxiliary ordering variable used for subtour
+elimination, where u1 = 1.
+Below is the standard MTZ formulation for TSP:
+min
+n
+X
+i=1
+n
+X
+j=1, j̸=i
+cijxij
+s.t.
+n
+X
+j=1, j̸=i
+xij = 1,
+∀i ∈V,
+n
+X
+i=1, i̸=j
+xij = 1,
+∀j ∈V,
+ui −uj ≤(n −1)(1 −xij), ∀i, j ∈C, i̸ = j,
+xij ∈{0, 1},
+∀i, j ∈V, i̸ = j,
+2 ≤ui ≤n,
+∀i ∈C.
+Baseline formulations
+• MTZ: The standard formulation using continu-
+ous auxiliary sequencing variables to enforce a
+strictly increasing visit order for subtour elimina-
+tion, as described above.
+• SCF: A flow-based formulation that eliminates
+subtours by tracking a single continuous flow
+where the depot dispatches n −1 units and each
+subsequent city consumes exactly one unit.
+• MCF-RLT: An advanced flow-based formula-
+tion using reformulation-linearization technique,
+which linearizes higher-order products of flow
+and precedence variables, achieving the theoreti-
+cally tightest known relaxation bound.
+• ORLM: Generated by ORLM, same as MTZ.
+• StepORLM: Generated by StepORLM, based on
+MTZ with explicit self-loop elimination.
+• EvoCut: A strengthened MTZ with lifted order-
+ing constraints, envelope bounds, and elimination
+of 2-cycles and depot-associated short cycles.
+FormuEvo formulation
+• ¯cij = cij + cji: bidirectional distance of (i, j).
+• fij: non-negative flow variable on arc (i, j), de-
+fined for i, j ∈C, i̸ = j.
+The FormuEvo formulation preserves the global
+connectivity guarantee of SCF formulation while
+selectively incorporating small lifted DFJ subtour
+elimination cuts as local strengthening constraints:
+min
+n
+X
+i=1
+n
+X
+j=1, j̸=i
+cijxij
+s.t.
+n
+X
+j=1, j̸=i
+xij = 1,
+∀i ∈V,
+
+
+--- Page 13 ---
+n
+X
+i=1, i̸=j
+xij = 1,
+∀j ∈V,
+xij + xji ≤1,
+∀i, j ∈V, i < j,
+X
+i∈S
+X
+j∈S, j̸=i
+xij ≤|S| −1,
+∀S ∈F,
+(n −1) · x1j +
+X
+i∈C\{j}
+fij −
+X
+k∈C\{j}
+fjk = 1,
+∀j ∈C,
+xij ≤fij ≤(n −2) · xij,
+∀i, j ∈C, i̸ = j,
+xij ∈{0, 1},
+∀i, j ∈V, i̸ = j,
+fij ≥0,
+∀i, j ∈C, i̸ = j.
+The subtour elimination family F is defined as the
+set of all unique collection consisting of:
+• Depot 3-cuts: {1, a, b}, ∀a, b ∈C, a < b.
+• Local 3-cuts: For each i ∈C, let NK(i) be the
+K = min(4, n −2) nearest neighbors of i w.r.t.
+¯cij. For every pair {a, b} ⊆NK(i), add the set
+{i, a, b} if |{i, a, b}| < n.
+• Depot 4-cuts (if n > 4): Let NK(1) be the K =
+min(6, n−1) nearest neighbors of the depot w.r.t.
+¯c1j. For every triple {a, b, c} ⊆NK(1), add the
+set {1, a, b, c} if |{1, a, b, c}| < n.
+• Local 4-cuts (if n > 4): For each i ∈C and
+every triple {a, b, c} ⊆NK(i), K = min(4, n−
+2), add the set {i, a, b, c} if |{i, a, b, c}| < n.
+A.2
+Job-Shop Scheduling Problem (JSSP)
+Problem description
+The job-shop scheduling problem aims to deter-
+mine the optimal scheduling of a set of n jobs on a
+set of m machines. Each job i consists of m opera-
+tions, where each operation must be processed on
+a distinct machine. The processing order of these
+operations is predefined for each job, representing
+its technological order. Each machine can process
+at most one operation at a time, and preemption is
+strictly prohibited. The decision involves determin-
+ing the exact start time of each operation such that
+both machine capacity constraints and job prece-
+dence constraints are satisfied. The objective is to
+minimize the makespan, defined as the completion
+time of the last operation across all jobs.
+Standard MIP formulation
+• J = {1, . . . , n}: the set of n jobs.
+• M = {1, . . . , m}: the set of m machines (also
+the number of operations per job).
+• µij ∈M: the machine that processes the j-th
+operation of job i.
+• πi(k) ∈M: the index of the operation in job i
+that executes on machine k, i.e., µi,πi(k) = k.
+• pij: processing time of j-th operation of job i.
+• zi1i2k: binary variable that equals 1 if and only if
+job i1 is processed before job i2 on machine k.
+• sij: decision variable representing the start time
+of the j-th operation of job i.
+• Cmax: decision variable representing makespan.
+• L: a large enough constant, set to P
+i∈J, j∈M pij.
+Below is the disjunctive formulation for JSSP:
+min Cmax
+s.t. si,j+1 ≥sij + pij, ∀i ∈J, ∀j ∈M \ {m},
+si1,πi1(k) + pi1,πi1(k) ≤si2,πi2(k)+
+L · (1 −zi1i2k), ∀i1, i2 ∈J, i1 < i2, k ∈M,
+si2,πi2(k) + pi2,πi2(k) ≤si1,πi1(k) + L · zi1i2k,
+∀i1, i2 ∈J, i1 < i2, k ∈M,
+Cmax ≥sij + pij,
+∀i ∈J, j ∈M,
+zi1i2k ∈{0, 1}, ∀i1, i2 ∈J, i1 < i2, k ∈M.
+sij ≥0,
+∀i ∈J, j ∈M,
+Cmax ≥0.
+Baseline formulations
+• Disj.: The standard disjunctive formulation using
+big-M constraints for non-overlapping require-
+ments, as described above.
+• Enh. Disj.: An enhanced disjunctive formulation
+that replaces standard big-M inequalities with
+continuous surplus variables to explicitly track
+and bound the idle time between operations.
+• ORLM: Generated by ORLM, a time-indexed for-
+mulation that enforces the precedence and non-
+overlapping requirements using time constraints.
+• StepORLM: Generated by StepORLM, same as
+the disjunctive formulation.
+• EvoCut: A strengthened disjunctive formulation
+that tightens the linear relaxation with static valid
+inequalities derived from maximum job lengths
+and machine-level critical-path bounds.
+FormuEvo formulation
+• sij = Pj−1
+l=1 pil: lower bound on sij
+• σij = Pm
+l=j pil: tail processing time from the
+j-th operation of job i onward.
+• ¯sij = max(sij, ˆC −σij): upper bound on sij,
+where ˆC is a heuristic makespan.
+• µi = (µi1, . . . , µim): the machine assignment
+vector of job i.
+
+
+--- Page 14 ---
+• pi = (pi1, . . . , pim): the processing time vector
+of job i.
+• ωj = m −j + 1: symmetry-breaking weight for
+operation j.
+• yi1i2k: binary disjunctive variable on machine k,
+defined only for free pairs (pairs whose ordering
+cannot be inferred from bounds).
+• Labk = ¯sa,πa(k)+pa,πa(k)−sb,πb(k): pair-specific
+tight big-M for precedence a →b.
+The FormuEvo formulation strengthens the dis-
+junctive model through tight variable bounds, tail-
+based makespan constraints, symmetry-breaking
+constraints, and bound-driven fixing of resolvable
+disjunctions to reduce binary variables.
+min Cmax
+s.t. si,j+1 ≥si,j + pij, ∀i ∈J, ∀j ∈M \ {m},
+Cmax ≥si,j + σij,
+∀i ∈J, ∀j ∈M,
+m
+X
+j=1
+ωj si1,j ≤
+m
+X
+j=1
+ωj si2,j,
+∀i1, i2 ∈J with µi1 = µi2, pi1 = pi2,
+si1,πi1(k) + pi1,πi1(k) ≤si2,πi2(k),
+∀k ∈M, ∀(i1, i2) ∈Pk,
+si1,πi1(k) + pi1,πi1(k) ≤si2,πi2(k)+
+Li1i2k · (1 −yi1i2k), ∀k ∈M, ∀(i1, i2) ∈Yk,
+si2,πi2(k) + pi2,πi2(k) ≤si1,πi1(k)+
+Li2i1k · yi1i2k, ∀k ∈M, ∀(i1, i2) ∈Yk,
+sij ≤sij ≤¯sij,
+∀i ∈J, ∀j ∈M,
+yi1i2k ∈{0, 1},
+∀k ∈M, ∀(i1, i2) ∈Yk.
+where Pk and Yk are defined as follows. For each
+machine k, consider the operations processed on k
+and sort them lexicographically by (sij + pij, ¯sij).
+For every ordered pair (i1, j1) and (i2, j2) in this or-
+der, if si1,j1 + pi1,j1 > ¯si2,j2, then (i2, i1) is added
+to a fixed precedence relation. Its transitive closure
+defines a partial order on machine k. Pairs resolved
+by this order are placed in Pk, while the remain-
+ing unresolved pairs form Yk and retain the binary
+big-M disjunction. The heuristic makespan ˆC is
+initialized from the best schedule produced by con-
+structive heuristics, including serial list scheduling
+and priority dispatch rules.
+A.3
+Bin Packing Problem (BPP)
+Problem description
+The bin packing problem aims to determine the
+optimal assignment of a set of n discrete items into
+a set of identical bins. Each bin is homogeneous
+with a fixed, deterministic maximum weight capac-
+ity W. Each item i has a predefined weight wi, and
+all item weights are assumed to be positive integers.
+The packing decision involves determining exactly
+which bin each item is placed into. Every item must
+be assigned to exactly one bin. For any bin that is
+used, the cumulative weight of all items assigned
+to it cannot exceed W. Sufficient bins are assumed
+to be available, bounded by a maximum possible
+number m (typically m = n). The objective is to
+minimize the total number of bins actively used to
+accommodate all n items.
+Standard MIP formulation
+Notation
+• I = {1, 2, . . . , n}: the set of n items.
+• B = {1, 2, . . . , m}: the set of m available bins.
+• wi: weight of item i.
+• W: maximum weight capacity of each bin.
+• xij: binary variable that equals 1 if and only if
+item i is placed into bin j.
+• yj: binary variable that equals 1 if and only if bin
+j is actively used.
+Below is the Kantorovich formulation for BPP:
+min
+m
+X
+j=1
+yj
+s.t.
+m
+X
+j=1
+xij = 1,
+∀i ∈I,
+n
+X
+i=1
+wixij ≤Wyj,
+∀j ∈B,
+xij ∈{0, 1},
+∀i ∈I, ∀j ∈B,
+yj ∈{0, 1},
+∀j ∈B.
+Baseline formulations
+• Kant.: The Kantorovich assignment formulation,
+as described above.
+• AF: A pseudo-polynomial formulation that refor-
+mulates BPP as a flow network problem.
+• VPSolver: An AF-style formulation with graph
+compression and side constraints.
+• ORLM: Generated by ORLM, same as Kant.
+• StepORLM: Generated by StepORLM, based
+on Kantorovich formulation with symmetry-
+breaking constraints and objective bounds.
+• EvoCut: A strengthened Kantorovich variant that
+breaks symmetry via lexicographical ordering in-
+equalities, continuous weight bounds, and index-
+based assignment restrictions for sorted items.
+
+
+--- Page 15 ---
+FormuEvo formulation
+Notation
+• g = gcd(W, w1, . . . , wn): greatest common di-
+visor (GCD) of W and all weights wi.
+• W = { ¯w1, . . . , ¯wK}: set of distinct item weights
+after GCD scaling (W and wi are divided by g).
+• bw: the demand quantity of items with scaled
+weight w ∈W.
+• B0: the number of items whose weight equals
+the capacity W, which exactly fill a bin, and are
+pre-packed and excluded from the problem.
+• S = {0 = s0 < s1 < · · · < sT ≤W}: the
+sorted set of valid cumulative bin loads (nodes in
+the flow network).
+• xw,s: item flow variable representing the num-
+ber of items of weight w placed into bins that
+currently have an accumulated load of state s.
+• ℓt: loss flow variable representing the unused bin
+capacity between states st and st+1.
+• z: variable representing the number of bins re-
+quired to pack all items lighter than W.
+The FormuEvo formulation constructs a directed
+acyclic graph where valid residual capacities are
+compressed via subset-sum filtering. Loss arcs (ℓt)
+ensure flow conservation without requiring explicit
+bin indexing, while z and ℓt are naturally integers.
+min B0 + z
+s.t.
+X
+w: w∈S
+xw,0 = z,
+X
+w: st−w∈S
+xw, st−w + ℓt−1 =
+X
+w: st+w∈S
+xw,st + ℓt,
+∀t = 1, . . . , T −1,
+X
+w: W−w∈S
+xw, W−w + ℓT−1 = z,
+X
+s: s+w∈S
+xw,s = bw,
+∀w ∈W,
+z ≤z ≤z,
+xw,s ∈Z≥0,
+∀w ∈W, s ∈S, s + w ∈S,
+ℓt ≥0,
+∀t = 1, . . . , T −1.
+where z, z are valid lower and upper bounds ob-
+tained from capacity-based bounds and a first-fit
+decreasing heuristic. The state set S is generated by
+subset-sum reachability over the scaled item sizes.
+Starting from 0, every reachable load s + w with
+s ∈S and w ∈W is iteratively added whenever
+s + w ≤W. Only transitions between reachable
+states are retained in the compressed network.
+A.4
+Capacitated Facility Location Problem
+(CFLP)
+Problem description
+The capacitated facility location problem aims to
+determine the optimal subset of facilities to open
+from a set of m candidate locations and the cor-
+responding shipment quantities to satisfy the de-
+mands of n customers. Each facility i incurs a
+fixed opening cost fi and has a maximum supply
+capacity Ci. Each customer j has a demand dj that
+must be fully met. It is assumed that the total avail-
+able capacity is sufficient to satisfy total demand.
+Shipping one unit from location i to customer j
+incurs a transportation cost cij, and a facility can
+supply customers only if it is opened. The decision
+involves selecting which facilities to open and de-
+termining the exact shipment quantity from each
+opened facility to each customer such that all de-
+mands are met without exceeding any facility’s
+capacity. The objective is to minimize the total
+cost, comprising the sum of fixed opening costs
+and variable transportation costs.
+Standard MIP formulation
+Notation
+• I = {1, 2, . . . , m}: the set of m locations.
+• J = {1, 2, . . . , n}: the set of n customers.
+• fi: fixed cost of opening facility i.
+• Ci: maximum supply capacity of facility i.
+• dj: demand of customer j.
+• cij: unit transportation cost from facility i to
+customer j.
+• yi: binary variable that equals 1 if and only if
+facility i is opened.
+• xij: continuous variable representing the ship-
+ment quantity from facility i to customer j.
+The standard MIP formulation is as follows.
+min
+m
+X
+i=1
+fiyi +
+m
+X
+i=1
+n
+X
+j=1
+cijxij
+s.t.
+m
+X
+i=1
+xij = dj,
+∀j ∈J,
+n
+X
+j=1
+xij ≤Ciyi,
+∀i ∈I,
+yi ∈{0, 1},
+∀i ∈I,
+xij ≥0,
+∀i ∈I, ∀j ∈J.
+Baseline formulations
+• Agg.: The aggregated formulation using facility-
+level capacity constraints, as described above.
+
+
+--- Page 16 ---
+• Disagg.: A disaggregated formulation that re-
+places the capacity constraint with per-customer
+linking inequalities for a tighter LP relaxation.
+• ORLM: Generated by ORLM, same as the aggre-
+gated formulation.
+• StepORLM: Generated by StepORLM, based on
+the aggregated formulation with explicitly de-
+composed demand constraints.
+• EvoCut: A strengthened disaggregated formula-
+tion with tightened variable upper bounds, single-
+customer coverage inequalities, global capacity
+bounds, minimum-open-facility bounds, and sub-
+set coverage cuts for the largest customers.
+FormuEvo formulation
+Notation
+• uij = min(Ci, dj): an upper bound on xij.
+• Lj = {i ∈I | Ci ≥dj}: set of large facilities
+whose individual capacity can satisfy demand dj.
+FormuEvo tightens the formulation through per-
+arc upper bounds, global and per-customer cover
+inequalities, minimum-open-count constraints, and
+symmetry breaking based on dominance.
+min
+m
+X
+i=1
+fiyi +
+m
+X
+i=1
+n
+X
+j=1
+cijxij
+s.t.
+m
+X
+i=1
+xij = dj,
+∀j ∈J,
+n
+X
+j=1
+xij ≤Ciyi,
+∀i ∈I,
+m
+X
+i=1
+Ciyi ≥
+n
+X
+j=1
+dj,
+X
+i∈Lj
+Ciyi ≥dj −
+X
+i∈I\Lj
+min(Ci, dj), ∀j ∈J,
+m
+X
+i=1
+yi ≥
+l Pn
+j=1 dj
+maxi∈I Ci
+m
+,
+yk ≤yi,
+∀i, k ∈I with Ci ≥Ck, fi ≤fk,
+and cij ≤ckj, ∀j ∈J,
+0 ≤xij ≤uij,
+∀i ∈I, ∀j ∈J,
+yi ∈{0, 1},
+∀i ∈I.
+A.5
+Quadratic Assignment Problem (QAP)
+Problem description
+The quadratic assignment problem aims to deter-
+mine the optimal one-to-one assignment of a set of
+n facilities to a set of n distinct locations. Each fa-
+cility must be assigned to exactly one location, and
+each location must be occupied by exactly one fa-
+cility, establishing a strict bijective mapping. There
+is a deterministic flow fij between every pair of
+facilities i and j, and a deterministic distance dkl
+between every pair of locations k and l. The deci-
+sion involves determining a bijective assignment
+between facilities and locations. The objective is
+to minimize the total interaction cost, computed as
+the sum of flow–distance products induced by all
+assigned facility pairs.
+Standard MIP formulation
+Notation
+• N = {1, . . . , n}: the set of facilities / locations.
+• fij: flow (interaction weight) between facility i
+and facility j.
+• dkl: distance between location k and location l.
+• xik: binary variable that equals 1 if and only if
+facility i is assigned to location k.
+Below is the standard Koopmans–Beckmann bi-
+nary quadratic formulation:
+min
+n
+X
+i=1
+n
+X
+j=1
+n
+X
+k=1
+n
+X
+l=1
+fij dkl xik xjl
+s.t.
+n
+X
+k=1
+xik = 1,
+∀i ∈N,
+n
+X
+i=1
+xik = 1,
+∀k ∈N,
+xik ∈{0, 1},
+∀i, k ∈N.
+Baseline formulations
+• K-B Quad.: The standard Koopmans–Beckmann
+binary quadratic formulation, as described above.
+• McC. Lin.: A classical linearization that intro-
+duces auxiliary variables yijkl to represent prod-
+ucts xikxjl and enforces equivalence via standard
+McCormick envelope inequalities.
+• AJ Lin.: The Adams–Johnson linearization that
+lifts continuous yijkl variables with tight linking
+constraints, yielding a stronger relaxation.
+• XY-KB Lin.: The Xia–Yuan linearization that
+precomputes minimum-assignment lower and up-
+per bounds, and then applies auxiliary variables
+with tightening lower-bound constraints.
+• IPQAPR: A compact linearization that reduces
+the dimension of yijkl by exploiting symmetry
+and enforces cross-block consistency constraints.
+• StepORLM: Generated by StepORLM, same as
+McC.
+
+
+--- Page 17 ---
+• EvoCut: Same as K-B formulation, since the
+Birkhoff polytope already represents the convex
+hull of the assignment constraints.
+FormuEvo formulation
+Notation
+• zkl
+ij : lifted continuous variable in [0, 1], represent-
+ing xikxjl for i < j and k̸ = l.
+• GF : set of unordered facility pairs (i, j) with
+i < j whose flow rows and columns are identical,
+i.e., fi,· = fj,· and f·,i = f·,j.
+• GD: set of unordered location pairs (k, l) with
+k < l whose distance rows and columns are
+identical, i.e., dk,· = dl,· and d·,k = d·,l.
+FormuEvo uses a transportation-style linearization
+that lifts each unordered facility pair (i, j) into a
+separate z-block. Cross-block consistency is en-
+forced by anchor-slice coupling, and symmetry is
+broken via cumulative prefix inequalities.
+min
+n
+X
+i=1
+n
+X
+k=1
+fiidkk xik+
+n−1
+X
+i=1
+n
+X
+j=i+1
+n
+X
+k=1
+n
+X
+l=1, l̸=k
+ fijdkl + fjidlk
+
+zkl
+ij
+s.t.
+n
+X
+k=1
+xik = 1,
+∀i ∈N,
+n
+X
+i=1
+xik = 1,
+∀k ∈N,
+n
+X
+l=1, l̸=k
+zkl
+ij = xik,
+∀i < j, k ∈N,
+n
+X
+k=1, k̸=l
+zkl
+ij = xjl,
+∀i < j, l ∈N,
+n
+X
+j=i+1
+zkl
+ij +
+i−1
+X
+j=1
+zlk
+ji = xik,
+∀i ∈N, k, l ∈N, k̸ = l,
+t
+X
+r=1
+xir ≥
+t
+X
+r=1
+xjr,
+∀{i, j} ∈GF , i < j, t ∈N,
+t
+X
+r=1
+xrk ≥
+t
+X
+r=1
+xrl,
+∀{k, l} ∈GD, k < l, t ∈N,
+xik ∈{0, 1},
+∀i, k ∈N,
+0 ≤zkl
+ij ≤1,
+∀i < j, k, l ∈N, k̸ = l.
+A.6
+Neural Network Verification (NNV)
+Problem description
+The neural network verification problem aims to
+determine the minimum adversarial distortion re-
+quired to induce a targeted misclassification in
+a pre-trained multi-layer perceptron (MLP) clas-
+sifier. Given a correctly classified input sample
+x0 ∈[0, 1]n0 with true label λ, the goal is to find
+a perturbed input x ∈[0, 1]n0 that causes the net-
+work to predict a specified wrong label µ̸ = λ,
+while minimizing the ℓ1 distance between x and
+x0. The network consists of L layers, where each
+hidden layer k ∈{1, . . . , L −1} applies a linear
+transformation followed by a ReLU activation, and
+the output layer L applies a linear transformation
+only. The adversarial condition requires that the
+output logit of µ is at least that of λ. The objective
+is to minimize the ℓ1 distortion P
+i |xi −x0,i|.
+Standard MIP formulation
+Notation
+• n0: dimension of the input space.
+• L: total number of (hidden + output) layers.
+• nk: number of neurons in layer k (k = 1, . . . , L).
+• W (k) ∈Rnk×nk−1: weight matrix of layer k.
+• b(k) ∈Rnk: bias vector of layer k.
+• x0 ∈[0, 1]n0: original input, classified as λ.
+• µ̸ = λ: target adversarial label.
+• xi: perturbed input component, xi ∈[0, 1].
+• di: auxiliary variable for linearizing |xi −x0,i|.
+• ˆz(k)
+j
+: pre-activation of neuron j in layer k.
+• z(k)
+j
+: post-activation of neuron j in layer k.
+• a(k)
+j
+∈{0, 1}: ReLU indicator for neuron j in
+layer k; a = 0 encodes the active branch (ˆz ≥0),
+a = 1 encodes the inactive branch (ˆz ≤0).
+• M(k)
+j
+: per-neuron big-M bound obtained via in-
+terval arithmetic over x ∈[0, 1]n0.
+min
+n0
+X
+i=1
+di
+s.t. di ≥xi −x0,i,
+di ≥x0,i −xi,
+∀i = 1, . . . , n0,
+ˆz(k)
+j
+=
+nk−1
+X
+i=1
+W (k)
+ji z(k−1)
+i
++ b(k)
+j ,
+∀k = 1, . . . , L, j = 1, . . . , nk,
+z(k)
+j
+≤ˆz(k)
+j
++ M(k)
+j
+a(k)
+j ,
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+z(k)
+j
+≥ˆz(k)
+j
+,
+
+
+--- Page 18 ---
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+z(k)
+j
+≤M(k)
+j
+(1 −a(k)
+j ),
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+z(k)
+j
+≥0, ∀k = 1, . . . , L −1, j = 1, . . . , nk,
+ˆz(L)
+µ
+≥ˆz(L)
+λ ,
+0 ≤xi ≤1,
+∀i = 1, . . . , n0,
+a(k)
+j
+∈{0, 1},
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+where z(0) = x (i.e., z(0)
+i
+= xi), z(L) = ˆz(L) (the
+output layer has no ReLU).
+Baseline formulations
+• Std. Formu.: The standard formulation as above.
+• EvoCut: A strengthened variant that adds triangle
+relaxation inequalities, tightening the LP relax-
+ation over the big-M envelope.
+FormuEvo formulation
+Notation
+• d+
+i , d−
+i : split ℓ1 perturbation components, with
+d+
+i ∈[0, 1 −x0,i], d−
+i ∈[0, x0,i]; the perturbed
+input is xi = x0,i + d+
+i −d−
+i and the distortion
+is d+
+i + d−
+i = |xi −x0,i|.
+• l(k)
+j : pre-computed lower bounds on ˆz(k)
+j
+.
+• u(k)
+j : pre-computed upper bounds on ˆz(k)
+j
+.
+The formulation uses the split ℓ1 variables d+
+i , d−
+i
+and per-neuron bounds l(k)
+j , u(k)
+j .
+min
+n0
+X
+i=1
+ d+
+i + d−
+i
+
+s.t. 0 ≤d+
+i ≤1 −x0,i, 0 ≤d−
+i ≤x0,i,
+∀i = 1, . . . , n0,
+z(0)
+i
+= x0,i + d+
+i −d−
+i ,
+∀i = 1, . . . , n0,
+ˆz(k)
+j
+=
+nk−1
+X
+i=1
+W (k)
+ji z(k−1)
+i
++ b(k)
+j ,
+∀k = 1, . . . , L, j = 1, . . . , nk,
+z(k)
+j
+≥ˆz(k)
+j
+,
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+z(k)
+j
+≤ˆz(k)
+j
+−l(k)
+j a(k)
+j ,
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+z(k)
+j
+≤u(k)
+j (1 −a(k)
+j ),
+∀k = 1, . . . , L −1, j = 1, . . . , nk,
+z(k)
+j
+≥0, ∀k = 1, . . . , L −1, j = 1, . . . , nk,
+ˆz(L)
+µ
+≥ˆz(L)
+λ ,
+d+
+i , d−
+i ≥0,
+∀i = 1, . . . , n0,
+a(k)
+j
+∈{0, 1},
+∀k = 1, . . . , L −1, j = 1, . . . , nk.
+A.7
+IMO 2025 Problem 6 (IMO)
+Problem description
+The IMO 2025 Problem 6 asks to cover an n × n
+grid of unit squares using non-overlapping axis-
+aligned rectangular tiles, such that exactly one unit
+square remains uncovered (a “hole”) in each row
+and each column. This problem can be modeled
+as an MIP. The objective is to minimize the total
+number of rectangles used. Each rectangle spans
+a contiguous interval of columns over a contigu-
+ous interval of rows. The decision involves select-
+ing the hole positions and determining how rect-
+angles are placed so that every non-hole cell is
+covered exactly once. The formulation additionally
+tracks the vertical continuation of horizontal inter-
+vals across adjacent rows, allowing rectangles to
+be represented compactly through interval propa-
+gation and flow-balance relations.
+Standard MIP formulation
+Notation
+• n: grid size (n × n).
+• R = {1, . . . , n}: the set of row indices.
+• C = {1, . . . , n}: the set of column indices.
+• I = {(a, b) | 1 ≤a ≤b ≤n}: the set of all
+contiguous column intervals.
+• hij ∈{0, 1}: equals 1 if and only if the hole in
+row i is located at column j.
+• xiab ∈{0, 1}: equals 1 if and only if interval
+(a, b) is active on row i, i.e., columns [a, . . . , b]
+are covered by the same rectangle on row i.
+• siab ∈{0, 1}: equals 1 if and only if a rectangle
+with horizontal span (a, b) starts at row i.
+• tiab ∈{0, 1}: equals 1 if and only if a rectangle
+with horizontal span (a, b) ends at row i.
+min
+n
+X
+i=1
+X
+(a,b)∈I
+siab
+s.t.
+n
+X
+j=1
+hij = 1,
+∀i ∈R,
+n
+X
+i=1
+hij = 1,
+∀j ∈C,
+
+
+--- Page 19 ---
+X
+(a,b)∈I: a≤j≤b
+xiab + hij = 1,
+∀i ∈R, j ∈C,
+x1ab −s1ab = 0,
+∀(a, b) ∈I,
+xiab −xi−1,ab −siab + ti−1,ab = 0,
+∀i = 2, . . . , n, (a, b) ∈I,
+xnab −tnab = 0,
+∀(a, b) ∈I,
+hij ∈{0, 1},
+∀i ∈R, j ∈C,
+xiab, siab, tiab ∈{0, 1}, ∀i ∈R, (a, b) ∈I.
+Baseline formulations
+• Std. Formu.: The standard formulation as above.
+• EvoCut: A variant with cuts enforcing mandatory
+new interval starts when hole movement disrupts
+coverage continuity across rows.
+FormuEvo formulation
+Notation
+• R = {(i1, i2, a, b) | 1 ≤i1 ≤i2 ≤n, (a, b) ∈
+I}: the set of all axis-aligned subrectangles.
+• yi1i2ab ∈{0, 1}: equals 1 if and only if a rectan-
+gle spanning rows i1 through i2 and columns a
+through b is selected.
+• cij ∈[0, 1]: variable representing the number of
+selected rectangles covering cell (i, j).
+• RTL
+ij
+= {(i1, i2, a, b) ∈R | i1 = i, a = j}:
+rectangles whose top-left corner is at (i, j).
+• RTR
+ij
+= {(i1, i2, a, b) ∈R | i1 = i, b = j −
+1} (j > 1): rectangles whose top row is i and
+rightmost column is j −1.
+• RBL
+ij = {(i1, i2, a, b) ∈R | i2 = i −1, a = j}
+(i > 1): rectangles whose bottom row is i −1
+and leftmost column is j.
+• RBR
+ij
+= {(i1, i2, a, b) ∈R | i2 = i −1, b =
+j −1} (i, j > 1): rectangles whose bottom-right
+corner is at (i −1, j −1).
+FormuEvo formulation directly models each possi-
+ble axis-aligned rectangle as a binary variable, then
+reconstructs cell occupancy via a 2D difference ar-
+ray. Strong aggregated cuts enforce exact cover by
+projecting onto rows, columns, and the total area.
+min
+X
+(i1,i2,a,b)∈R
+yi1i2ab
+s.t.
+n
+X
+j=1
+hij = 1,
+∀i ∈R,
+n
+X
+i=1
+hij = 1,
+∀j ∈C,
+cij = ci−1,j + ci,j−1 −ci−1,j−1
++
+X
+RTL
+ij
+yi1i2ab −
+X
+RTR
+ij
+yi1i2ab
+−
+X
+RBL
+ij
+yi1i2ab +
+X
+RBR
+ij
+yi1i2ab,
+∀i ∈R, j ∈C,
+cij + hij = 1,
+∀i ∈R, j ∈C,
+X
+(i1,i2,a,b)∈R: i1≤i≤i2
+(b −a + 1) yi1i2ab = n −1,
+∀i ∈R,
+X
+(i1,i2,a,b)∈R: a≤j≤b
+(i2 −i1 + 1) yi1i2ab = n −1,
+∀j ∈C,
+X
+(i1,i2,a,b)∈R
+(i2 −i1 + 1)(b −a + 1) yi1i2ab =
+n(n −1),
+yi1i2ab ∈{0, 1},
+∀(i1, i2, a, b) ∈R,
+cij ∈{0, 1},
+∀i ∈R, j ∈C.
+where c0,j = ci,0 = c0,0 = 0, and all summations
+over R·
+ij involving out-of-bounds indices are de-
+fined to be zero. The reconstruction of cij follows
+the standard 2D difference-array scheme: each rect-
+angle variable yi1i2ab induces a unit increment over
+its support via corner updates +1 at (i1, a), −1 at
+(i1, b+1), −1 at (i2+1, a), and +1 at (i2+1, b+1).
+Consequently, the resulting prefix-sum transforma-
+tion yields cij = 1 if and only if cell (i, j) lies
+within exactly one selected rectangle.
+B
+Implementation Details of FormuEvo
+Algorithm 1 outlines the framework of FormuEvo.
+Below, we present a reference of our prompts used
+in FormuEvo. All complete prompts are available
+in our code repository at https://github.com/
+Xyz-yuanhf/formuevo.
+Generator LLM for Initialization
+For initialization, we use the prompt for the gener-
+ator LLM to produce the initial population.
+System Prompt
+You are an expert in mathematical optimization, mixed-
+integer programming (MIP), and Gurobi modeling. You
+specialize in translating the problem description and its
+preliminary Gurobi models into mathematically correct,
+high-efficiency, and numerically stable Gurobi models
+implemented in Python using ‘gurobipy’.
+The user will provide:
+• Problem description: The real-world logic and con-
+straints of the optimization problem to be modeled.
+
+
+--- Page 20 ---
+Algorithm 1 Pseudo-code of FormuEvo
+Require: Problem description p, formulation template f0, population size N, generations T, mutation
+rate ρ, memory usage rate γ, external knowledge base Binit (optional).
+Ensure: Final MIP formulation ˆf⋆, distilled knowledge base B.
+1: Initialize population P0 ←∅
+2: Initialize memory library M ←Binit (if Binit is available, ∅otherwise)
+3: // Initialization: generate initial population
+4: while |P0| < N do
+5:
+finit ←GENERATORLLM(p, f0)
+// Initial formulation
+6:
+P0 ←P0 ∪{EVALUATEANDREPAIR(finit)}
+// Evaluate and repair
+7: end while
+8: // Update best formulation
+9: ˆf⋆←arg minf∈P0 ϕ(f)
+10: // Evolution: repeat for T generations
+11: for t = 1 to T do
+12:
+O ←∅
+// Offspring pool
+13:
+while |O| < N do
+14:
+// Crossover operation
+15:
+Sample two parents fi, fj from Pt−1
+16:
+// Diagnosis of parents
+17:
+if u < γ where u ∼U(0, 1) then
+18:
+dij ←DIAGNOSTICLLM(fi, stats(fi), fj, stats(fj), M)
+// Diagnosis of parents
+19:
+else
+20:
+dij ←DIAGNOSTICLLM(fi, stats(fi), fj, stats(fj))
+// Without memory
+21:
+end if
+22:
+fo ←GENERATORLLM(p, fi, fj, dij)
+// Offspring by crossover
+23:
+O ←O ∪{EVALUATEANDREPAIR(fo)}
+// Evaluate and repair
+24:
+M ←REFLECTORLLM(fi, stats(fi), fj, stats(fj), fo, stats(fo), M)
+// Update memory
+25:
+// Mutation operation
+26:
+if |O| < N and u < ρ where u ∼U(0, 1) then
+27:
+Sample elite fe from Pt−1
+28:
+if u < γ where u ∼U(0, 1) then
+29:
+de ←DIAGNOSTICLLM(fe, stats(fe), M)
+// Diagnosis of elite
+30:
+else
+31:
+de ←DIAGNOSTICLLM(fe, stats(fe))
+// Without memory
+32:
+end if
+33:
+fo ←GENERATORLLM(p, fe, de)
+// Offspring by mutation
+34:
+O ←O ∪{EVALUATEANDREPAIR(fo)}
+// Evaluate and repair
+35:
+M ←REFLECTORLLM(fe, stats(fe), fo, stats(fo), M)
+// Update memory
+36:
+end if
+37:
+end while
+38:
+// Select top-N individuals for next generation
+39:
+Pt ←TOPN(Pt−1 ∪O, N)
+40:
+// Update best formulation
+41:
+ˆf⋆←arg min(ϕ( ˆf⋆), minf∈O ϕ(f))
+42: end for
+43: // Knowledge distillation for transfer
+44: B ←DISTILLERLLM(M)
+// Distill knowledge from memory
+45: return ˆf⋆, B
+
+
+--- Page 21 ---
+• Python template: A Python ‘gurobipy’ function tem-
+plate. You must preserve the function name and input
+arguments exactly. You may refactor the internal im-
+plementation freely.
+• Memory library (if available): A collection of experi-
+ence triplets (condition →strategy →effect) distilled
+from past evolution experiments.
+Your task is:
+• Generate a better (i.e., mathematically correct, high-
+efficiency, and numerically stable) Gurobi model than
+the preliminary one.
+• Your generated model should be implemented in
+Python ‘gurobipy’ and follow the standard Gurobi
+modeling practices. Ensure all variables, constraints,
+and objective functions are well-defined.
+• Your generated model must be mathematically correct
+and designed to solve as efficiently as possible under
+Gurobi’s default parameters (do not rely on parameter
+tuning).
+• To achieve this you should apply advanced modeling
+techniques where appropriate, including but not lim-
+ited to {example_strengthing_techniques}.
+• You should produce clean, well-structured, and ex-
+ecutable Python code using ‘gurobipy’. Keep code
+concise but readable.
+• You must provide a concise explanation of the opti-
+mization ideas and key improvements in the ‘idea’
+section. Focus on your enhancement motivation and
+why the new formulation is computationally superior.
+Critical constraints:
+• Do not change the function signature.
+• Do not rely on solver parameter tuning. However,
+setting parameters strictly required for the model to
+be accepted by Gurobi is allowed if your formulation
+necessitates it.
+• Do not assume missing data unless clearly implied;
+make minimal necessary assumptions.
+• If ambiguity exists, choose the most standard and com-
+putationally efficient formulation.
+• Calling ‘model.optimize()’ or any other solving/execu-
+tion functions is strictly forbidden within the function.
+The function must return the model object before any
+optimization is performed.
+• Do not use Gurobi callbacks in any form. If your
+formulation would naturally rely on callbacks, you
+must replace it with a static, callback-free alternative.
+Response format:
+• Return only a valid JSON object in the exact structure
+below ({detailed_format_instruction}):
+{
+“code”:
+“ˋˋˋpython\n<A
+Python
+(gurobipy)
+function
+implementing
+the
+improved
+Gurobi
+model>\nˋˋˋ”,
+“idea”:
+“A
+concise
+but
+technically
+clear
+idea of key modeling improvements and any
+non-trivial reformulations”
+}
+User Prompt
+Problem description:
+{problem_description}
+Python template:
+{python_template}
+Memory library (if available):
+{memory_library}
+Diagnostic LLM
+We present the prompt of the diagnostic LLM for
+mutation. The prompt for crossover follows the
+same structure but operates on a formulation pair.
+System Prompt
+You are an expert in mathematical optimization, mixed-
+integer programming (MIP), Gurobi modeling, and struc-
+tural evolution. Your role is to examine the solver per-
+formance profile of a given formulation and produce a
+concise, actionable diagnostic report that will guide a
+downstream mutation agent in evolving this formulation
+into a computationally superior variant.
+The user will provide:
+• Problem description: The real-world logic and con-
+straints of the optimization problem to be modeled.
+• Current formulation data: You will receive its Python
+‘gurobipy’ code and the mathematical idea behind it.
+• Solver performance profile, including:
+num_vars: Number of variables in the model.
+num_constrs: Number of constraints in the model.
+root_bound: Average relaxation bound at root node.
+root_gap: Average root relaxation gap (%) = |opt_obj -
+root_bound| / |opt_obj| * 100.
+node_count: Average number of Branch-and-Bound
+nodes explored.
+presolve_rows_removed: Average number of rows
+(constraints) removed by Gurobi presolve.
+presolve_cols_removed: Average number of columns
+(variables) removed by Gurobi presolve.
+presolve_bounds_changed: Average number of vari-
+able bounds changed by Gurobi presolve.
+• Memory library (if available): A collection of experi-
+ence triplets (condition →strategy →effect) distilled
+from past evolution experiments.
+Your task is:
+• Perform a bottleneck identification: Determine the pri-
+mary computational bottleneck of the current formula-
+tion. Use, but not limited to, the following diagnostic
+logic: {example_diagnostic_logic}
+• Identify secondary bottlenecks (if possible): After
+identifying the primary bottleneck, note any secondary
+issues that could become the new bottleneck once the
+primary is resolved. This helps mutation avoid shifting
+the problem without actually improving it.
+• Report a concise mutation guidance: Based on your
+diagnosis, produce specific, actionable recommenda-
+tions for mutation. Your recommendations should:
+State the single most impactful mutation direction.
+Provide 1-3 specific MIP modeling techniques to ap-
+ply, ranked by expected impact. Indicate what the
+mutation should preserve from the current formula-
+tion. Suggest the expected trade-off. Warn against the
+potential risks of the recommendation. You can re-
+trieve the memory library for entries whose condition
+matches the diagnosed conditions.
+Output format:
+Return a structured diagnostic report in the format:
+Formulation profile:
+• Size: [num_vars] variables, [num_constrs] constraints
+• Relaxation: root_gap = [value]%
+• Branching: node_count = [value]
+• Presolve:
+[rows_removed]
+rows
+removed,
+[cols_removed] cols removed, [bounds_changed]
+bounds changed
+• Overall assessment: [one-sentence summary of where
+time is being spent]
+
+
+--- Page 22 ---
+Primary bottleneck:
+• Category: [weak relaxation / excessive branching /
+per-node cost / loose bounds / model size]
+• Evidence: [cite specific metric values]
+Secondary bottleneck(s):
+• Category: [description, or "none identified."]
+Mutation recommendations (priority-ranked):
+• The most impactful technique with specific detail
+• Second technique
+• Third technique, if applicable
+Preserve (do not degrade):
+• Aspects of current formulation that are strong and must
+be maintained
+Expected trade-offs:
+• What metrics should improve and what might worsen
+Risk warnings:
+• Potential pitfalls of the mutation, or "none identified."
+User Prompt
+Problem description:
+{problem_description}
+Current formulation:
+{current_formulation_data}
+Runtime:
+{runtime_profile}
+Solver profile:
+{solver_profile}
+Memory library (if available):
+{memory_library}
+Crossover and Mutation
+We employ four types of crossover operators: com-
+plement, hybrid, intersection, and min-violation,
+and four types of mutation operators: general, ex-
+ploratory, searching, and polyhedral, representing
+different interaction relationships and evolutionary
+focuses. Here we present the prompt of general mu-
+tation, and other operators are similar in structure,
+available in our code repository.
+System Prompt
+You are an expert in mathematical optimization, mixed-
+integer programming (MIP), and Gurobi modeling. You
+specialize in evolving a baseline formulation through rig-
+orous mathematical refinement, polyhedral lifting, and
+innovative paradigm shifts, transforming it into a mathe-
+matically correct and substantially more efficient model
+implemented in Python using ‘gurobipy’.
+The user will provide:
+• Problem description: The real-world logic and con-
+straints of the optimization problem to be modeled.
+• Python template: A Python ‘gurobipy’ function tem-
+plate. You must preserve the function name and input
+arguments exactly. You may refactor the internal im-
+plementation freely.
+• Current formulation data: You will receive its Python
+‘gurobipy’ code, the mathematical idea behind it, and
+its evaluation fitness, where a lower fitness indicates a
+computationally superior model, e.g., lower average
+runtime.
+• Diagnostic report (if available): A structured analy-
+sis of the current model’s solver performance profile,
+identifying the computational bottlenecks and priority
+mutation directions.
+Your task is:
+• Perform a general mutation. You must analyze the pro-
+vided model and propose a structurally refined version
+of it.
+• Retain the core mathematical paradigm of the original
+model, but aggressively seek local improvements to
+optimize its computational efficiency.
+• Identify and eliminate redundant constraints, unneces-
+sary variables, or slight symmetries.
+• Improve the structural implementation. For instance,
+tighten variable bounds, compute tighter big-M co-
+efficients based on problem data, or rewrite logical
+conditions using more efficient ‘gurobipy’ features.
+• Your mutated model should act as an optimized, pol-
+ished evolution of its predecessor, strictly maintain-
+ing mathematical correctness while accelerating the
+branch-and-bound process.
+• To achieve this you should apply advanced modeling
+techniques where appropriate, including but not lim-
+ited to {example_strengthing_techniques}.
+• You should produce clean, well-structured, and ex-
+ecutable Python code using ‘gurobipy’. Keep code
+concise but readable.
+• You must provide a concise explanation of the opti-
+mization ideas and key improvements in the ‘idea’
+section. Focus on your enhancement motivation and
+why the new formulation is computationally superior.
+Critical constraints:
+• Do not change the function signature.
+• Do not rely on solver parameter tuning. However,
+setting parameters strictly required for the model to
+be accepted by Gurobi is allowed if your formulation
+necessitates it.
+• Do not assume missing data unless clearly implied;
+make minimal necessary assumptions.
+• If ambiguity exists, choose the most standard and com-
+putationally efficient formulation.
+• Calling ‘model.optimize()’ or any other solving/execu-
+tion functions is strictly forbidden within the function.
+The function must return the model object before any
+optimization is performed.
+• Do not use Gurobi callbacks in any form. If your
+formulation would naturally rely on callbacks, you
+must replace it with a static, callback-free alternative.
+Response format:
+• Return only a valid JSON object in the exact structure
+below ({detailed_format_instruction}):
+{
+“code”:
+“ˋˋˋpython\n<A
+Python
+(gurobipy)
+function
+implementing
+the
+improved
+Gurobi
+model>\nˋˋˋ”,
+“idea”: “Explain the specific local structural
+improvements and why they reduce solving time”
+}
+User Prompt
+Problem description:
+{problem_description}
+Python template:
+{python_template}
+Current formulation:
+
+
+--- Page 23 ---
+{current_formulation_data}
+Runtime:
+{runtime_profile}
+Solver profile:
+{solver_profile}
+Diagnostic report (if available):
+{diagnostic_report}
+Memory Reflection
+System Prompt
+You are an expert in mathematical optimization, mixed-
+integer programming (MIP), Gurobi modeling, and algo-
+rithmic analysis. Your role is to distill actionable, trans-
+ferable insights and knowledge from MIP formulation
+evolutions by analyzing parent-offspring relationships
+and extracting concise experience triplets.
+The user will provide:
+• Problem description: The real-world logic and con-
+straints of the optimization problem to be modeled.
+• Parent formulation data: For each parent formulation,
+you will receive its Python ‘gurobipy’ code, the math-
+ematical idea behind it, its evaluation fitness (i.e., av-
+erage runtime), and its solver performance profiles.
+• Diagnostic report: the diagnostic analysis that guided
+this evolution step.
+• Offspring formulation data: Python ‘gurobipy’ code
+and the mathematical idea of the generated offspring
+formulation.
+• Evolution outcome: Fitness (average runtime) and
+solver performance profiles for the generated offspring
+formulation, in the same format as the parent(s).
+Your task is: Extract exactly experience triplets from this
+evolution step. Each triplet captures a reusable lesson in
+the form:
+• Condition: The observable situation before the modifi-
+cation, described in terms of solver profile symptoms
+and/or structural problem features. Conditions must
+be generalizable. Do not reference specific problem
+names, variable names, or instance sizes. Use solver
+metric patterns and structural descriptors only.
+• Strategy: The specific modeling action taken, de-
+scribed as a concrete, reproducible technique. Strate-
+gies must be precise enough that another modeler
+could apply them to a different problem exhibiting
+the same Condition.
+• Effect: The outcome and mechanistic explanation,
+state whether performance improved or degraded, cite
+the key metric changes, and briefly explain why.
+Guidelines for high-quality triplets:
+• Be concise: Each field should be 1-2 sentences maxi-
+mum. Avoid verbose explanations.
+• Be generalizable: Triplets should apply beyond the
+specific problem instance. Abstract away problem-
+specific details into structural patterns.
+• Capture both successes and failures: Failed strategies
+(offspring worse than parent) are equally valuable, as
+long as they prevent repeating mistakes.
+• Be mechanistic: The Effect field must explain the
+solver mechanism, not just report metric changes.
+• One lesson per triplet: If the evolution involved mul-
+tiple simultaneous changes, decompose into separate
+triplets where possible, attributing each metric change
+to its most likely cause.
+• Mark outcome clearly: Start the Effect field with [+]
+for improvements or [-] for degradations.
+Response format:
+• Your response must consist of ONLY the triplets in
+the exact format below. No preamble, no greeting, no
+commentary.
+• Return 1-3 triplets. Use exactly the format shown.
+Number each triplet.
+-
+Condition:
+[generalizable
+situation
+descriptor]
+- Strategy: [concrete modeling action]
+-
+Effect:
+[+/-]
+[metric
+changes
+and
+mechanistic explanation]
+User Prompt
+Problem description:
+{problem_description}
+Parent formulation:
+{parent_formulation_data}
+Parent runtime and solver profile:
+{parent_runtime_solver_profile}
+Diagnostic report:
+{diagnostic_report}
+Offspring formulation:
+{offspring_formulation_data}
+Offspring runtime and solver profile:
+{offspring_runtime_solver_profile}
+Knowledge Distillation
+System Prompt
+You are an expert in mathematical optimization, mixed-
+integer programming (MIP), Gurobi modeling, and algo-
+rithmic analysis. Your role is to distill multiple memory
+libraries (may be problem-specific) into a single, unified,
+general-purpose knowledge base of MIP formulation
+principles that are transferable to any new optimization
+problem.
+The user will provide: Problem-specific memory li-
+braries: Multiple memory libraries, each accumulated
+from evolutionary MIP formulation improvement on a
+specific problem type. Each library contains experience
+triplets with Condition, Strategy, and Effect. The li-
+braries may come from diverse problem domains (e.g.,
+scheduling, routing, packing, facility location, etc.)
+Your task is to produce a general transferable knowledge
+base by performing the following:
+• Cross-problem validation: Identify entries that ap-
+pear (with consistent Effects) across multiple problem-
+specific libraries. These represent robust, problem-
+independent MIP modeling principles and should be
+prioritized and preserved with high fidelity.
+• Abstraction:
+For entries that reference residual
+problem-specific structure (even if already somewhat
+general), further abstract the Condition to the broadest
+valid scope.
+• Consolidation: Merge entries from different libraries
+that express the same underlying principle. Even if
+worded differently or applied in different problem con-
+texts, unify them into a single canonical entry if the
+
+
+--- Page 24 ---
+Condition-Strategy-Effect logic is equivalent. Com-
+bine metric evidence from multiple sources.
+• Conflict resolution: If the same Condition-Strategy
+pair shows positive Effect in some libraries but nega-
+tive Effect in others, analyze whether the divergence
+can be explained by a distinguishable sub-condition
+(e.g., strategy works for sparse constraint matrices but
+fails for dense ones). If so, split into two entries with
+refined, non-overlapping Conditions.
+• Pruning: The final knowledge base should contain at
+most 30 entries. Remove entries that are too narrow to
+plausibly transfer or trivial or obvious.
+Response format:
+• Your response must consist of only the triplets in the
+exact format below. No preamble, no greeting, no
+commentary.
+• Number entries sequentially with IDs starting from 1.
+• Use exactly the format below for each entry.
+[KNOWLEDGE BASE START]
+ID: 1
+-
+Condition:
+[generalizable
+situation
+descriptor]
+- Strategy: [concrete modeling action]
+-
+Effect:
+[+/-]
+[metric
+changes
+and
+mechanistic explanation]
+ID: 2
+-
+Condition:
+[generalizable
+situation
+descriptor]
+- Strategy: [concrete modeling action]
+-
+Effect:
+[+/-]
+[metric
+changes
+and
+mechanistic explanation]
+...
+[KNOWLEDGE BASE END]
+User Prompt
+Memory libraries:
+{memory_libraries}
+C
+Additional Results and Discussions
+C.1
+Statistical Significance Analysis
+We conduct paired Wilcoxon signed-rank tests on
+per-instance runtimes to compare FormuEvo with
+the best baselines over each problem and difficulty
+category (Table 6). For most problems such as
+TSP, CFLP, and the NNV and IMO tasks, For-
+muEvo achieves statistically significant improve-
+ments (p < 0.01) across all categories. Notably,
+significance generally increases with instance dif-
+ficulty, suggesting that the advantages of evolved
+formulations are more evident in challenging prob-
+lem instances, where formulation strength critically
+impacts relaxation quality and branching behavior.
+For BPP and QAP, the improvements on Easy
+instances are less significant. We attribute this to
+the “floor effect”: modern MIP solvers can solve
+small instances within extremely short runtimes,
+and the performance is more sensitive to runtime
+variance across instances. As the problem scale
+and complexity grow (Medium and Hard), the ad-
+vantages of FormuEvo become increasingly sig-
+nificant, demonstrating the strong scalability and
+upper-bound capabilities of FormuEvo, while fur-
+ther highlighting the importance of solver-efficient
+formulation for large-scale and more challenging
+optimization problems.
+Table 6: Wilcoxon signed-rank test p-values.
+Problem
+Easy
+Medium
+Hard
+TSP
+1.88E-17
+2.79E-13
+4.13E-18
+JSSP
+7.83E-02
+1.13E-03
+2.44E-02
+BPP
+2.82E-01
+9.29E-02
+2.50E-02
+CFLP
+4.98E-13
+3.03E-10
+2.20E-08
+QAP
+4.44E-01
+7.93E-02
+3.05E-02
+NNV
+-
+-
+1.42E-14
+IMO
+-
+-
+3.91E-03
+C.2
+Robustness Across Different Solvers
+To evaluate the robustness and adaptability of For-
+muEvo across downstream MIP solvers, we replace
+Gurobi in our main experiments with two alterna-
+tive solvers: COPT (Ge et al., 2022) and SCIP (Ho-
+jny et al., 2025), and rerun the evolution process
+under each solver. The results are reported in Ta-
+bles 7 and 8. Here, FormuEvo denotes the formu-
+lations evolved directly under the corresponding
+solver, while FormuEvo-G denotes the formula-
+tions evolved under Gurobi (i.e., the one obtained
+in our main experiments) and then directly adapted
+to COPT and SCIP, respectively.
+Overall, FormuEvo consistently achieves sig-
+nificant improvements on different downstream
+solvers, demonstrating that the proposed evolu-
+tionary framework is not restricted to a specific
+optimization backend. Meanwhile, we observe sub-
+stantial variation in the relative performance of dif-
+ferent formulations across solvers (e.g., MTZ and
+MCF-RLT, FormuEvo and FormuEvo-G). This sug-
+gests that formulation quality is inherently solver-
+dependent, and the most effective formulation for
+one solver may not remain optimal under another
+optimization backend, due to the algorithmic dif-
+ferences among modern MIP solvers. These re-
+sults highlight a key advantage of FormuEvo over
+static formulation generation, and also demonstrate
+the necessity of our solver-aware optimization that
+adaptively exploits solver-informed feedback to
+discover formulations that better align with the al-
+gorithmic internals of the downstream solver.
+
+
+--- Page 25 ---
+Table 7: Performance based on COPT solver.
+Easy
+Medium
+Hard
+Formulation
+Time↓
+Wins↑
+Time↓
+Wins↑
+Time↓
+Wins↑
+Solved↑
+TSP
+MTZ (1960)
+5.5116
+0/100
+79.9319
+0/100
+517.6449
+0/100
+8/100
+SCF (1978)
+0.8488
+12/100
+5.6820
+15/100 129.9687 16/100
+95/100
+MCF-RLT (2018)
+3.8573
+0/100
+56.2487
+0/100
+626.8963
+0/100
+1/100
+ORLM (2025)
+5.5235
+0/100
+80.0451
+0/100
+517.7556
+0/100
+8/100
+StepORLM (2026)
+4.4893
+0/100
+66.7571
+0/100
+479.0096
+0/100
+13/100
+EvoCut (2025)
+3.7323
+0/100
+27.5892
+0/100
+258.2871
+7/100
+41/100
+FormuEvo-G
+0.7488
+16/100
+5.3816
+12/100 129.7755 15/100
+96/100
+FormuEvo (Ours)
+0.4517
+72/100
+3.0088
+73/100
+47.8586
+62/100
+96/100
+JSSP
+Disj. (1960)
+1.5502
+12/100
+9.5882
+11/100
+82.3530
+10/100
+97/100
+Enh. Disj. (2016)
+2.5150
+3/100
+14.1189
+2/100
+117.2248
+3/100
+93/100
+ORLM (2025)
+601.0423
+0/100
+600.7678
+0/100
+601.7053
+0/100
+0/100
+StepORLM (2026)
+1.6431
+11/100
+8.9512
+9/100
+77.5248
+14/100
+96/100
+EvoCut (2025)
+1.2713
+27/100
+8.0894
+26/100
+72.8686
+20/100
+96/100
+FormuEvo-G
+1.5798
+9/100
+8.5912
+14/100
+77.1278
+21/100
+97/100
+FormuEvo
+1.1779
+38/100
+6.7091
+38/100
+67.7242
+32/100
+97/100
+Table 8: Performance based on SCIP solver.
+Easy
+Medium
+Hard
+Formulation
+Time↓
+Wins↑
+Time↓
+Wins↑
+Time↓
+Wins↑* Solved↑
+TSP
+MTZ (1960)
+4.7167
+0/100
+62.3060
+1/100
+563.1162
+12/100
+11/100
+SCF (1978)
+4.4918
+1/100
+44.2718
+4/100
+600.0065
+0/100
+0/100
+MCF-RLT (2018)
+67.1733
+0/100
+600.0136
+0/100
+600.2085
+0/100
+0/100
+ORLM (2025)
+4.7421
+2/100
+62.0028
+3/100
+563.5875
+12/100
+11/100
+StepORLM (2026)
+5.4227
+3/100
+84.3814
+2/100
+591.2279
+13/100
+3/100
+EvoCut (2025)
+3.6788
+5/100
+42.7763
+10/100 555.9330
+15/100
+6/100
+FormuEvo-G
+3.4371
+11/100
+35.1599
+13/100 523.7598
+19/100
+9/100
+FormuEvo
+2.8490
+78/100
+31.8396
+67/100 498.6678
+29/100
+38/100
+JSSP
+Disj. (1960)
+13.0998
+1/100
+84.2068
+1/100
+491.3035
+2/100
+27/100
+Enh. Disj. (2016)
+14.3031
+2/100
+67.3851
+1/100
+405.8829
+1/100
+39/100
+ORLM (2025)
+600.0982
+0/100
+600.0586
+0/100
+600.0538
+0/100
+0/100
+StepORLM (2026)
+14.874
+2/100
+98.2472
+1/100
+486.7095
+0/100
+28/100
+EvoCut (2025)
+7.4703
+19/100
+58.4963
+5/100
+460.8576
+3/100
+30/100
+FormuEvo-G
+6.5541
+17/100
+36.4157
+14/100 341.2865
+2/100
+47/100
+FormuEvo
+4.1672
+59/100
+17.7541
+78/100 114.5116
+92/100
+94/100
+*For most TSP Hard instances, SCIP fails to solve to optimality within the time limit, making the “Wins” metric less indicative.
+C.3
+Generalization to Public Benchmarks
+We further evaluate the scalability and generaliza-
+tion performance of FormuEvo on large-scale pub-
+lic benchmark instances that are more challeng-
+ing than the instances used during evolution. For
+TSP, we test on the 200-city instances from the
+Solomon benchmark suite (Solomon, 1987). For
+JSSP, we test on the most challenging 100 × 20
+instances from the Taillard benchmark (Taillard,
+
+
+--- Page 26 ---
+600
+900
+1200
+1500
+1800
+2100
+2400
+2700
+3000
+3300
+3600
+Time (s)
+0
+5
+10
+15
+20
+25
+30
+35
+40
+Gap (%)
+TSP
+MTZ
+ORLM
+EvoCut
+FormuEvo
+600
+900
+1200
+1500
+1800
+2100
+2400
+2700
+3000
+3300
+3600
+Time (s)
+0
+20
+40
+60
+80
+100
+JSSP
+Disj.
+StepORLM
+EvoCut
+FormuEvo
+Figure 5: Performance comparisons on public benchmark instances. Left: Solomon benchmark of TSP (Solomon,
+1987). Right: Taillard benchmark of JSSP (Taillard, 1993).
+1993). These public benchmarks, which are more
+difficult than the Hard instances used in the main
+experiments, are recognized as challenging large-
+scale optimization instances for solver evaluation.
+Since these instances are generally intractable
+to solve to optimality within practical time limits,
+we report the primal-dual gap curves over solv-
+ing time, where smaller gaps indicate better opti-
+mization performance (Fig. 5). The results demon-
+strate that although FormuEvo is evolved using
+only small instances, the formulations discovered
+by FormuEvo generalize effectively to benchmark
+instances with substantially larger scales and dif-
+ferent distributions. In particular, the tighter formu-
+lations produced by FormuEvo enable the solver
+to identify high-quality feasible solutions more
+quickly, thereby reducing the primal-dual gap at a
+significantly faster rate than baselines.
+C.4
+Analysis of Evolutionary Search
+Hyperparameters
+We conduct a sensitivity analysis of evolutionary
+search hyperparameters on TSP, including muta-
+tion rate ρ and memory usage rate γ. As shown in
+Table 9, FormuEvo achieves the best overall per-
+formance with ρ = 0.3 and γ = 0.7, which is
+selected as our default setting. Notably, a large
+memory usage rate (e.g., γ = 1.0) does not al-
+ways lead to better performance, suggesting that
+occasional memory-free generation helps maintain
+search diversity and prevents excessive reliance on
+previously explored patterns.
+C.5
+Discussion with Existing LLM-based
+Modeling Approaches
+Finally, we provide a discussion about the compar-
+ison between FormuEvo and existing LLM-based
+Table 9: Analysis of evolutionary hyperparameters.
+Param.
+Easy
+Medium
+Hard
+ρ
+0.0
+0.1579
+0.6128
+4.1886
+0.3
+0.1410
+0.5640
+3.9469
+0.5
+0.1903
+0.6451
+4.3993
+0.7
+0.1862
+0.6472
+4.4488
+1.0
+0.1456
+0.5719
+3.9436
+γ
+0.0
+0.1776
+0.6102
+4.6649
+0.3
+0.1770
+0.5791
+4.4793
+0.5
+0.1445
+0.5809
+4.4923
+0.7
+0.1410
+0.5640
+3.9469
+1.0
+0.1780
+0.5987
+4.3957
+modeling approaches (e.g., ORLM, StepORLM).
+Optimization capability and continual improve-
+ment.
+Existing LLM-based modeling approaches
+primarily focus on semantic correctness and syn-
+tactical executability through supervised and re-
+inforcement fine-tuning. Although their training
+data cover a broad range of optimization settings,
+including linear, integer, and non-linear program-
+ming tasks (e.g., Fig. 7 of ORLM (Huang et al.,
+2025)), the capability of these models is largely
+fixed once fine-tuning is completed. Even when
+multiple samples are generated during inference,
+the resulting formulations exhibit very limited di-
+versity (as in our main results): correct generations
+collapse to nearly the same textbook formulations,
+while more diverse and efficiency-oriented instruc-
+tions always lead to incorrect or infeasible results
+or even semantically meaningless outputs.
+In contrast, FormuEvo frames formulation de-
+sign itself as an explicit optimization problem over
+the symbolic space of MIP formulations. Instead
+of relying solely on the static capability of pre-
+
+
+--- Page 27 ---
+Num of generated formulations
+Performance (runtime)
+Formu. 0
+Standard MTZ formulation
+Init., Formu. 2
++ Use SCF reformulation
++ Add lower bound for var. 𝑓!"
+Init., Formu. 4
++ Rewrite node-wise balance
++ Add upper bound for var. 𝑓!"
+- Eliminate depot flow constr.
+Gen. 1, Formu. 1
++ Add tighter arc-flow constr.
+- Simplify flow conservation structure
+Gen. 3, Formu. 2
++ Subtour eliminate
++ Add depot-3 cuts
++ Add local-3 cuts
+Gen. 4, Formu. 3
++ Add depot-4 cuts
++ Add local-4 cuts
+Final formulation
+EvoCut
+SCF
+Figure 6: An illustration of the evolutionary process of FormuEvo (on TSP).
+trained models, FormuEvo continuously improves
+candidate formulations through iterative evolutions
+guided by solver feedback. As shown in our re-
+sults and Fig. 6, even with a small evolutionary
+budget, FormuEvo can discover high-quality MIP
+formulations that outperform both expert-designed
+formulations and recent LLM-based approaches.
+These results suggest that the formulation design
+benefits more from the evolutionary search and
+solver-informed optimization than from static for-
+mulation generation alone.
+Offline and online computational costs.
+Exist-
+ing fine-tuned modeling approaches rely on ex-
+tensive curated datasets, long training times, and
+substantial GPU resources. Their online inference
+additionally incurs per-instance overhead, since for-
+mulations are generated independently for each op-
+timization instance, even though one may attempt
+to recover a problem-level formulation via post-hoc
+aggregation using another LLM.
+In contrast, FormuEvo requires no task-specific
+fine-tuning and can be implemented entirely via
+lightweight API-based interaction with general-
+purpose LLMs in CPU-only environments. In our
+experiments, the entire evolutionary process typi-
+cally requires only one to several hours, depending
+on the complexity of the target problem and the
+number of evaluation instances, which is substan-
+tially lower than the time of data collection and
+training required for large-scale fine-tuning. More-
+over, FormuEvo operates at the problem level rather
+than the instance level. Once a strong formulation
+is evolved for a problem family, it can be directly
+reused on unseen instances with essentially no addi-
+tional optimization cost, making FormuEvo partic-
+ularly attractive in scenarios where many instances
+have shared underlying optimization structures.
+Generality and transferability.
+Existing fine-
+tuned modeling approaches are typically special-
+ized to particular modeling languages, prompting
+formats, and solver interfaces seen during training,
+making them extremely sensitive to distribution
+shifts and implementation-specific overfitting. For
+example, in ORLM and StepORLM, we find that
+even minor modifications from their prompt tem-
+plates can lead to substantial degradation or com-
+plete failure of the generated formulations. In con-
+trast, FormuEvo operates on top of general-purpose
+foundation LLMs and treats optimization formu-
+lations as symbolic programs that can be flexibly
+modified and evaluated. Therefore, its optimization
+capability is not tied to a specific LLM backbone,
+modeling language, solver backend, or benchmark
+distribution (Appendix C.2 - C.4). The evolution
+framework and distilled knowledge can naturally
+extend across different optimization paradigms,
+modeling interfaces, and solver implementations,
+suggesting broader applicability and stronger trans-
+ferability in practical optimization settings.
+D
+The Use of LLMs
+LLMs are used as key methodological components
+for evolutionary search in our framework. We also
+used LLMs to assist code writing and text polishing,
+while the core ideas and the manuscript itself were
+conceived, prepared, and finalized by the authors.
