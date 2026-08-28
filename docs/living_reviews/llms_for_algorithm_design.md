@@ -1,10 +1,53 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-08-25
+**Last Updated:** 2026-08-28
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-28 (5 papers)
+
+### [Recursive Experiential-Working Memory Evolution for Long-Horizon Agent Harnesses](https://arxiv.org/abs/2608.24876)
+
+**2026-08-25** | Princeton University, Stanford University, University of Oxford, NUS | M=8 P=7 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Recursive Experiential-Working Memory (EM-WM) architecture with state-grounded skill invocation, evidence-grounded state updates, and validation-gated component-specific memory evolution. | *LLM role:* research_agent, decomposition_guide, code_writer
+
+> Recuris introduces a recursive memory evolution architecture that couples Working Memory (for task state tracking) with Experiential Memory (for skill storage), using structured execution traces to localize failures and apply validation-gated updates to specific memory components. The results are backed by rigorous empirical evidence, showing massive gains on long-horizon tasks (e.g., +17.8 points for GPT-5.6 Sol and +15.6 for Claude Opus 5 on the $\tau$2-Retail benchmark). The key insight is using structured execution traces to localize failures to specific harness components (skill content, state tracking, invocation trigger, or verification checker) rather than rewriting the entire memory or prompt, enabling highly targeted and stable evolutionary updates. This is highly relevant for LLM evolutionary search and multi-agent optimization, as it provides a concrete mechanism for persistent memory evolution, step-by-step credit assignment, and safe recursive self-improvement.
+
+### [FormuEvo: LLM-Guided Evolution for Discovering Solver-Efficient Mixed-Integer Programming Formulations](https://arxiv.org/abs/2608.23353)
+
+**2026-08-24** | Tsinghua University, Nanyang Technological University, Singapore Management University | M=9 P=9 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* LLM-guided evolutionary optimization over the symbolic space of MIP formulations, represented as executable modeling programs, via iterative generation, evaluation, and selection with LLM-driven crossover, mutation, and repair operations. | *LLM role:* generates formulations, diagnoses solver feedback, repairs code, abstracts experience, distills knowledge
+
+> FormuEvo is an LLM-guided evolutionary framework that discovers solver-efficient mixed-integer programming (MIP) formulations by searching the symbolic space of executable modeling programs. Backed by strong empirical results, it accelerates solvers by up to 5.5x compared to expert-designed formulations and existing LLM-based cutting plane generation baselines across diverse OR benchmarks. THE KEY INSIGHT is the 'solver-informed diagnosis' mechanism, which translates fine-grained solver statistics (e.g., root gap, branch-and-bound node count, presolve reductions) into interpretable verbal gradients to guide LLM mutation, coupled with a structured memory of Condition-Strategy-Effect triplets. This is highly relevant to our work in LLM evolutionary search; adopting internal solver statistics as dense feedback signals rather than relying solely on end-to-end runtime fitness can drastically improve sample efficiency and search direction.
+
+### [Autonomous Mathematical Discovery in an Open-World Multi-Agent Environment](https://arxiv.org/abs/2608.23691)
+
+**2026-08-24** | University of Cambridge, University of California San Diego, University of Hong Kong, DualverseAI | M=8 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Open-world multi-agent environment (The Station) simulating a scientific community with autonomous agents | *LLM role:* research_agent
+
+> This paper introduces an open-world multi-agent environment where LLMs autonomously conduct mathematical research, write papers, and build on shared literature to solve complex construction problems. The results are rigorously backed by numbers, with the system discovering novel infinite families and exact configurations that outperform AlphaEvolve on several benchmarks (e.g., a 604-point kissing configuration in d=11). The key insight is that replacing rigid evolutionary pipelines with a persistent 'Archive Room' (shared memory) and 'Stagnation/Holiday' protocols allows agents to escape local optima and accumulate knowledge across generations. This is highly relevant for our work in LLM evolutionary search and multi-agent optimization, as adopting shared literature memory and stagnation-breaking mechanisms could significantly improve sample efficiency and prevent idea stagnation in automated heuristic discovery.
+
+### [RecurSE: Bounded Recursive Self-Evaluation for LLM Rubric Judges](https://arxiv.org/abs/2608.24231)
+
+**2026-08-25** | Zhejiang University, Meituan LongCat Team | M=8 P=7 I=8 **MUST-READ** *discuss*
+
+*Method:* Reinforcement Learning with a two-pass judge-checker mechanism, interface decoupling, and Pairwise Advantage Validity (PAV) for early stopping | *LLM role:* judge_and_auditor
+
+> RECURSE enables LLM judges to recursively self-improve via RL by using a synchronized copy of the policy as a process checker to provide scalar rewards, eliminating the need for external reward models. The method is backed by strong empirical results across Qwen and Gemma models, showing significant improvements on held-out transfer benchmarks like HealthBench and CheckEval. The key insight is 'interface decoupling'—structurally separating the judge's output format (YES/NO tokens) from the checker's reward format (0-4 scalar) to prevent the policy from exploiting token-copying shortcuts during self-play. Furthermore, tracking checker ranking fidelity on a small holdout set reliably prevents over-optimization. This is highly relevant for our work on process reward models and RL-infused search, providing a concrete mechanism to train reliable process evaluators without massive human annotation.
+
+### [AsmEvo: Agentic Assembly-Level Optimization of AMD GPU Kernels with Functional Equivalence Verification](https://arxiv.org/abs/2608.20711)
+
+**2026-08-21** | Advanced Micro Devices, Inc. (AMD), Southern University of Science and Technology | M=7 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Long-horizon agentic search driver for assembly transformations under external correctness-gated verification | *LLM role:* heuristic_generator
+
+> AsmEvo uses a long-horizon LLM agent to optimize compiled AMD GPU kernels at the assembly level, relying on the original binary as a differential oracle to verify functional equivalence before measuring performance. The paper presents strong empirical results on real hardware (MI308X/MI300X), achieving up to 3.88x speedups on KernelBench and 1.18x geometric-mean speedups on production vLLM/SGLang Triton kernels. The key insight is the strict separation between the LLM proposer and a deterministic, correctness-gated verification harness (using real-dispatch capture for a non-hackable fitness signal), which prevents the search from exploiting fast but incorrect programs. This is highly relevant for our work in LLM evolutionary search and LLM serving optimization, as the architecture for verified composition and anti-stall memory can be directly adapted to improve the robustness and sample efficiency of our own agentic search frameworks.
+
 
 #### 2026-08-25 (3 papers)
 

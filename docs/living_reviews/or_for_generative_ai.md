@@ -1,10 +1,29 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-08-25
+**Last Updated:** 2026-08-28
 
 ---
 
 ## Recent Papers
+
+#### 2026-08-28 (2 papers)
+
+### [PowerSlider: Exploiting Phase Asymmetry for LLM Serving under Demand Response](https://arxiv.org/abs/2608.21719)
+
+**2026-08-22** | Microsoft Azure Research, Cornell University, Cornell Tech | M=8 P=9 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Karush–Kuhn–Tucker (KKT) online solver for convex-relaxed joint allocation | *LLM role:* none
+
+> POWERSLIDER optimizes LLM serving under dynamic power caps by disaggregating the pipeline into Prefill, Think, and Answer stages and using a KKT online solver to dynamically adjust GPU allocation and frequencies based on phase asymmetry. The results are rigorously backed by empirical data, demonstrating 1.64x higher goodput than the best baseline at a 30% power cap reduction while solving the allocation problem in just 7.7ms. The key insight is that reasoning workloads break standard prefill-decode disaggregation due to massive KV-cache accumulation during the 'thinking' phase; isolating this into a three-stage pipeline allows an online convex solver to aggressively scale down frequencies for memory-bound decode stages without starving compute-bound prefill. This is highly relevant for our research in OR formulations for LLM serving scheduling, as it provides both a necessary architectural paradigm shift for reasoning models and a mathematically rigorous, millisecond-scale optimization approach.
+
+### [TOPAS: Workflow-Aware Prefix-State Scheduling for Multi-Agent LLM Serving](https://arxiv.org/abs/2608.25523)
+
+**2026-08-26** | University of Science and Technology of China, Hefei University of Technology | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Task-Oriented Prefix-Aware Scheduler (TOPAS) that jointly determines prefix residency and request admission via a JCT-oriented utility function and hierarchical state search | *LLM role:* none
+
+> TOPAS is an online scheduler for multi-agent LLM serving that jointly optimizes KV cache prefix residency and request admission to minimize task-level job completion time. Backed by empirical numbers, it reduces mean and p99 JCT by up to 39.8% and 49.4% on synthetic DAGs, and significantly improves performance on real MetaGPT workflows compared to baselines like Shortest-Path-First. The critical insight is treating prefix residency as an explicit, workflow-aware scheduling decision rather than a reactive byproduct of request ordering, using a utility function that balances the reduction of a task's longest remaining service path against near-term prefix reuse. This is highly relevant for research in OR formulations for LLM serving scheduling, offering a concrete heuristic search approach to manage the memory-compute tradeoff in complex multi-agent deployments.
+
 
 #### 2026-08-25 (1 papers)
 
