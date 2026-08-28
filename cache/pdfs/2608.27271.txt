@@ -1,0 +1,1909 @@
+--- Page 1 ---
+Marine Autonomous Vehicle Fleet
+Scheduling to Maximise Scientific Impact
+Mehdi El Krari∗, Jonathan Smith, Maria Fox
+British Antarctic Survey, AI Lab
+Cambridge, UK
+August 28, 2026
+Abstract:
+The marine science community increasingly relies on Marine Autonomous
+Vehicles (MAVs) to collect the critical environmental data required to un-
+derstand global ocean systems. However, as these operations scale, manually
+routing and planning large autonomous fleets becomes exponentially complex
+and time-consuming. To address this, we propose a mixed-integer linear pro-
+gramming (MILP) model designed to automate and optimise MAV deploy-
+ment schedules. The model accounts for strict operational constraints, in-
+cluding battery capacities and time windows for data collection, while aiming
+to maximise total data collection and minimise both the number of deployed
+vehicles and their energy consumption. A key novelty of this framework is
+integrating conventional ship itineraries, allowing MAVs to support vessels
+with mid-mission battery swapping or accelerated transit between waypoints.
+Computational experiments demonstrate that the model is highly scalable,
+solving routing problems for fleets of dozens of MAVs in seconds, and scaling
+to hundreds of vehicles in only a few minutes. Beyond operational schedul-
+ing, the framework serves as a robust simulation tool for evaluating ’what-if’
+scenarios and analysing the impact of varying parameters on deployment
+strategies. Finally, the solution generates a suite of visualisations designed
+to enhance explainability and support strategic decision-making for stake-
+holders.
+∗Corresponding author: elkrari@acm.org
+1
+arXiv:2608.27271v1  [math.OC]  27 Aug 2026
+
+
+--- Page 2 ---
+1 Introduction
+Marine science is inextricably linked to global environmental health, providing the foun-
+dation for understanding and mitigating anthropogenic impacts on Earth’s ocean sys-
+tems. Developing effective protection strategies, deciphering the profound effects of cli-
+mate change, and driving higher-resolution environmental models all rely on the continu-
+ous acquisition of high-fidelity marine data (e.g temperature, salinity, and conductivity).
+This need is particularly urgent in highly sensitive environments like the polar regions,
+where rapid climatic shifts have global consequences. To address this escalating demand
+for continuous ocean observations, the British government—through UK Research and
+Innovation (UKRI) and its Natural Environment Research Council (NERC)—established
+the Future Marine Research Infrastructure (FMRI) programme. This strategic initiative
+is designed to deliver “the next generation of large-scale marine research infrastructure1”.
+Marine Autonomous Vehicles (MAVs) (Alam et al., 2014; Schofield et al., 2007) are
+integral to this future infrastructure. Driven by the UKRI Environmental Sustainability
+Strategy to achieve net-zero by 2040, these vehicles offer vastly improved carbon effi-
+ciency compared to conventional research vessels, making them increasingly prominent
+in data collection efforts. Consequently, the FMRI programme is driving a significant
+expansion of the national autonomous fleet. However, as the number of deployed MAVs
+grows, the manual planning of their missions becomes exponentially more complex. This
+process cannot scale effectively without the integration of advanced, automated decision-
+support tools.
+To address this operational challenge, this paper proposes a mixed integer linear pro-
+gramming (MILP) model to optimise routing and deployment planning for large MAV
+fleets. The developed model accounts for numerous asset- and environment-specific op-
+erational constraints to ensure that every generated solution is practically feasible, with
+the primary objective of maximising the total volume of scientific data collected. Fur-
+thermore, our proposed framework is highly adaptable. It integrates pre-existing ship
+itineraries, allowing conventional vessels to be used for MAV battery swapping or as
+transit corridors.
+Our work can also serve as a simulation tool: researchers can evaluate ”what-if” sce-
+narios (e.g., varying battery capacities or extended deployment periods) prior to physical
+deployment. Finally, to improve the explainability of these complex plans, we introduce
+a suite of textual and visual outputs derived from the model’s solutions, specifically
+designed to highlight the most critical aspects of the overarching deployment strategy.
+The remainder of this paper is structured as follows. Section 3 presents a review of
+related literature. Section 4 formally defines the problem, followed by the presentation
+of the mathematical model in Section 6. Section 7 introduces three distinct use cases
+alongside their respective computational results. Finally, Section 8 concludes the paper
+by discussing our findings and perspectives on future work.
+1The Future Marine Research Infrastructure programme: https://fmri.ac.uk/
+2
+
+
+--- Page 3 ---
+2 Introduction
+Marine science is inextricably linked to global environmental health, providing the foun-
+dation for understanding and mitigating anthropogenic impacts on Earth’s ocean sys-
+tems. Developing effective protection strategies, deciphering the profound effects of cli-
+mate change, and driving higher-resolution environmental models all rely on the continu-
+ous acquisition of high-fidelity marine data (e.g temperature, salinity, and conductivity).
+This need is particularly urgent in highly sensitive environments like the polar regions,
+where rapid climatic shifts have global consequences. To address this escalating demand
+for continuous ocean observations, the British government—through UK Research and
+Innovation (UKRI) and its Natural Environment Research Council (NERC)—established
+the Future Marine Research Infrastructure (FMRI) programme. This strategic initiative
+is designed to deliver “the next generation of large-scale marine research infrastructure2”.
+Marine Autonomous Vehicles (MAVs) (Alam et al., 2014; Schofield et al., 2007) are
+integral to this future infrastructure. Driven by the UKRI Environmental Sustainability
+Strategy to achieve net-zero by 2040, these vehicles offer vastly improved carbon effi-
+ciency compared to conventional research vessels, making them increasingly prominent
+in data collection efforts. Consequently, the FMRI programme is driving a significant
+expansion of the national autonomous fleet. However, as the number of deployed MAVs
+grows, the manual planning of their missions becomes exponentially more complex. This
+process cannot scale effectively without the integration of advanced, automated decision-
+support tools.
+To address this operational challenge, this paper proposes a mixed integer linear pro-
+gramming (MILP) model to optimise routing and deployment planning for large MAV
+fleets. The developed model accounts for numerous asset- and environment-specific op-
+erational constraints to ensure that every generated solution is practically feasible, with
+the primary objective of maximising the total volume of scientific data collected. Fur-
+thermore, our proposed framework is highly adaptable. It integrates pre-existing ship
+itineraries, allowing conventional vessels to be used for MAV battery swapping or as
+transit corridors.
+Our work can also serve as a simulation tool: researchers can evaluate ”what-if” sce-
+narios (e.g., varying battery capacities or extended deployment periods) prior to physical
+deployment. Finally, to improve the explainability of these complex plans, we introduce
+a suite of textual and visual outputs derived from the model’s solutions, specifically
+designed to highlight the most critical aspects of the overarching deployment strategy.
+The remainder of this paper is structured as follows. Section 3 presents a review of
+related literature. Section 4 formally defines the problem, followed by the presentation
+of the mathematical model in Section 6. Section 7 introduces three distinct use cases
+alongside their respective computational results. Finally, Section 8 concludes the paper
+by discussing our findings and perspectives on future work.
+2The Future Marine Research Infrastructure programme: https://fmri.ac.uk/
+3
+
+
+--- Page 4 ---
+3 Literature Review
+Marine Autonomous Vehicles (MAVs) are indispensable tools for marine science and
+naval operations, enabling data collection in environments where human presence is im-
+practical or hazardous (Bovio et al., 2006). Their navigation and operational systems
+face unique challenges, including limited underwater communication, dynamic ocean cur-
+rents, and strict energy constraints (Zhang et al., 2023). While recent reviews highlight
+advancements in sensor fusion and path planning (e.g., Zhang et al. (2023)), operational
+reliability and fleet-level coordination remain critical bottlenecks for large-scale mission
+success. Human-in-the-loop frameworks, such as those by Somers and Hollinger (2016),
+have traditionally enhanced navigational robustness by combining operator expertise
+with probabilistic planning, but these manual methods struggle to scale as fleet sizes
+increase.
+3.1 MAV Path and Mission Planning
+Path planning is fundamental to MAV operations, and early work by Warren (1990) es-
+tablished route-planning techniques for underwater environments. Modern approaches
+address increasingly complex scenarios, as Li et al. (2018) comprehensively reviews and
+categorises methods into sampling-based, optimisation-based, bio-inspired, and geomet-
+ric model search algorithms.
+Optimisation-based approaches are particularly relevant for fleet coordination. Petres
+et al. (2007) demonstrated efficient path planning using Fast Marching methods (Sethian,
+1999), while Yang et al. (2022) proposed time-saving solutions for complex underwater
+conditions, and Yan et al. (2022) introduced a whale-based optimisation algorithm. A
+critical challenge in underwater path planning is handling environmental uncertainty,
+which Yao et al. (2021) addressed through interval optimisation for uncertain flow fields.
+Mission planning for MAVs involves both high-level task allocation and low-level path
+planning, which is particularly challenging in dynamic ocean environments.
+Tavana
+and Bourgeois (2010) proposed a decision-support system that combines multi-criteria
+analysis and fuzzy sets to address uncertainty in MAV operations. In contrast, Yan
+et al. (2014) developed an integrated algorithm for mission assignment and path planning
+in ocean current environments. Evolutionary algorithms have also shown promise for
+mission planning, as evidenced by Geng et al. (2013)’s work on UAV surveillance, which
+decomposes the problem into vantage point selection and path optimisation.
+3.2 MAV Fleet Coordination
+While individual MAVs are pivotal for marine data collection, scaling deployments
+to large fleets introduces immense challenges in mission planning (Sahoo et al., 2019;
+Thompson and Guihen, 2019). Early operational research focused on single-MAV nav-
+igation (Leonard and Bahr, 2016; Miller et al., 2010), while more recent studies have
+begun to address multi-MAV coordination. For instance, Sorbi et al. (2012) proposed
+4
+
+
+--- Page 5 ---
+behaviour-based planners for cooperative MAVs, and McMahon and Plaku (2016) opti-
+mised missions in dynamic environments.
+However, historically, the literature has treated MAV deployments as isolated, small-
+scale scientific endeavours rather than integrated components of a broader maritime
+logistics network. Consequently, a significant gap remains: existing autonomous coordi-
+nation models almost universally assume MAVs operate independently of conventional
+maritime infrastructure. They rarely account for ship support, such as mid-mission bat-
+tery swaps or assisted transits. This omission stems from the traditional divide between
+micro-level robotic path planning and macro-scale maritime logistics. By bridging these
+two fields, our proposed MILP model directly addresses this critical operational reality
+and reflects the true logistical demands of modern marine research.
+3.3 Optimisation Models in Marine Environments
+Maritime logistics has seen significant advances in optimisation techniques, particularly
+for fleet management and routing problems. Brouer et al. (2014) established a founda-
+tional MILP model for liner shipping network design, demonstrating how integer pro-
+gramming can optimise vessel routes while handling complex operational constraints.
+Their work with real-world data proved the practical applicability of such models at an
+industrial scale. For fuel supply vessels, Christiansen et al. (2017) compared arc-flow and
+path-flow formulations, showing how to model time-dependent constraints effectively. At
+the strategic level, Li et al. (2021) developed a comprehensive MILP model for global
+cargo flows that incorporates both containerised and bulk shipping.
+Bridging the gap to autonomous fleets, MILP modelling has been applied to MAV path
+planning under energy constraints (Carolis et al., 2017). Yilmaz et al. (2009) worked on
+a MILP model for adaptive sampling, while Eichhorn (2015) optimised routes in time-
+varying currents. These studies, however, neglect fleet-scale optimisation and joint ship-
+MAV planning. Recent work continues to advance MILP applications for autonomous
+fleets; Wang et al. (2024) demonstrated how constraint programming can solve task
+allocation as a Capacitated Vehicle Routing Problem (CVRP), and Pang et al. (2021)
+showed quantum particle swarm optimisation’s effectiveness for energy-constrained path
+planning.
+3.4 Energy Constraints and Fleet Scalability
+Battery management is the primary limiting factor for persistent MAV operations.
+Carolis et al. (2017) estimated runtime energy, while Bychkov et al. (2019) and Mah-
+moudZadeh et al. (2018b) optimised rendezvous strategies with stationary recharge sta-
+tions. Yazdani et al. (2016) further demonstrated the importance of battery and energy
+management through docking operations, developing a real-time trajectory optimiser
+that minimises both mission time and energy expenditure while accounting for hydro-
+dynamic effects.
+While evolutionary algorithms (MahmoudZadeh et al., 2018a) and particle swarm
+methods (Lu et al., 2020) can handle energy-aware task allocation, they lack the rigorous
+5
+
+
+--- Page 6 ---
+mathematical guarantees of MILP for optimality. Furthermore, prior research has largely
+avoided exact MILP formulations for joint ship-MAV routing due to the exponential
+computational complexity introduced by combining continuous autonomous operations
+with discrete maritime vessel schedules.
+Operating within the context of next-generation, large-scale marine research infras-
+tructure, our unique position allows us to formulate a highly scalable solution that
+mirrors actual deployment constraints. Our model bridges the gap between theoretical
+multi-agent routing and applied maritime logistics, ensuring strict operational feasibility
+for hundreds of MAVs while explicitly incorporating moving support vessels—a signifi-
+cant scalability and logistical leap over prior heuristic approaches (Wang et al., 2022).
+4 Problem Formulation
+This work distinguishes itself by tackling the joint routing of autonomous fleets and
+conventional support vessels—a problem previously avoided because of its inherent com-
+plexity. Rather than relying on stationary infrastructure or heuristic approximations,
+our framework introduces a highly scalable MILP model that explicitly incorporates
+discrete, scheduled ship itineraries. This approach enables the dynamic assignment of
+MAVs to support vessels for mid-mission battery swapping and accelerated transit, di-
+rectly addressing the operational realities of large-scale marine research.
+We define a problem consisting of |RS| research stations, denoted by the set
+{rs1, rs2, . . . , rs|RS|−1, rs|RS|} = RS, and |MV| Marine Autonomous Vehicles (MAVs)
+denoted by the set {mv1, mv2, . . . , mv|MV|−1, mv|MV|} = MV.
+Each MAV mv ∈MV
+possesses a unique type vt ∈{vt1, vt2, . . . , vt|VT|−1, vt|VT|} = VT that defines its ability
+to perform some task requirements.
+The set of MAVs of a given type vt is MVvt, {MVvt1 ∪MVvt2 ∪· · · ∪MVvt|VT|−1 ∪
+MVvt|VT|} = MV and {MVvt1 ∩MVvt2 ∩· · · ∩MVvt|VT|−1 ∩MVvt|VT|} = ∅.
+Each MAV mv ∈MV, if assigned to at least one task requirement, should be deployed
+from the base, known as port of mobilisation, bsmv within a time window twedbsmv,ldbsmv,
+and be recovered at its pickup location (or port of demobilisation) within the time
+window twerplmv,lrplmv. edbsmv, ldbsmv, erplmv, lrplmv are respectively the earliest and latest
+time for deployment from the base bsmv of mv, and the earliest and latest time for
+recovery at the pickup location plmv of mv.
+4.1 Task Requirements
+The problem has a set of task requirements TR; every single task trrs,vt ∈TR maps a
+research station rs with an MAV type vt that can cover the task. These requirements
+are defined by the following characteristics:
+• rqtr: the required number of MAVs of type vt needed for completing the task
+requirement tr. The number of assigned MAVs to each task tr can be less or equal
+than rqtr in the optimal solution, but not greater;
+6
+
+
+--- Page 7 ---
+• dtr: the duration for the task tr to be completed. Each assigned mv to tr should
+spend exactly dtr without interruption;
+• rttr: the earliest start time for the task tr;
+• lttr: the latest time for finishing the task tr;
+• wtr: the scientific weight associated to the task requirement tr. wtr is included
+in the objective function (6) to prioritise higher-weighted scientific missions over
+others under resource and vessel availability constraints.
+4.2 Battery constraints
+Each MAV mv ∈MV has a battery level blmv that varies every unit of time, from
+deployment, starting with its initial battery level bli
+mv and getting lower until its recovery.
+Battery usage depends on the MAV type and environmental conditions.
+Each MAV type vt ∈VT has two different average battery consumptions per time
+unit, either when it is active bca
+vt (i.e. doing review tasks) or idle bci
+vt (e.g. transiting).
+In addition to the consumptions, vt also defines the minimum battery level (threshold)
+thvt for each vehicle mv ∈MVvt.
+Depending on its location, each MAV’s battery consumption can be higher or lower
+than the average defined by its type. This variation can be driven by environmental
+conditions such as currents that affect different ocean areas with different magnitudes.
+The influence of these conditions on the battery usage is modelled with an energy factor
+ef that is assigned to each research station rs (ef rs) and route segment rto,d (efrto,d).
+4.3 Ship integration
+The model can also include a pre-existing ship (sh) itinerary. The latter is made of
+different mooring or stationary locations, each of which is characterised by a time window
+twst,et when the ship arrives and leaves that location. Each MAV can be assigned to
+the ship via its waypoints for one of these situations:
+• Have a fully recharged battery: This happens in the scenario when the new
+battery will lead to better coverage of the remaining science missions. The mini-
+mum duration spent at the ship sh is mindsh;
+• Use the ship for transiting: Because the ship is generally faster and safer in
+challenging environmental conditions. MAVs can transit via the ship to get to their
+destination faster when the proposed route would not allow them to reach their
+destinations within the specified time window or would lead to a battery resource
+constraint.
+7
+
+
+--- Page 8 ---
+4.4 Routes
+The stations RS, bases BS, pickup locations PL and the ship sh are interconnected via
+a set of routes RT. Each route rto,d is directed and has an origin o and a destination d.
+In addition to efrto,d, drto,d is the travel duration between o and d.
+As stated earlier, the ship is located at different positions across different time win-
+dows, making the duration and energy factors between the ship and any other location
+time-dependent. In addition to the origin o and destination d (where one of them is a
+ship), ship routes (rtshtw,d or rto,shtw) are also characterised by a time window tw when
+the route is available.
+5 Summary of notations
+To transition seamlessly from the conceptual problem formulation to the rigorous mixed-
+integer linear programming model, we compile a comprehensive summary of all math-
+ematical notations used throughout the rest of this paper. This reference is organised
+into three primary modules.
+AUV types:
+• VT: set of all MAV types;
+• vt: a single MAV type in VT;
+• VTrs: set of MAV types required by station rs
+AUVs:
+• MV: the set of all available MAVs, of any type (the fleet);
+• MVvt: the set of MAVs of type vt;
+• mv: a single MAV in MV (or MVvt);
+Time Windows
+• TW: set of all time windows;
+• tws,e: a single time window, starting at s and ending at e;
+• sttw: start time of tw;
+• ettw: end time of tw;
+• twa ≤twb ≡sttwa ≤sttwb
+8
+
+
+--- Page 9 ---
+Locations:
+• RS: set of all research stations;
+• RSvt: set of research stations to which the MAVs of type vt can be assigned;
+• rs: a single station in RS;
+• BS: the set of all ports of mobilisation for MV;
+• bsmv: the port of mobilisation for mv;
+• PL: the set of all ports of demobilisation for MV;
+• plmv: the port of demobilisation for mv;
+• shtw: the ship location within the time window tw
+• shTW: the set of ship locations in each time window in TW
+Routes:
+• RT: the set of all routes available for MAV movements;
+• rto,d: a single static route in RT connecting an origin o and destination d points.
+They can be either rs ∈RS, bs ∈BS, pl ∈PL or shtw∈TW;
+• RTsh: the set of ship routes, where the ship sh is one of the route endpoints.
+Task Requirements:
+• TR: the set of all task requirements to be completed;
+• TRrs,vt: set of task requirements to be completed in rs by MAVs of type vt;
+• trrs,vt: a single task in rs requiring the type vt;
+• wtr: weight of the task requirement tr
+5.1 Model Input Parameters
+AUV types:
+• bca
+vt: average of battery consumption per time unit when the MAV of type vt is
+active;
+• bci
+vt: average of battery consumption per time unit when the MAV of type vt is
+idle;
+• thvt: battery level threshold for each MAV of type vt;
+9
+
+
+--- Page 10 ---
+AUVs:
+• bli
+mv: the initial battery level for MAV mv;
+Locations:
+• ef rs: energy factor for each station rs;
+Routes:
+• drto,d: travel duration between o and d;
+• ef rto,d: energy factor for each route rto,d;
+Task Requirements:
+• VTrs: the set of MAV types (a subset of VT) needed in the station rs;
+• dtrrs,vt: duration of the task requirement trrs,vt at the station rs using MAVs of
+type vt ;
+• rqtrrs,vt: number of required MAVs from the type vt in the rs;
+• rttr: earliest start time of a task requirement at rs using MAVs of type vt ;
+• lttr: latest end time of a task requirement at rs using MAVs of type vt ;
+Departure & Arrival:
+• edbs: earliest time for releasing the MAVs at bs;
+• ldbs: latest time for releasing the MAVs at bs;
+• erpl: earliest time for the MAVs to arrive at pl;
+• lrpl: latest time for the MAVs to arrive at pl;
+Batteries & Charging Facilities:
+• maxbl : maximum of a battery level (= 100, considering it is a percentage)
+• mindsh: minimum duration spent in the ship sh
+Others:
+• TW: set of all time windows;
+• K: a large positive constant
+10
+
+
+--- Page 11 ---
+5.2 Decision Variables
+Assignments:
+• xmv,tr: binary variable for the assignment of the MAV mv to the task tr.
+xmv,tr = 1 if mv is assigned to the task tr, 0 otherwise;
+• ymv,rt: binary variable representing the use of the route rt ∈RT by the MAV mv.
+– ymv,rto,d = 1 if mv is going from o to d, 0 otherwise;
+– ymv,rtshtw,d = 1 if mv is leaving the ship sh to d within tw;
+– ymv,rto,shtw = 1 if mv is heading to the ship sh from d within tw;
+• zmv,twa,twb: binary variable for the assignment of the MAV mv to the ship sh,
+starting within the time window twa and ending within twb.
+zmv,twa,twb = 1 means mv is staying in the ship between twa and twb;
+• zimv,tw: binary variable indicating whether the MAV mv is heading to sh within tw
+or not;
+• zomv,tw: binary variable indicating whether the MAV mv is leaving sh within tw or
+not;
+Timing:
+• sttmv,tr: start time of the task tr by the MAV mv;
+• atrmv,rt: arrival time of MAV mv at route (rt) destination;
+Battery Levels:
+• bltmv,trrs,vt: the battery level of MAV mv at the end of task requirement trrs,vt
+• blrmv,rt: the battery level of MAV mv at the end of the route rt
+6 Mathematical Model
+6.1 Objective function
+The problem has five objectives defined in the following order:
+1. Maximise the number of MAV assignments to task requirements in the different
+stations:
+This is the main objective of the problem: maximising the number of science
+reviews comes before any other objective. A task weight wtr is included to offer
+the possibility to prioritise some science missions on top of others when a full
+11
+
+
+--- Page 12 ---
+coverage cannot be attained due to operational constraints such as fleet size, time
+windows or MAV requirements;
+max
+fscience =
+X
+rs∈RS
+X
+vt∈VTrs
+X
+mv∈MVvt
+xmv,trrs,vt × wtr
+rqtr
+(1)
+2. Minimise the total number of MAV deployments:
+The model is not constrained to use the entire available MAV fleet.
+For cost
+reduction purposes, a smaller number of MAVs can be assigned if they can cover
+the same number of task requirements;
+min
+fdeployment =
+X
+vt∈VT
+X
+mv∈MVvt
+X
+d∈RS∪shTW
+ymv,rtbsmv,d
+(2)
+3. Minimise the number of MAV assignments to the ship:
+Each MAV assignment to the ship induces a penalty to the objective value. This
+will restrict the ship assignment to MAVs only when an equivalent or better solu-
+tion cannot be found;
+min
+fdocking =
+X
+vt∈VT
+X
+mv∈MVvt
+×
+X
+tw∈TW
+zimv,tw
+(3)
+4. Minimise the battery usage for all the MAVs:
+This translates in the model by maximising the battery level for each deployed
+vehicle. We consider in the objective function the battery levels of MAVs when
+arriving at the ship or their respective pickup location;
+max
+fbattery =
+X
+vt∈VT
+X
+mv∈MVvt
+×
+X
+o∈RS∪{bsmv}
+X
+d∈shTW∪{plmv}
+blrmv,rto,d
+(4)
+5. Minimise the arrival time to the pickup location (port of demobilisation):
+As a final objective, the model minimises each deployed MAV’s timespan by as-
+signing it to its pickup location as soon as possible, within the specified time
+window.
+min
+ftimespan =
+X
+vt∈VT
+X
+mv∈MVvt
+×
+X
+o∈RS∪shTW
+atrmv,rto,plmv
+(5)
+The whole objective function combines the five above ones as in (6). α, β, γ, θ and
+ω are weight parameters to define the priority between each objective. In our paper,
+α = K × idmv × idtr. We generate IDs for each vehicle and task requirement and include
+them in the objective function to avoid symmetries. Then β = K, γ = max2
+bl, θ = 10
+and ω = 1.
+max
+α × fscience −(β × fdeployment + γ × fdocking −θ × fbattery + ω × ftimespan)
+(6)
+12
+
+
+--- Page 13 ---
+6.2 Flow constraints
+s.t.
+X
+d∈RS∪shTW
+ymv,rtbsmv,d ≤1 , ∀mv ∈MV
+(7)
+X
+o∈RS∪shTW
+ymv,rto,plmv ≤1 , ∀mv ∈MV
+(8)
+X
+mv∈MVvt
+xmv,trrs,vt ≤rqtrrs,vt , ∀rs ∈RS ∀vt ∈VTrs | ∃trrs,vt ∈TR
+(9)
+xmv,trrs,vt =
+X
+o∈(RS\{rs})∪shTW∪{bsmv}
+ymv,rto,rs ,
+∀rs ∈RS , ∀vt ∈VTrs , ∀mv ∈MVvt
+(10)
+xmv,trrs,vt =
+X
+d∈(RS\{rs})∪shTW∪{plmv}
+ymv,rtrs,d ,
+∀rs ∈RS , ∀vt ∈VTrs , ∀mv ∈MVvt
+(11)
+zimv,tw =
+X
+o∈RS∪{bsmv}
+ymv,rto,shtw , ∀mv ∈MV , ∀tw ∈TW
+(12)
+zomv,tw =
+X
+d∈RS∪{plmv}
+ymv,rtshtw,d , ∀mv ∈MV , ∀tw ∈TW
+(13)
+zimv,tw =
+X
+twt∈TW:twt≥tw
+zmv,tw,twt , ∀mv ∈MV , ∀tw ∈TW
+(14)
+zomv,tw =
+X
+twt∈TW:twt≤tw
+zmv,twt,tw , ∀mv ∈MV , ∀tw ∈TW
+(15)
+As mentioned earlier in the paper, we deploy each MAV only if it can lead to a new
+optimal solution. Constraints (7) state that each MAV will be leaving its base location
+via, at most, one route. The same holds when an MAV has to be recovered at its pickup
+location, as verified by (8). Constraints (9) state that, for each task requirement trrs,vt,
+the number of assigned MAVs of type vt to the station rs should not exceed the number
+of required MAVs by the task. When an MAV is assigned to a task, exactly one route
+13
+
+
+--- Page 14 ---
+should be activated to come to the station, and one to leave it. The two are controlled
+respectively by the constraints (10) and (11), which also ensure that if an MAV is not
+assigned to a task/station, it will not traverse that location. Similarly, if an MAV is
+assigned to the ship within one of the available time windows, there should be only one
+incoming (resp. outgoing) route to the ship at that location (or time window) activated,
+which is verified by constraints (12) (resp. (13)). Since the model allows for each MAV
+to be assigned multiple times, constraints (14) ensure that, if the MAV is assigned to
+the ship within a time window tw, then it would have to leave the ship within the same
+time window or one of the following ones. The same goes for constraints (15), making
+sure that if an MAV is leaving the ship within a time window, then it should have been
+assigned to the ship within the same one or earlier.
+6.3 Time constraints
+(edbsmv + drtbsmv,d) × ymv,rtbsmv,d ≤atrmv,rtbsmv,d ≤(ldbsmv + drtbsmv,d) × ymv,rtbsmv,d ,
+∀d ∈RS ∪shTW , ∀mv ∈MV
+(16)
+er×ymv,rto,plmv ≤atrmv,rto,plmv ≤lr×ymv,rto,plmv ,
+∀o ∈RS ∪shTW , ∀vt ∈VTrs , ∀mv ∈MVvt
+(17)
+atrmv,rtrso,d ≥sttmv,trrso,vt + dtrrso,vt + drtrso,d −K × (1 −ymv,rtrso,rsd),
+∀rso ∈RS, ∀d ∈RS ∪{plmv}, ∀vt ∈VTrso , ∀mv ∈MVvt
+(18)
+atrmv,rtrso,shtw ≥sttmv,trrso,vt + dtrrso,vt + (drtrso,shtw × zimv,tw) −K × (1 −ymv,rtrso,shtw),
+∀rso ∈RS, ∀vt ∈VTrso , ∀mv ∈MVvt , ∀tw ∈TW
+(19)
+atrmv,rtshtw,d ≥
+X
+o∈RS∪{bsmv}
+(atrmv,rto,shtw + ymv,rto,shtw × mindsh)
++ drtshtw,d × ymv,rtshtw,d −K × (1 −ymv,rtshtw,d) ,
+∀d ∈RS ∪{plmv} , ∀mv ∈MV , ∀tw ∈TW
+(20)
+((sttw + drtshtw,d) × ymv,rtshtw,d) ≤atrmv,rtshtw,d ≤((ettw + drtshtw,d) × ymv,rtshtw,d) ,
+∀d ∈RS ∪{plmv} , ∀mv ∈MV , ∀tw ∈TW
+(21)
+14
+
+
+--- Page 15 ---
+sttw × ymv,rtrs,shtw ≤atrmv,rtrs,shtw ≤lttw × ymv,rtrs,shtw ,
+∀rs ∈RS ∪{bsmv} , ∀mv ∈MV , ∀tw ∈TW
+(22)
+atrmv,rto,d ≤ymv,rto,d × K , ∀mv ∈MV ,
+∀(o, d) ∈(RS ∪{bsmv}) × (RS ∪{plmv}) | o̸ = d
+(23)
+atrmv,rtotw,dtw ≤ymv,rtotw,dtw × K , ∀mv ∈MV , ∀tw ∈TW ,
+∀(o, d) ∈(RS ∪{bsmv, sh}) × (RS ∪{plmv, sh}) | o̸ = d ∧(o = sh ∨d = sh)
+(24)
+sttmv,trrsd,vt ≥
+X
+o∈RS∪{bsmv}
+atrmv,rto,rsd +
+X
+tw∈TW
+atrmv,rtshtw,rsd ,
+∀rsd ∈RS , ∀vt ∈VTrsd , ∀mv ∈MVvt
+(25)
+rttrrs,vt × xmv,trrs,vt ≤sttmv,rs ≤lttrrs,vt −dtrrs,vt , ∀rs ∈RS , ∀vt ∈VTrs , ∀mv ∈MVvt
+(26)
+Constraints (16) ensure that each deployed MAV leaves the base between the earliest
+time and the latest time of deployment. Deployed MAVs must then arrive at their re-
+spective pickup locations between the earliest and latest recovery times. This is asserted
+by constraints (17). Constraints (18, 19) calculate the arrival time when the route origin
+is a research station, with (19) being for the case when the destination is the ship. If
+the latter is a starting point, and whatever the type of the destination, the arrival time
+for this route is calculated by the constraints (20). The arrival time for every ship route
+is constrained by the time window when the ship is available at its respective location.
+Constraints (21, 22) set the upper and lower bounds for ship route arrival times, respec-
+tively, when leaving her or heading to. The arrival time for each MAV at an unused
+route is set at 0, as defined by the constraints (23, 24). As stated by the constraints
+(25), the start time of a task by an MAV is equivalent to its arrival time at the station,
+and it should be within a time window to allow the task to be completed, as defined by
+the constraints (26).
+6.4 Battery levels
+thvt × xmv,trrs,vt ≤bltmv,trrs,vt ≤maxbl × xmv,trrs,vt ,
+∀rs ∈RS , ∀vt ∈VTrs , ∀mv ∈MVvt
+(27)
+15
+
+
+--- Page 16 ---
+thvt × ymv,rto,d ≤blrmv,rto,d ≤maxbl × ymv,rto,d ,
+∀(o, d) ∈(RS ∪shTW ∪{bsmv}) × (RS ∪shTW ∪{plmv}) | o̸ = d , ∀mv ∈MV
+(28)
+bltmv,trrs,vt ≤
+X
+o∈RSvt∪{bsmv}
+blrmv,rto,rs +
+X
+tw∈TW
+blrmv,rtshtw,rs −dtrrs,vt × bca
+vt × efrs × xmv,trrs,vt
+−(sttmv,trrs,vt −
+X
+rso∈RSvt
+atrmv,rto,rs −
+X
+tw∈TW
+atrmv,rtshtw,rs)bci
+vt × efrs ,
+∀rs ∈RS , ∀vt ∈VTrs , ∀mv ∈MVvt
+(29)
+blrmv,rtrso,d ≤bltmv,trrso,vt −drtrso,d × bci
+vt × efrtrso,d × ymv,rtrso,d
+−((atrmv,rtrso,d −drtrso,d) −(sttmv,trrso,vt + dtrrso,vt)) × bci
+vt × efrso
+∀rso ∈RS , ∀d ∈(RS ∪shTW ∪{plmv}) , ∀vt ∈VTrs , ∀mv ∈MVvt
+(30)
+blrmv,rtshtw,rsd ≤maxblmv −drtshtw,rsd,tw × efrtshtw,rsd,tw × bci
+vt × ymv,rtshtw,rsd
+∀rsd ∈RS ∪{plmv} , ∀vt ∈VTrs , ∀mv ∈MVvt , ∀tw ∈TW
+(31)
+blrmv,rtbsmv,rsd ≤bli
+mv −drtbsmv,rsd × bci
+vt × efrtbsmv,rsd × ymv,rtbsmv,rsd ,
+∀d ∈(RS ∪shTW) , ∀vt ∈VTrs , ∀mv ∈MVvt
+(32)
+Constraints (27) (resp. (28)) define the battery level bounds when at the end of any
+task (resp. route). The battery level at the end of a task is calculated by the constraints
+(29). The calculation of the battery level at the end of the routes is based on the following
+three cases: (i) when leaving a research station (30), (ii) when leaving the ship (31) and
+(iii) when leaving the base, meaning the beginning of the deployment (32).
+6.5 Variable bound definitions
+xmv,trrs,vt ∈{0, 1} , ∀rs ∈RS , ∀vt ∈VTrs , ∀mv ∈MVvt
+(33)
+ymv,rto,d ∈{0, 1} , ∀mv ∈MV , ∀rto,d ∈RT
+(34)
+zmv,twi,twj ∈{0, 1} , ∀mv ∈MV , ∀(twi, twi) ∈TW2
+(35)
+16
+
+
+--- Page 17 ---
+zimv,tw, zomv,tw ∈{0, 1} , ∀mv ∈MV , ∀tw ∈TW
+(36)
+0 ≤blrmv,rto,d ≤maxbl , ∀mv ∈MV , ∀rto,d ∈RT
+(37)
+0 ≤bltmv,trrs,vt ≤maxbl , ∀vt ∈VT , ∀mv ∈MVvt , ∀rs ∈RSvt
+(38)
+0 ≤atrmv,rto,d ≤ltplmv , ∀mv ∈MV , ∀rto,d ∈RT | o̸ = sh ∧d̸ = sh
+(39)
+0 ≤atrmv,rtshtw,d ≤ettw + drtshtw,d , ∀mv ∈MV , ∀rtshtw,d ∈RTsh
+(40)
+0 ≤atrmv,rto,shtw ≤ettw , ∀mv ∈MV , ∀rto,shtw ∈RTsh
+(41)
+0 ≤sttmv,tr ≤lttr −dtr , ∀mv ∈MV , ∀tr ∈TR
+(42)
+0 ≤sttmv,shtw ≤ettw , ∀mv ∈MV , ∀tw ∈TW
+(43)
+7 Case studies and Results
+In this section, we present four case studies that leverage the proposed MILP model to
+plan MAV fleets, maximising the number of science tasks completed while minimising
+the number of assets deployed and their battery consumption. The case studies vary
+in location, science requirements, and fleet size; each is inspired by real MAV science
+missions but deliberately expanded with additional task requirements and fleet assets.
+This scaling is intentional: as fleet size and the density of scientific commitments grow,
+manually planning a feasible deployment plan quickly becomes impractical, and even
+experienced human planners struggle to find good, let alone optimal, solutions within
+a reasonable time budget. The first case study establishes a baseline, shoreside-only
+deployment; the second introduces a hybrid deployment approach combining shoreside
+locations with a research vessel operating following an existing itinerary, to test the
+model’s handling of ship-assisted battery swapping and transit; the third evaluates the
+model at a near-national scale, coordinating a shared fleet of 100 vehicles across three
+different organisations; and the fourth demonstrates the model’s applicability across a
+diverse, worldwide portfolio of seven independently-planned deployments spanning four
+continents.
+All four case studies are solved using SCIP (Hojny et al., 2025), a non-commercial
+solver for mixed-integer programming (MIP) and mixed-integer nonlinear programming
+(MINLP).
+17
+
+
+--- Page 18 ---
+7.1 Inputs and outputs
+7.1.1 Data sources
+The case studies presented and solved in this paper are inspired by real-world science mis-
+sions taken from the Marine Facilities Planning (MFP) platform 3. The MFP provides a
+record of Ship time and Marine Equipment (SME) applications, as well as Autonomous
+Deployment (ADF) forms, which we use as a basis for our case studies.
+Task requirements: ADF forms contain the set of task requirements, the locations
+of mobilisation (bases) and demobilisation (pickup location or rendezvous points) ports,
+and the research stations. The form specifies the MAV type, the number of vehicles
+required, and the planned deployment and recovery dates.
+Ship itinerary: On the other hand, SMEs are used to build a ship itinerary that
+matches the task requirements to allow the MAVs to be assigned to the ship to cover
+additional task requirements. As it is a model with a single ship, these use cases focus
+on SMEs operated by the Royal Research Ship (RRS) Sir David Attenborough (SDA).
+AUVs and their types: This model considers the use and deployment of a fleet com-
+posed of Slocum Glider and Autosub Long Range 1500 (ALR1500) MAVs. The choice
+of these two is due to the availability of their characteristics within the organisation and
+other partners, which we can rely on for better route cost estimations.
+In this model, we consider an MAV type to be a combination of either the Slocum
+Glider or the ALR1500 with different sensor configurations.
+Route costs: While the ADF forms provide the necessary locations to solve each
+case study, they don’t include route costs between origins and destinations. PolarRoute
+(Smith et al., 2022), an advanced AI- and data-driven maritime route-planning software,
+is used to generate travel time and battery consumption for the entire set of routes,
+including ship routes. We generate costs for the Slocum Glider and ALR1500, and for
+generating ship itineraries in some case studies.
+7.1.2 Model outputs
+We generate different outputs for each case study in this work. They are either textual
+or visualisations:
+• The case study plan, a CSV file format with all the activities for each deployed
+MAV, starting from the deployment (departure) till the recovery (arrival). Ac-
+tivities can be science reviews, passages or ship assignments (battery swapping or
+transits). Each activity has a start time, an end time, and battery levels at the
+start and end.
+• Completion rates of the task requirements. As explained earlier in this paper,
+each science task requires a number of MAVs of a specific type/configuration. The
+completion rate indicates how much is covered by the proposed plan and how much
+remains to be covered. Each rate maps a research station with an AVU type.
+3Maas
+Software
+Engineering.
+Marine
+Facilities
+Planning
+(MFP),
+2026,
+https://www.marinefacilitiesplanning.com/.
+18
+
+
+--- Page 19 ---
+• A list of unused MAVs, which can be safely removed from the fleet before the
+start of the operations.
+• A timeline of MAV activities generated based on the CSV plan. Each row of the
+timeline (example Figure 2) shows all the activities for a single MAV. The battery
+level variation is added on top of activities that consume battery.
+• Histogram of science data collected by all the deployed MAVs.
+This data is
+grouped by instrument or sensor and counted using Science Days as the unit of
+measure.
+• Heatmap to visualise the completion rates.
+It maps MAV types to research
+stations.
+• Maps with all the different locations and the ship itinerary. Each map is a snap-
+shot of the proposed plan at a specific date.
+While we generate all the above outputs for each case study, we present the rele-
+vant visualisations below. All the visualisations are generated using the plotly package
+(Kruchten et al., 2026), are interactive, and provide more information than the screen-
+shots included in this paper.
+7.2 Case studies
+7.3 Deployment around Rothera, Antarctica
+69°W
+68°W
+67°W
+R
+S1
+S2
+S3
+0.40 days
+0.23 days
+0.08 days
+69°W
+68°W
+67°W
+R
+S1
+S2
+1.42 days
+0.64 days
+0.28 days
+S3
+67°
+30"S
+(b) ALR1500
+Key
+Science Survey
+Locations
+Deployment/
+Recovery Locations
+Minimum Time
+Routes
+Region
+(a) Slocum Glider
+Figure 1: Shoreside deployment from Rothera, Antarctica.
+(a) Represents example
+routes from the deployment/recovery location Rothera (R) to each of the re-
+search stations (S1, S2 and S3) for Slocum marine gliders. The transit time in
+days for each route is labelled. (b) Represents the same as panel (a) but for
+the AL1500.
+This first case study is inspired by science surveys conducted by the British Antarctic
+Survey (BAS) around Rothera, the organisation’s largest Antarctic research station and
+a key hub for Southern Ocean monitoring. It demonstrates the deployment and recovery
+of a mixed fleet of MAVs from a single location, with vehicles tasked to science surveys
+19
+
+
+--- Page 20 ---
+across three different research stations (S1, S2 and S3). The autonomous fleet consists of
+two marine platforms: Slocum Gliders (10 in total) and ALR1500 vehicles (2 in total),
+the latter moving at a faster speed than the Slocum Gliders (routes shown in Figure 1),
+with further differences between assets arising from their sensor instrumentation (Table
+1). For each research station, the model is provided with the science surveys that need
+to be completed, along with the sensor requirements, the number of MAVs needed, the
+task duration, and the earliest-start/latest-end timing restrictions (Table 2); in total,
+11 task requirements are distributed across the 3 research stations and 4 distinct MAV
+types, creating a combinatorially rich assignment problem despite the comparatively
+short distances involved.
+AUV Types
+Base Location
+Pickup Location
+Initial Battery
+Level (%)
+Autonomous Platform
+Sensors
+Slocum
+CTD+microstructure+ADCP
+Rothera
+Rothera
+80
+Slocum
+CTD+microstructure+ADCP
+Rothera
+Rothera
+60
+Slocum
+CTD+microstructure+ADCP
+Rothera
+Rothera
+100
+Slocum
+CTD+microstructure+ADCP
+Rothera
+Rothera
+88
+Slocum
+CTD+ADCP
+Rothera
+Rothera
+80
+Slocum
+CTD+ADCP
+Rothera
+Rothera
+100
+Slocum
+CTD+ADCP
+Rothera
+Rothera
+100
+Slocum
+CTD+optode+PAR+Ecopuck
+Rothera
+Rothera
+100
+Slocum
+CTD+optode+PAR+Ecopuck
+Rothera
+Rothera
+100
+Slocum
+CTD+optode+PAR+Ecopuck
+Rothera
+Rothera
+100
+ALR1500
+UVP6+EK80+EcoBBRTD
+Rothera
+Rothera
+100
+ALR1500
+UVP6+EK80+EcoBBRTD
+Rothera
+Rothera
+100
+Table 1: Fleet details for deployment around Rothera
+Research
+Stations
+AUV Types
+Number
+Required
+Task Duration
+(days)
+Earliest Start
+Latest End
+S1
+Slocum - CTD, Microstructure, ADCP
+2
+8
+2025-01-13
+2025-02-05
+S1
+Slocum - CTD, ADCP
+2
+10
+2025-01-11
+2025-02-10
+S1
+Slocum - CTD, Optode, PAR, Ecopuck
+2
+12
+2025-01-16
+2025-03-17
+S2
+Slocum - CTD, Microstructure, ADCP
+3
+7
+2025-01-21
+2025-03-22
+S2
+Slocum - CTD, ADCP
+1
+9
+2025-01-31
+2025-03-22
+S2
+Slocum - CTD, Optode, PAR, Ecopuck
+1
+5
+2025-01-26
+2025-03-17
+S3
+Slocum - CTD, Microstructure, ADCP
+3
+10
+2025-01-16
+2025-03-22
+S3
+Slocum - CTD, ADCP
+3
+8
+2025-01-11
+2025-03-12
+S3
+Slocum - CTD, Optode, PAR, Ecopuck
+2
+7
+2025-01-11
+2025-03-17
+S1
+ALR1500 - UVP6, EK80, EcoBBRTD
+2
+20
+2025-01-11
+2025-02-20
+S2
+ALR1500 - UVP6, EK80, EcoBBRTD
+2
+15
+2025-02-10
+2025-03-02
+Table 2: Requested science surveys around Rothera
+Providing the solver with the science surveys and the fleet information, it deter-
+mines a fully feasible plan in a matter of seconds, in which every one of the 11
+task requirements is satisfied, while also identifying that one MAV of type ”Slocum -
+CTD+optode+PAR+Ecopuck” is surplus to requirements and can be safely left ashore.
+This is a direct, practical benefit of the model: rather than deploying the entire available
+fleet by default, the optimisation actively searches for a leaner combination of assets,
+freeing a vehicle for maintenance, a different mission, or simply reducing deployment
+20
+
+
+--- Page 21 ---
+risk and cost without affecting scientific output.
+Looking beyond task completion, the timeline in Figure 2 reveals that nearly every
+MAV experiences periods of idle time between activities. This behaviour is a natural
+consequence of the interplay between the time windows attached to each task requirement
+and the comparatively short transit distances around Rothera; a vehicle can often reach
+its next assignment well before its window opens. Rather than a shortcoming, these
+idle intervals represent an opportunity: they could be filled with opportunistic science
+sampling along the way, extracting additional scientific value from a deployment that is
+already committed and paid for.
+Figure 2: Timeline of MAV activities for the deployment around Rothera
+7.4 South Georgia and the Falklands
+Figure 3: Hybrid ship and shoreside deployment around South Georgia and the Falk-
+lands. The red dashed line with arrows represents the pre-defined route of the
+vessel returning from the Weddell Sea before heading north, travelling through
+waypoints shown by circles. The research stations are shown by the rectangles.
+21
+
+
+--- Page 22 ---
+The second case study demonstrates a hybrid deployment approach, where MAVs can
+be deployed and recovered from either shoreside locations or the research vessel itself,
+capturing a more demanding and heterogeneous operational regime than the shoreside-
+only deployment at Rothera. Distances between locations expand considerably in this
+scenario, spanning some of the most remote and weather-exposed waters of the Scotia
+Sea; at this scale, the MAVs’ limited battery capacity and the tight time windows
+attached to each task requirement make direct, unassisted transits infeasible for many
+routes, so vehicles must instead rendezvous with the ship, ride it as a transit corridor,
+and resume their science surveys with a freshly swapped battery.
+To demonstrate this scenario, we consider a region around South Georgia and the
+Falklands, where the RRS Sir David Attenborough (SDA) has a pre-defined itinerary
+returning from the Weddell Sea before heading north (Figure 3). The starting locations of
+the 12 available MAVs are spread across: the ship itself (1 Slocum glider), South Georgia
+(5 Slocum gliders and 2 ALR1500 vehicles) and the Falklands (4 Slocum gliders). The
+problem consists of 12 task requirements across the 4 research stations and requires a
+mix of MAV types, with a total of 22 autonomous assets deployed (Table 3 and Table
+4); all autonomous assets must rendezvous with the ship before it heads north.
+AUV Types
+Base Location
+Pickup Location
+Initial Battery
+Level (%)
+Autonomous Platform
+Sensors
+Slocum
+CTD+microstructure+ADCP
+Falklands
+RDV
+51
+Slocum
+CTD+microstructure+ADCP
+Falklands
+Checkpoint 1
+43
+Slocum
+CTD+microstructure+ADCP
+South Georgia
+Checkpoint 1
+100
+Slocum
+CTD+microstructure+ADCP
+Checkpoint 1
+Checkpoint 1
+68
+Slocum
+CTD+ADCP
+Falklands
+RDV
+60
+Slocum
+CTD+ADCP
+South Georgia
+RDV
+100
+Slocum
+CTD+ADCP
+South Georgia
+Checkpoint 1
+72
+Slocum
+CTD+optode+PAR+Ecopuck
+Falklands
+RDV
+100
+Slocum
+CTD+optode+PAR+Ecopuck
+South Georgia
+RDV
+67
+Slocum
+CTD+optode+PAR+Ecopuck
+Checkpoint 1
+Checkpoint 1
+54
+ALR1500
+UVP6+EK80+EcoBBRTD
+South Georgia
+RDV
+100
+ALR1500
+UVP6+EK80+EcoBBRTD
+Checkpoint 1
+Checkpoint 1
+58
+Table 3: Fleet details for deployment around South Georgia and the Falklands
+Providing the solver with the science surveys and the fleet information, it determines a
+solution in around 10 seconds. To capture how ship support shapes the deployment plan,
+the RRS Sir David Attenborough’s (SDA) itinerary is overlaid on the timeline alongside
+the deployed MAVs, with ship-related activities marked separately to highlight the time
+windows during which vehicles are docked for either charging or transit.
+The resulting timeline in Figure 4 shows that the final solution has a complex inter-
+action with the MAVs, where some vehicles leverage the vessel for battery swapping or
+transit despite being deployed and picked up from shoreside locations. Since the mini-
+mum permitted stay aboard the ship is one day, we can distinguish between the two roles
+the vessel plays: an MAV that boards and disembarks within the same time window is
+undergoing a battery swap, whereas one that leaves during a later window is instead
+using the ship purely as a transit shortcut across otherwise unreachable distances.
+As with the shoreside deployment at Rothera, the solver also decided that not every
+22
+
+
+--- Page 23 ---
+Research
+Stations
+AUV Types
+Number
+Required
+Task Duration
+(days)
+Earliest Start
+Latest End
+S1
+Slocum - CTD+microstructure+ADCP
+2
+7
+2025-01-13
+2025-08-09
+S1
+Slocum - CTD+ADCP
+1
+10
+2025-01-16
+2025-01-27
+S1
+Slocum - CTD+optode+PAR+Ecopuck
+1
+8
+2025-01-11
+2025-01-31
+S2
+Slocum - CTD+microstructure+ADCP
+2
+7
+2025-01-21
+2025-03-07
+S2
+ALR1500 - UVP6+EK80+EcoBBRTD
+1
+15
+2025-01-11
+2025-01-31
+S2
+Slocum - CTD+optode+PAR+Ecopuck
+1
+10
+2025-01-16
+2025-01-31
+S3
+Slocum - CTD+microstructure+ADCP
+3
+15
+2025-05-11
+2025-06-20
+S3
+Slocum - CTD+optode+PAR+Ecopuck
+1
+10
+2025-02-10
+2025-03-02
+S3
+ALR1500 - UVP6+EK80+EcoBBRTD
+2
+20
+2025-02-10
+2025-03-02
+S4
+Slocum - CTD+microstructure+ADCP
+3
+7
+2025-01-21
+2025-03-07
+S4
+Slocum - CTD+ADCP
+2
+13
+2025-01-21
+2025-03-07
+S4
+Slocum - CTD+optode+PAR+Ecopuck
+1
+10
+2025-01-21
+2025-03-07
+Table 4: Requested science surveys around South Georgia and the Falklands
+available MAV is needed to complete the plan; one Slocum glider is retained aboard
+the ship rather than deployed, since deploying it would not increase the achieved task
+coverage.
+We generated this example with a fleet consisting of 100% initial battery levels, but
+with an infeasible number of science tasks to be completed; even so, the solver can
+still return a solution that completes as much as possible.
+The heatmap in Figure
+5(a) shows that the task scheduled at research station S1 for MAV type ”Slocum -
+CTD+microstructure+ADCP” only reaches half of its required coverage. Because the
+solution returned is provably optimal given the current inputs, this shortfall is not
+a modelling artefact but a genuine reflection of the fleet’s limits relative to demand;
+achieving full coverage of this particular task would require either additional assets or a
+re-weighting of task priorities to favour it over competing requirements.
+To quantify just how much value the ship itself contributes, we re-ran the same sce-
+nario with the vessel excluded from the model altogether. To isolate the effect of ship
+assistance from that of the fleet’s initial battery state, we also reset every MAV to a full
+100% charge in this variant, effectively giving the no-ship configuration the best possi-
+ble starting condition. Despite this advantage, Figure 5(b) shows that overall science
+coverage still falls short of the original, ship-assisted plan, confirming that the ship is
+not merely convenient but materially expands the range of achievable science outcomes
+in this operating environment.
+23
+
+
+--- Page 24 ---
+Figure 4: Timeline of MAV activities for the deployment around South Georgia and the
+Falklands
+Figure 5: Heatmaps of completion rates of task requirements for the deployment around
+South Georgia and the Falklands: (a) with the research ship and mixed initial
+battery levels, and (b) without the research ship and with all MAVs deployed
+at 100% of battery
+24
+
+
+--- Page 25 ---
+7.5 United Kingdom Large Scale Deployment
+45°W
+30°W
+15°W
+0°
+15°E
+60°N
+W1
+W2
+W3
+W4
+W5
+W6
+S1
+S2
+S3
+S4
+S5
+Key
+Region
+Science Survey
+Locations
+Deployment/Recovery
+Locations
+Pre-Existing Ship
+Itinerary
+Figure 6: Case study integrating a ship with a pre-defined itinerary. The red dashed line
+with arrows represents the pre-defined route of the vessel travelling through
+waypoints shown by circles. The research stations are shown by the rectangles.
+The third and last case study demonstrates the scaling of the model to a situation with
+a large fleet of MAVs (100s) across a variety of start locations and asset ownership,
+echoing the shared-infrastructure vision set out for the UK’s future marine research fleet
+(Parker, 2021). Rather than each organisation planning its own assets in isolation, this
+scenario asks whether a coordinated, national-scale approach can extract greater scien-
+tific value from resources that are traditionally managed and scheduled independently.
+We generate a scenario with science surveys distributed around the United Kingdom,
+involving 100 MAVs drawn from three organisations: the British Antarctic Survey, the
+National Oceanography Centre (NOC), and the Scottish Association for Marine Science
+(SAMS). The autonomous fleet consists of 60 Slocum Gliders and 40 ALR1500 vehicles,
+tasked with completing 17 science surveys (Table 5) across 5 research stations (S1-S5). A
+predefined itinerary for the RRS Sir David Attenborough, departing from and returning
+to Harwich, threads through a series of science waypoints (Figure 6), while deployment
+and pickup of the MAVs can occur either from shoreside locations within Scotland or di-
+rectly from the vessel, giving the model the opportunity to combine ship-assisted transit
+with the coordination of a substantially larger and more heterogeneous fleet than in the
+previous two case studies.
+Providing the solver with the science surveys and the fleet information, it determines
+a solution in around 10 minutes; the increased solve time compared to the previous two
+case studies is due to the significant increase in the number of MAVs. The planner is
+nonetheless still able to return a solution that minimises battery usage and the number
+of assets while maximising the amount of science delivered, determining that 5 Slocum
+gliders provide no additional science delivery and should not be used.
+25
+
+
+--- Page 26 ---
+Research
+Stations
+AUV Types
+Number
+Required
+Task Duration
+(days)
+Earliest Start
+Latest End
+S1
+Slocum - CTD+microstructure+ADCP
+15
+8
+2025-01-03
+2025-02-20
+S1
+Slocum - CTD+ADCP
+10
+10
+2025-01-16
+2025-02-20
+S1
+Slocum - CTD+optode+PAR+Ecopuck
+8
+8
+2025-01-11
+2025-01-31
+S2
+Slocum - CTD+microstructure+ADCP
+7
+7
+2025-01-13
+2025-01-26
+S2
+Slocum - CTD+ADCP
+14
+8
+2025-01-18
+2025-02-10
+S2
+Slocum - CTD+optode+PAR+Ecopuck
+7
+10
+2025-01-16
+2025-01-31
+S3
+Slocum - CTD+microstructure+ADCP
+9
+15
+2025-02-05
+2025-02-25
+S3
+Slocum - CTD+optode+PAR+Ecopuck
+10
+10
+2025-02-10
+2025-03-02
+S2
+ALR1500 - UVP6+EK80+EcoBBRTD
+30
+15
+2025-01-11
+2025-01-31
+S3
+ALR1500 - UVP6+EK80+EcoBBRTD
+22
+20
+2025-02-10
+2025-03-02
+S4
+Slocum - CTD+microstructure+ADCP
+16
+7
+2025-04-01
+2025-05-31
+S4
+Slocum - CTD+ADCP
+8
+13
+2025-03-27
+2025-05-21
+S4
+Slocum - CTD+optode+PAR+Ecopuck
+12
+10
+2025-04-06
+2025-05-26
+S5
+Slocum - CTD+ADCP
+14
+13
+2025-01-21
+2025-03-07
+S5
+Slocum - CTD+optode+PAR+Ecopuck
+7
+10
+2025-01-21
+2025-03-07
+S4
+ALR1500 - UVP6+EK80+EcoBBRTD
+17
+13
+2025-02-20
+2025-04-01
+S5
+ALR1500 - UVP6+EK80+EcoBBRTD
+28
+10
+2025-01-11
+2025-03-02
+Table 5: Requested science surveys around the United Kingdom
+At this scale, with 100 vehicles drawn from three separate organisations, the resulting
+plan is far too complex to inspect activity-by-activity; instead, we visualise its overall
+evolution through a series of geographic snapshots of the solver’s solution, shown in
+Figure 7. In each panel, coloured circles mark the position of every asset on a given
+date, with trailing lines tracing the path each vehicle has followed over the preceding 30
+days, allowing the collective behaviour of the fleet to be read at a glance.
+The sequence tells a coherent operational story.
+In the earliest panels, MAVs are
+concentrated in the North Sea, working through survey tasks close to their point of
+departure (Panels a and b). As the RRS Sir David Attenborough’s itinerary advances,
+however, the fleet fans out into the more exposed waters of the Atlantic Ocean to com-
+plete the remaining surveys, with several vehicles timing their movements to rendezvous
+with the ship, board for transit, and be redeployed closer to Scotland as the vessel turns
+back towards Harwich (Panels c and d). The remaining Atlantic-based assets indepen-
+dently make their own way back towards Scotland for recovery (Panels c–e), illustrating
+how the model orchestrates a mix of independent transits and ship-assisted legs across
+a large, geographically dispersed fleet without requiring any manual intervention.
+7.6 Worldwide Fleet Coordination
+While the first three case studies each schedule a single fleet at one location, the fourth
+and final case study demonstrates the applicability of the proposed model across a di-
+verse, worldwide portfolio of MAV missions. Seven independent deployments, each in-
+spired by a real science mission, are planned separately with the proposed model: (i)
+Walvis Bay (Namibia); (ii) Appledore (Cornwall, UK); (iii) a transit survey between
+Cornwall and the west coast of France; (iv) REBELS-2 (Nuuk, Greenland); (v) BIO-
+Carbon ADF (Reykjavik, Iceland); (vi) eSWEETS3 (Aberdeen, Scotland) and (vii) COS-
+26
+
+
+--- Page 27 ---
+Figure 7: Time evolution of assets in plan. Panels (a) – (e). Each circle represents the
+asset location on the panel date, with the tails representing its path over the
+last 30 days, and colours indicating the asset type. The blue boxes represent
+the science locations and the red boxes the ship waypoint locations.
+27
+
+
+--- Page 28 ---
+Deployment
+Region
+Slocum Gliders
+ALR1500
+Total MAVs
+Science Tasks
+Total Deployments
+Walvis Bay
+Namibia
+8
+4
+12
+36
+144
+Appledore, Cornwall
+Celtic Sea
+6
+4
+10
+6
+27
+Cornwall to west coast of France
+English Channel / Bay of Biscay
+10
+4
+14
+6
+38
+REBELS-2 (Nuuk, Greenland)
+Labrador Sea
+15
+5
+20
+12
+61
+BIO-Carbon ADF (Reykjavik, Iceland)
+North Atlantic
+15
+4
+19
+92
+98
+eSWEETS3 (Aberdeen, Scotland)
+North Sea
+15
+5
+20
+11
+25
+COSMOS (Buenos Aires, Argentina)
+South Atlantic
+5
+5
+10
+10
+50
+Total
+74
+31
+105
+173
+443
+Table 6: Fleet, science task, and deployment summary for the seven Case Study 4 sites
+MOS (Buenos Aires, Argentina). Figure 8 gives an overview of the geographic spread of
+the seven deployments (top, marker size proportional to the number of MAVs deployed
+at each site), together with zoomed-in views of each site’s deployment/recovery and sci-
+ence survey locations (bottom): Walvis Bay and COSMOS are shown individually, while
+the remaining five sites - all clustered around the North Atlantic and north-west Europe
+- are shown together in a single panel. Each site keeps a consistent colour across both
+the overview and the zoom panels. This worldwide, multi-fleet scale of coordination is
+also directly relevant to the national fleet-scaling ambitions set out in Annex A.6 of the
+UKRI Corporate Plan (UK Research and Innovation, 2025), which identifies the coordi-
+nated growth and utilisation of the UK’s national MAV fleet as a strategic priority for
+future marine research infrastructure.
+Table 6 summarises the fleet composition, science task requirements, and duration
+of each of the seven deployments. Fleet sizes range from a compact 10-vehicle deploy-
+ment at Appledore and COSMOS up to a 20-vehicle deployment at REBELS-2 and
+eSWEETS3, while the number of science tasks completed ranges from as few as 6 (Ap-
+pledore, Cornwall-France) to as many as 92 (BIO-Carbon ADF), reflecting the diversity
+of mission durations and scientific objectives represented in this case study.
+Across the whole portfolio, the model plans 105 MAVs to complete 173 science tasks
+over a combined 443 deployments.
+Fleet utilisation is close to complete: six of the
+seven deployments use every available asset, with the sole exception of eSWEETS3
+(Aberdeen), where 6 Slocum gliders (2 CTD+O2+Fluorescence, 2 CTD+PAR, and 2
+ALR1500 UVP6+EK80+EcoBBRTD) are found to be surplus to requirements and safely
+omitted from the deployed fleet.
+Given the scale of this case study, we first present the timeline of activities across the
+entire portfolio in a single view. In practice, the seven deployments are not served by
+seven independent sets of vehicles: the MAVs instead belong to three physical fleets,
+each of which is shipped or trucked between consecutive deployment sites once one cam-
+paign concludes and before the next begins. Fleet 1 covers the North Atlantic, moving
+by sea from REBELS-2 (Nuuk, Greenland) to BIO-Carbon ADF (Reykjavik, Iceland);
+Fleet 2 covers the English Channel/North Sea, moving by road between Appledore, the
+Cornwall-France crossing, and eSWEETS3 (Aberdeen); and Fleet 3 covers the South
+Atlantic, moving by sea between Walvis Bay (Namibia) and COSMOS (Buenos Aires).
+Each physical vehicle is identified by its fleet, type, and hull number alone, independent
+of the specific sensor payload it happened to carry on a given mission, so that the same
+hull can be recognised as it is redeployed from one science project to the next. Under
+28
+
+
+--- Page 29 ---
+Figure 8: Top: worldwide overview of the seven Case Study 4 sites, lettered A-G and
+coloured consistently with the zoom panels; marker size is proportional to
+the number of MAVs deployed at each site, and sites sharing (near-)identical
+coordinates are spread apart slightly for legibility, connected to their true
+location by a thin leader line. Bottom: zoomed-in views of each site’s deploy-
+ment/recovery locations (squares) and science survey locations (dots), with
+sites B-F (all in the North Atlantic/Europe) combined into a single panel.
+29
+
+
+--- Page 30 ---
+this view, the 99 actively-deployed MAVs (of the 105 planned; the 6 surplus eSWEETS3
+gliders noted above are never activated and so do not appear) reduce to just 59 distinct
+physical vehicles - 20 in Fleet 1, 24 in Fleet 2, and 15 in Fleet 3 - each reused across
+an average of nearly two consecutive deployments. Figure 9 shows the combined sched-
+ule of these 59 vehicles, grouped by fleet, with each bar coloured by activity type and
+shaded by the asset’s battery level at that time; the dark ”Logistics” bars mark the
+transit legs connecting consecutive deployments of the same fleet. The plot highlights
+both the reuse of vehicles within each fleet across sites and the internal structure of
+each deployment: recurring passage/review cycles as MAVs shuttle between the base
+and their assigned science survey locations, interspersed with idle periods (grey) where
+an asset has completed its assigned tasks ahead of the deployment’s end date.
+This fleet-based logistics structure also points to a substantial carbon saving relative
+to a conventional single-ship mission, in which a crewed research vessel would itself
+carry out the science directly - steaming to each station, deploying instrumentation,
+and recovering samples - rather than merely ferrying a MAV fleet between sites. As a
+back-of-the-envelope comparison, a mid-sized ocean research vessel of the class needed
+to run this science programme might reasonably spend around 60% of the year at sea
+(roughly 220 days) conducting the surveys itself, burning on the order of 10-12 tonnes
+of marine fuel per day; combined with a standard marine fuel emission factor of around
+3.2 tCO2 per tonne burned (Department for Energy Security and Net Zero, 2025), this
+equates to an annual footprint of roughly 7,500-8,000 tCO2. Under the fleet arrangement
+modelled here, by contrast, the vessel is only required to freight Fleet 1 and Fleet 3
+between consecutive deployment sites (Nuuk to Reykjavik, and Walvis Bay to Buenos
+Aires, respectively) - a combined transit of around two weeks at sea - while Fleet 2’s
+within-UK relocations are instead carried by road or rail, whichever is the more carbon-
+efficient option for the route in question and, per standard UK freight conversion factors
+(Department for Energy Security and Net Zero, 2025), over an order of magnitude less
+carbon-intensive per tonne-kilometre than operating the vessel itself.
+On this basis,
+the vessel’s own annual footprint falls to roughly 500 tCO2, an overall reduction of the
+order of 90-95%, illustrating the scale of carbon saving available simply by decoupling
+routine ocean data collection from a single, continuously-operating support vessel. This
+comparison should be read strictly as a proof-of-concept indication of scale rather than a
+rigorous like-for-like substitution study: a MAV fleet cannot yet replace a research vessel
+for survey types that depend on sensors or physical sampling equipment the vehicles do
+not carry - geological core sampling being one prominent example - so in practice a
+mixed model combining a support vessel with a MAV fleet, rather than full replacement,
+remains the more realistic near-term outcome.
+To illustrate the spatial detail available for an individual deployment, Figure 10 shows
+a single snapshot of the BIO-Carbon ADF (Reykjavik, Iceland) plan - the largest single
+deployment by number of science tasks - partway through its execution, framed over
+the same North Atlantic/Europe extent as the combined zoom panel of Figure 8. Each
+MAV’s most recent two-week track leading up to the snapshot date is drawn as a coloured
+trail (green for Slocum gliders, purple for ALR1500 vehicles), with a solid marker at its
+current location; black squares and dots mark the deployment/recovery location and
+30
+
+
+--- Page 31 ---
+Figure 9: Timeline of activities for the 59 distinct physical vehicles that make up the
+three fleets serving all seven Case Study 4 deployments (99 asset-deployments
+in total, with vehicles reused across consecutive projects within their fleet);
+colour indicates activity type, dark ”Logistics” bars mark the transit legs be-
+tween consecutive deployments of the same fleet, and the thin overlay strip
+beneath each bar shades the asset’s battery level (see colour bar) over time.
+31
+
+
+--- Page 32 ---
+60°W
+50°W
+40°W
+30°W
+20°W
+10°W
+0°
+50°N
+60°N
+Slocum glider position
+ALR1500 glider position
+Deployment/recovery location
+Science survey location
+Figure 10: Snapshot of the BIO-Carbon ADF (Reykjavik, Iceland) plan on 15 Septem-
+ber 2024, roughly six weeks into the deployment, framed over the same North
+Atlantic/Europe extent as the combined zoom panel of Figure 8. Coloured
+trails show each MAV’s PolarRoute-routed track over the preceding two
+weeks (Slocum gliders in green, ALR1500 vehicles in purple), with a solid
+marker at its position on the snapshot date; black squares mark the deploy-
+ment/recovery location and black dots mark science survey locations.
+science survey locations respectively. Such snapshots, generated at any date across the
+full plan, allow the evolving spatial distribution of the fleet to be inspected throughout
+the deployment; the same visualisation is available for each of the other six deployments
+in the accompanying case study notebook.
+Finally, beyond scheduling a fixed fleet, the same MILP formulation can be used
+to explore what-if fleet design questions - for example, the marginal scientific value
+of improving a vehicle capability rather than simply adding more vehicles. Figure 11
+compares, for one representative deployment, the additional science days gained per in-
+strument/sensor type under three hypothetical fleet upgrades - a 10% increase in battery
+capacity, a 10% increase in transit speed, and both combined - against the standard fleet
+configuration. Gains are concentrated in a handful of high-value sensors (notably CTD,
+UVP6, and O2), while several sensors see negligible or no improvement, indicating that
+they are already limited by factors other than vehicle battery or speed (e.g. science task
+time windows or site accessibility); this kind of comparison lets a mission planner identify
+which fleet upgrades would be most cost-effective before committing to procurement.
+32
+
+
+--- Page 33 ---
+ADCP
+CTD
+EK80
+EcoBBRTD
+EcoPuck
+Fluorescence
+Microrider
+O2
+Optode
+Oxygen
+PAR
+Thruster
+UVP6
+microstructure
+3
+4
+5
+6 7 8 9100
+2
+3
+4
+5
+6 7 8 91000
+2
+Standard
++10% battery
++10% speed
++10% speed +10 battery
+What-if fleet scenarios: science-day gains by instrument/sensor
+Science days gained (log scale)
+Figure 11: Additional science days gained per instrument/sensor type under three hy-
+pothetical fleet upgrades (a 10% increase in battery capacity, a 10% increase
+in transit speed, and both combined), relative to the standard fleet configu-
+ration; radial axis on a log scale.
+33
+
+
+--- Page 34 ---
+8 Discussion and Conclusions
+We proposed in this paper a MILP model for planning marine science missions using
+a fleet of MAVs. Our model is expected to serve as a decision-support tool for marine
+operations teams to generate complex plans, as manual planning becomes increasingly
+expensive. The model maximises the number of science tasks covered while optimising
+the fleet and battery usage. While ship resource constraints are not considered, we allow
+each MAV to be assigned to the ship only if doing so improves science coverage. Three
+case studies inspired by existing marine science missions are solved in this paper. Each
+one differs from the others in location, science requirements, ship integration, or fleet
+size. This diversification allows for catching and highlighting the different constraints
+the model features.
+Future improvements in the model could include additional resource constraints, es-
+pecially for the ship assignments. Similarly, as in the ”United Kingdom” case study
+(Section 7.5), considering multiple ships can also be beneficial in the context of collab-
+orative science missions, where ships and MAVs can be coordinated using a single tool.
+Since the main objective is maximising scientific gain, and as discussed in Section 7.3,
+opportunistic science can benefit the marine science community. Although stakehold-
+ers did not raise this, the model can serve as a simulation tool to illustrate how much
+scientific data we can collect during idle periods.
+The case studies presented in this paper also assume a static planning environment,
+in which the science requirements, environmental conditions and route costs are fixed at
+the time the plan is generated. In practice, marine science missions face considerable op-
+erational uncertainty, and several extensions of the proposed framework would improve
+its applicability to such dynamic settings. A first extension concerns rapid replanning
+driven by newly collected data: as MAVs execute a plan, the science data and telemetry
+they return can reveal that a survey area is of greater or lesser scientific interest than
+initially assumed, that a task has failed, or that a vehicle’s state of charge differs from
+its forecast, and coupling the model with a data collection update mechanism that feeds
+these observations back into the planning model and triggers a rapid re-optimisation
+of the remaining plan would allow the fleet to adapt its behaviour during the mission
+rather than only at the planning stage. A second extension relates to how routes be-
+tween locations are represented: the current model assumes a single, precomputed route
+between each pair of locations, whereas allowing the routing engine to fan out multiple
+candidate routes for a given leg, rather than committing to one path in advance, would
+let the planning model select among alternative trajectories according to their cost, risk
+or robustness, and would provide a natural mechanism for re-routing when conditions
+change mid-mission. Related to this, route and travel-time costs are currently treated
+as static inputs, computed once from a fixed environmental snapshot, whereas marine
+environmental conditions such as currents, wind and sea state vary continuously and
+are only known through forecasts that are themselves updated over time; extending the
+model to consume time-varying, forecast-driven edge costs, and to re-solve as updated
+forecasts become available, would allow plans to reflect the environmental conditions the
+fleet is actually expected to encounter, rather than a single static assumption. A further
+34
+
+
+--- Page 35 ---
+extension concerns the representation of science requirements themselves: science tasks
+are currently modelled as discrete point locations to be visited, yet many marine science
+missions instead require the survey of an area or transect, in which coverage, rather
+than the visit of a single point, is the underlying objective, so generalising the task rep-
+resentation to support areal or transect surveys, and the associated notion of partial or
+ongoing coverage, would broaden the range of missions the model can represent.
+Overall, the model and case studies presented in this paper demonstrate that MILP-
+based planning can generate complex, multi-vehicle marine science plans that would
+be costly to produce manually, while remaining flexible enough to capture the diverse
+constraints and priorities of real marine operations. The extensions outlined above, from
+richer resource and multi-ship modelling to dynamic, forecast-driven and uncertainty-
+aware replanning, chart a path towards a decision-support tool capable of supporting
+marine science missions not only at the planning stage but throughout their execution.
+Declaration of AI-assisted tools in the writing process
+During the writing of this paper, the authors used Grammarly for grammar checking
+and language editing. While using this tool, the authors reviewed the suggested changes
+to take full responsibility for the publication’s content.
+References
+Alam, K., Ray, T., and Anavatti, S. G. (2014). Design and construction of an autonomous
+underwater vehicle. Neurocomputing, 142:16–29.
+Bovio, E., Cecchi, D., and Baralli, F. (2006).
+Autonomous underwater vehicles for
+scientific and naval operations. Annual Reviews in Control, 30:117–130.
+Brouer, B. D., Alvarez, J. F., Plum, C. E., Pisinger, D., and Sigurd, M. M. (2014).
+A base integer programming model and benchmark suite for liner-shipping network
+design. Transportation Science, 48:281–312.
+Bychkov, I. V., Kenzin, M. Y., and Maksimkin, N. N. (2019).
+Two-level evolution-
+ary approach to persistent surveillance for multiple underwater vehicles with energy
+constraints. SPIIRAS Proceedings, 18:267–301.
+Carolis, V. D., Brown, K. E., and Lane, D. M. (2017). Runtime energy estimation and
+route optimization for autonomous underwater vehicles. IEEE Journal of Oceanic
+Engineering, 43:608–619.
+Christiansen, M., Fagerholt, K., Rachaniotis, N. P., and St˚alhane, M. (2017). Opera-
+tional planning of routes and schedules for a fleet of fuel supply vessels. Transportation
+Research Part E: Logistics and Transportation Review, 105:163–175.
+35
+
+
+--- Page 36 ---
+Department for Energy Security and Net Zero (2025). UK Government GHG Conversion
+Factors for Company Reporting. Technical report, Department for Energy Security
+and Net Zero (DESNZ).
+Eichhorn, M. (2015). Optimal routing strategies for autonomous underwater vehicles in
+time-varying environment. Robotics and Autonomous Systems, 67:33–43.
+Geng, L., Zhang, Y. F., Wang, J. J., Fuh, J. Y., and Teo, S. H. (2013).
+Mission
+planning of autonomous uavs for urban surveillance with evolutionary algorithms.
+IEEE International Conference on Control and Automation, ICCA, pages 828–833.
+Hojny, C., Besan¸con, M., Bestuzheva, K., Borst, S., Chmiela, A., Dion´ısio, J., Eifler, L.,
+Ghannam, M., Gleixner, A., G¨oß, A., Hoen, A., van der Hulst, R., Kamp, D., Koch,
+T., Kofler, K., Lentz, J., Maher, S. J., Mexi, G., M¨uhmer, E., Pfetsch, M. E., Pokutta,
+S., Serrano, F., Shinano, Y., Turner, M., Vigerske, S., Walter, M., Weninger, D., and
+Xu, L. (2025). The SCIP Optimization Suite 10.0. Technical report, Optimization
+Online.
+Kruchten, N., Seier, A., and Parmer, C. (2026).
+An interactive, open-source, and
+browser-based graphing library for Python.
+Leonard, J. J. and Bahr, A. (2016). Autonomous underwater vehicle navigation. Springer
+handbook of ocean engineering, pages 341–358.
+Li, D., Wang, P., and Du, L. (2018). Path planning technologies for autonomous under-
+water vehicles-a review. Ieee Access, 7:9745–9768.
+Li, W., Pundt, R., and Miller-Hooks, E. (2021).
+An updatable and comprehensive
+global cargo maritime network and strategic seaborne cargo routing model for global
+containerized and bulk vessel flow estimation. Maritime Transport Research, 2:100038.
+Lu, Q., Pan, C. S., Ding, Y. M., and Hu, R. X. (2020). Task allocation of multi-auv
+based on multi-objective discrete particle swarm optimization and simulated anneal-
+ing. Proceedings of the 32nd Chinese Control and Decision Conference, CCDC 2020,
+pages 565–571.
+MahmoudZadeh, S., Powers, D. M., Yazdani, A. M., Sammut, K., and Atyabi, A.
+(2018a). Efficient auv path planning in time-variant underwater environment using
+differential evolution algorithm. Journal of Marine Science and Application, 17:585–
+591.
+MahmoudZadeh, S., Yazdani, A. M., Sammut, K., and Powers, D. M. (2018b). Online
+path planning for auv rendezvous in dynamic cluttered undersea environment using
+evolutionary algorithms. Applied Soft Computing Journal, 70:929–945.
+McMahon, J. and Plaku, E. (2016). Mission and motion planning for autonomous un-
+derwater vehicles operating in spatially and temporally complex environments. IEEE
+Journal of Oceanic Engineering, 41:893–912.
+36
+
+
+--- Page 37 ---
+Miller, P. A., Farrell, J. A., Zhao, Y., and Djapic, V. (2010). Autonomous underwater
+vehicle navigation. IEEE Journal of Oceanic Engineering, 35:663–678.
+Pang, T., Song, Y., and Zhu, D. (2021). Task allocation for multi-auv system under
+ocean current environment.
+Proceeding - 2021 China Automation Congress, CAC
+2021, pages 4844–4849.
+Parker, J. (2021). The future of the uk national monitoring fleet capability. Cefas Project
+Report for National Oceanography Centre.
+Petres, C., Pailhas, Y., Patron, P., Petillot, Y., Evans, J., and Lane, D. (2007).
+Path planning for autonomous underwater vehicles. IEEE Transactions on Robotics,
+23:331–341.
+Sahoo, A., Dwivedy, S. K., and Robi, P. S. (2019). Advancements in the field of au-
+tonomous underwater vehicle. Ocean Engineering, 181:145–160.
+Schofield, O., Kohut, J., Aragon, D., Creed, L., Graver, J., Haldeman, C., Kerfoot, J.,
+Roarty, H., Jones, C., Webb, D., and Glenn, S. (2007). Slocum gliders: Robust and
+ready. Journal of Field Robotics, 24:473–485.
+Sethian, J. A. (1999). Fast marching methods. SIAM review, 41(2):199–235.
+Smith, J. D., Hall, S., Coombs, G., Byrne, J., Thorne, M. A., Brearley, J. A., Long, D.,
+Meredith, M., and Fox, M. (2022). Autonomous passage planning for a polar vessel.
+arXiv preprint arXiv:2209.02389.
+Somers, T. and Hollinger, G. A. (2016). Human–robot planning and learning for marine
+data collection. Autonomous Robots, 40:1123–1137.
+Sorbi, L., Capua, G. P. D., Fontaine, J.-G., and Toni, L. (2012).
+A behavior-based
+mission planner for cooperative autonomous underwater vehicles. Marine Technology
+Society Journal, 46:32–44.
+Tavana, M. and Bourgeois, B. S. (2010). A multiple criteria decision support system for
+autonomous underwater vehicle mission planning and control. International Journal
+of Operational Research, 7:216–239.
+Thompson, F. and Guihen, D. (2019).
+Review of mission planning for autonomous
+marine vehicle fleets. Journal of Field Robotics, 36:333–354.
+UK Research and Innovation (2025). UKRI Corporate Plan Update 2025 to 2027. Tech-
+nical report, UK Research and Innovation (UKRI).
+Wang, C., Mei, D., Wang, Y., Yu, X., Sun, W., and Chen, J. (2022). Task allocation for
+multi-auv system: A review. Ocean Engineering, 266.
+Wang, H. ., Li, Y. ., Li, S. ., Xu, G., Wang, H., Li, Y., Li, S., and Xu, G. (2024).
+Research on multiple auvs task allocation with energy constraints in underwater search
+environment. Electronics 2024, Vol. 13, Page 3852, 13:3852.
+37
+
+
+--- Page 38 ---
+Warren, C. W. (1990). A technique for autonomous underwater vehicle route planning.
+IEEE Journal of Oceanic Engineering, 15:199–204.
+Yan, W., Bai, X., Peng, X., Zuo, L., and Dai, J. (2014).
+The routing problem of
+autonomous underwater vehicles in ocean currents. OCEANS 2014 - TAIPEI.
+Yan, Z., Zhang, J., Zeng, J., and Tang, J. (2022). Three-dimensional path planning
+for autonomous underwater vehicles based on a whale optimization algorithm. Ocean
+engineering, 250:111070.
+Yang, J., Huo, J., Xi, M., He, J., Li, Z., and Song, H. H. (2022). A time-saving path plan-
+ning scheme for autonomous underwater vehicles with complex underwater conditions.
+IEEE Internet of Things Journal, 10:1001–1013.
+Yao, X., Wang, F., Yuan, C., Wang, J., and Wang, X. (2021). Path planning for au-
+tonomous underwater vehicles based on interval optimization in uncertain flow fields.
+Ocean Engineering, 234.
+Yazdani, A. M., Sammut, K., Yakimenko, O. A., Lammas, A., Mahmoudzadeh, S.,
+and Tang, Y. (2016). Time and energy efficient trajectory generator for autonomous
+underwater vehicle docking operations. OCEANS 2016 MTS/IEEE Monterey, OCE
+2016.
+Yilmaz, N. K., Evangelinos, C., Lermusiaux, P. F. J., and Patrikalakis, N. M. (2009).
+Path planning of autonomous underwater vehicles for adaptive sampling using mixed
+integer linear programming. IEEE Journal of Oceanic Engineering, 33:522–537.
+Zhang, B., Ji, D., Liu, S., Zhu, X., and Xu, W. (2023). Autonomous underwater vehicle
+navigation: A review. Ocean Engineering, 273:113861.
+38
