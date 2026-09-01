@@ -1,10 +1,21 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-08-28
+**Last Updated:** 2026-09-01
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-01 (1 papers)
+
+### [TOPAS: Workflow-Aware Prefix-State Scheduling for Multi-Agent LLM Serving](https://arxiv.org/abs/2608.25523)
+
+**2026-08-26** | University of Science and Technology of China, Hefei University of Technology | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Task-Oriented Prefix-Aware Scheduler (TOPAS) that jointly determines prefix residency and request admission via a JCT-oriented utility function and hierarchical state search | *LLM role:* none
+
+> TOPAS is an online scheduler for multi-agent LLM serving that jointly optimizes KV cache prefix residency and request admission to minimize task-level job completion time. Backed by empirical numbers, it reduces mean and p99 JCT by up to 39.8% and 49.4% on synthetic DAGs, and significantly improves performance on real MetaGPT workflows compared to baselines like Shortest-Path-First. The critical insight is treating prefix residency as an explicit, workflow-aware scheduling decision rather than a reactive byproduct of request ordering, using a utility function that balances the reduction of a task's longest remaining service path against near-term prefix reuse. This is highly relevant for research in OR formulations for LLM serving scheduling, offering a concrete heuristic search approach to manage the memory-compute tradeoff in complex multi-agent deployments.
+
 
 #### 2026-08-28 (2 papers)
 
