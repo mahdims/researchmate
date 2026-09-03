@@ -1,10 +1,29 @@
 # Living Review: Generative AI for OR
 
-**Last Updated:** 2026-09-01
+**Last Updated:** 2026-09-03
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-03 (2 papers)
+
+### [Reinforcement Learning Enhanced LLM Agents for Complex Vehicle Routing Problems](https://arxiv.org/abs/2609.00859)
+
+**2026-09-01** | National University of Singapore, Sun Yat-sen University | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Multi-agent framework (RLEA) with a neural Planner trained with Soft Q-learning, an LLM-based Executor, and an evolutionary memory module with retrieval-augmented generation | *LLM role:* code_writer, decomposition_guide, evaluator, evolutionary_search
+
+> This paper proposes RLEA, a multi-agent framework that uses a lightweight neural planner trained via Soft Q-learning to orchestrate LLM actions (refinement, RAG, and memory retrieval) for automatically generating solver-ready code for complex VRP variants. The results are backed by strong empirical evidence, achieving a 62.5% success rate on 48 VRP variants using OR-Tools, outperforming the state-of-the-art DRoC by 16.67% while reducing runtime errors. The key insight is that instead of using expensive LLM calls for step-by-step decision making, training a small language model with RL to act as a policy network for selecting agent actions significantly reduces latency and improves exploration. This is highly relevant for LLM evolutionary search and multi-agent optimization, as the architecture of an RL-trained planner combined with an evolving memory pool directly addresses sample efficiency and continuous learning in automated algorithm design.
+
+### [AlgoWorlds: Benchmarking Tool Use for Global Optimization in Algorithmic Worlds](https://arxiv.org/abs/2608.29397)
+
+**2026-08-29** | Tencent, University of Southern California | M=6 P=8 I=7 **MUST-READ** *discuss*
+
+*Method:* Benchmark construction and evaluation framework for LLM tool use in global optimization | *LLM role:* evaluated_agent
+
+> Xu et al. introduce AlgoWorlds, a benchmark of 240 environments across 10 combinatorial optimization families designed to evaluate whether LLM agents can use tools to gather hidden instance data and output globally optimal decisions. The results are backed by extensive evaluations across 7 frontier models, demonstrating that while models like Claude Opus 4.8 achieve high feasibility (over 96%), they fail to reach exact global optimality (only 38.6% success). The key insight is that the primary bottleneck for LLMs in optimization is not information acquisition or constraint satisfaction, but the joint reasoning required to integrate information into a globally optimal configuration. This directly validates the need for advanced LLM evolutionary search and multi-agent optimization frameworks, as it proves standard LLM tool-use agents cannot reliably solve global optimization problems zero-shot, making this benchmark a valuable tool for our own OR evaluation efforts.
+
 
 #### 2026-09-01 (2 papers)
 

@@ -1,10 +1,21 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-09-01
+**Last Updated:** 2026-09-03
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-03 (1 papers)
+
+### [RideSkill: A Hierarchical Algorithm for Generalized Ride Sharing with LLM-Driven Automatic Evolution](https://arxiv.org/abs/2609.02250)
+
+**2026-09-02** | Huawei, The Hong Kong University of Science and Technology | M=8 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Hierarchical method with LLM-assisted automatic evolutionary algorithm for skill repository, combiner, and repositioner design | *LLM role:* evolutionary_search
+
+> This paper proposes RideSkill, a hierarchical ride-sharing dispatch algorithm where a skill repository, a skill combiner, and a vehicle repositioner are all generated offline via LLM-assisted evolutionary search. The results are backed by strong empirical evidence on large-scale NYC data (up to 1500 vehicles), outperforming MARL and prior LLM-based heuristics by 11-40% in reward while drastically reducing detour times. The key insight is the integration of a self-check audit loop where the LLM evaluates empirical rollout metrics against its intended design, alongside a zero-shot combiner that probes unknown objective functions at runtime to dynamically mix frozen skills. This is highly relevant for LLM evolutionary search and multi-agent optimization, as the self-auditing mechanism and multi-task fitness normalization directly address sample efficiency and search signal quality in automated algorithm design.
+
 
 #### 2026-09-01 (2 papers)
 

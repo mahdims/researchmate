@@ -1,10 +1,21 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-09-01
+**Last Updated:** 2026-09-03
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-03 (1 papers)
+
+### [hLLM: Single Pass Decoding for Generative Reranking](https://arxiv.org/abs/2609.01807)
+
+**2026-09-01** | Meta Platforms, Inc. | M=7 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Optimal bipartite assignment using Hungarian algorithm on LLM hidden states for O(1) pass decoding | *LLM role:* score_matrix_generator_from_hidden_states
+
+> HLLM replaces the sequential autoregressive decoding of generative rankers with a single forward pass, using a lightweight self-attention head and the Hungarian algorithm to decode the optimal permutation directly from the LLM's prefill hidden states. The results are strongly backed by empirical numbers, demonstrating a 64x speedup (down to 28ms latency) on a proprietary dataset and a 45x speedup on Amazon Beauty, while maintaining lossless ranking quality compared to the autoregressive teacher. The key insight is the architectural pattern of bypassing token-by-token generation for constrained outputs by training with a differentiable relaxation (Sinkhorn) and decoding with an exact combinatorial solver on the hidden states. This is highly relevant for our work in LLM serving optimization and operations research; the technique of using OR solvers as O(1) decoders could be directly adapted to generate valid sequences for vehicle routing or scheduling problems without the latency and invalidity risks of autoregressive generation.
+
 
 #### 2026-09-01 (1 papers)
 
