@@ -1,0 +1,2338 @@
+--- Page 1 ---
+1
+CRB-Guided Sensing and Resource Allocation for
+Human Pose Prediction in Integrated Sensing,
+Communication, and Computation Systems
+Zhonghao Liu, Yahao Ding, Jiaxiang Wang, Zhaohui Yang, Abdol Hamid Aghvami, Fellow, IEEE, and
+Mohammad Shikh-Bahaei, Senior Member, IEEE
+Abstract—Integrated sensing, communication, and compu-
+tation (ISCC) provides a promising framework for indoor
+human-centric applications. In these applications, short-term
+human pose prediction facilitates continuous human pose
+tracking and proactive resource allocation. This paper proposes
+a Cramér–Rao bound (CRB)-guided sensing framework and in-
+vestigates a problem of minimizing prediction error in resource-
+constrained ISCC systems. Specifically, a pose prediction model
+(ET-Mamba) is first developed to predict human joint positions
+for continuous tracking. To account for computation-resource
+limitations, lightweight prediction heads are attached to differ-
+ent inference layers, enabling adaptive-depth pose prediction.
+A CRB-guided perturbation strategy is then introduced to
+translate sensing uncertainty at different sensing SNR levels
+into point-cloud perturbations. Based on that, an empirical
+relationship among pose prediction error, sensing SNR, and
+model inference depth is established. Furthermore, to im-
+prove prediction accuracy under limited resources, this paper
+formulates a resource allocation optimization problem that
+minimizes the pose prediction error by jointly optimizing the
+beamforming matrix, model inference depth, and computation
+frequency. To solve this mixed-integer non-convex optimiza-
+tion problem, we propose an alternating optimization (AO)-
+based algorithm, where closed-form updates and semidefinite
+programming (SDP) are integrated into the iterative solution
+process. Simulation results show that the proposed method
+effectively improves pose prediction performance by up to
+35% under resource constraints, verifying the effectiveness of
+conducting joint sensing, communication, and computation
+design in ISCC systems.
+Index Terms—ISCC, CRB, mmWave, Mamba, pose predic-
+tion, human-centric, resource allocation.
+I. Introduction
+Integrated sensing, communication, and computation
+(ISCC) is regarded as a promising technological framework
+for supporting intelligent human-centric applications in
+next-generation wireless networks [1], [2]. By integrating
+sensing, communication, and computation into a unified
+platform [3], ISCC systems can support real-time in-
+door applications such as human pose tracking, gesture
+Zhonghao Liu, Yahao Ding, Jiaxiang Wang, Abdol Hamid Agh-
+vami, and Mohammad Shikh-Bahaei are with the Department of
+Engineering, King’s College London, London, UK (emails: zhong-
+hao.liu@kcl.ac.uk; yahao.ding@kcl.ac.uk; jiaxiang.wang@kcl.ac.uk;
+hamid.aghvami@kcl.ac.uk; m.sbahaei@kcl.ac.uk).
+Zhaohui Yang is with the College of Information Science and
+Electronic Engineering, Zhejiang University, Hangzhou, Zhejiang
+310027, China, and Zhejiang Provincial Key Lab of Information
+Processing, Communication and Networking (IPCAN), Hangzhou,
+Zhejiang, 310007, China (email: yang_zhaohui@zju.edu.cn).
+recognition, and activity monitoring [2], [4]. Short-term
+human pose prediction plays a key role in indoor human-
+centric sensing, as it enables continuous pose tracking
+and provides temporal motion cues for high-level semantic
+understanding of human activities [5].
+For these sensing tasks, mmWave sensing, owing to its
+fine spatial resolution and non-contact sensing capability,
+provides an effective modality for human-centric percep-
+tion [5], [6]. In mmWave-based human sensing, reflected
+echoes are typically processed into sparse point clouds,
+which encode spatial and motion-related information of
+human body movements. By exploiting temporal depen-
+dencies across historical point-cloud observations, future
+human joint positions can be inferred to support short-
+term pose prediction. Accurate short-term pose prediction
+relies on effective temporal dependency modeling over
+historical point-cloud sequences.
+Existing studies related to this work can be broadly
+categorized into two research lines: physical-layer resource
+allocation and AI-driven mmWave point-cloud-based hu-
+man sensing. The first line focuses on physical-layer
+optimization in ISAC/ISCC systems, spanning multiple
+directions including resource allocation [7], [8], [9], [10],
+interference management [11], [12], signal design [13],
+and joint transceiver optimization [14], [15]. These works
+typically aim to improve communication quality of service
+(QoS) [16] or optimize sensing metrics, such as sensing
+SINR, resolution, and the Cramér–Rao bound (CRB) [7],
+[17], [18]. Recent studies have also investigated learning-
+aware resource allocation in wireless networks [19], [20],
+[21], [22]. Specifically, the work [11] took the residual self-
+interference under imperfect cancellation into considera-
+tion and maximized the communication rate subject to
+the CRB and SNR constraints. The work [17] proposed an
+algorithm for multi-target sensing with known or unknown
+target prior information, which minimizes the CRB while
+satisfying the communication QoS. The work [18] proposed
+an algorithm to optimize the BS transmit covariance ma-
+trix, trading off sensing CRB against the communication
+rate.
+Another
+line
+of
+research
+focuses
+on
+AI-driven
+mmWave point-cloud-based human sensing. Compared
+with physical-layer optimization studies, human pose pre-
+diction studies usually evaluate sensing performance using
+metrics such as Mean Per Joint Position Error (MPJPE)
+arXiv:2609.01908v1  [cs.IT]  1 Sep 2026
+
+
+--- Page 2 ---
+2
+and Procrustes-Aligned Mean Per Joint Position Error
+(PA-MPJPE), which directly measure the accuracy of pre-
+dicted joint positions. Existing studies mainly concentrate
+on real-time human pose estimation, aiming to obtain joint
+positions from sparse and noisy radar point clouds [5], [23],
+[24]. Specifically, [5] proposed mmHPE, which generates
+stable and accurate point clouds by enhancing target
+boundary detection, and performs human pose estimation
+in a multi-scale manner. In [23], the authors proposed GF-
+DecNet, which integrates set abstraction and geometry-
+aware feature decoupling to extract local geometric and
+global contextual features from radar point clouds. The
+work [24] proposed mmPoint-Attention, which achieves
+accurate 3D joint estimation and action classification
+by contextual information and attention mechanisms.
+Attention-based architectures have shown strong rep-
+resentation capability, but their quadratic complexity
+with respect to the sequence length may introduce high
+computational overhead and inference latency. Mamba-
+based state-space models provide a computationally eﬀi-
+cient alternative by enabling linear-complexity sequence
+modeling through selective state updates. Recent studies
+have explored Mamba architectures for point-cloud under-
+standing from different perspectives [25], [26], [27], [28].
+Specifically, [25] first introduced Mamba into point cloud
+analysis and proposed the PointMamba architecture. The
+work [26] improved point cloud serialization through a
+spatially continuous zigzag scanning strategy. In [27], the
+authors extended Mamba to dynamic point cloud video
+understanding by modeling spatial and temporal features.
+The work [28] proposed a spatial-temporal bidirectional
+Mamba architecture to jointly model spatial structures
+and temporal dependencies.
+Although these studies on physical-layer optimization
+provide effective schemes, they do not explicitly consider
+the downstream sensing error induced by resource alloca-
+tion. Meanwhile, although these learning-based mmWave
+sensing methods have significantly improved performance
+through model architecture design, they do not consider
+the impact of limited resources on downstream pose
+prediction error. In practical resource-limited ISCC sys-
+tems, pose prediction performance is jointly affected by
+sensing and computation resources. Resource allocation
+decisions may induce sensing SNR fluctuations, leading to
+stochastic point-cloud jittering before model inference [29].
+Meanwhile, limited computation resources may prevent
+full-depth inference within each operating slot. These
+factors jointly degrade pose prediction accuracy and may
+further affect future tracking performance.
+This indicates a clear research gap: existing stud-
+ies still lack a quantitative analysis that links point-
+cloud perturbation, computation-limited inference, and
+the performance of the sensing task in mmWave ISCC
+systems. To address the above issues, this paper proposes
+a CRB-guided framework design and resource allocation
+scheme for mmWave human pose prediction in ISCC
+indoor systems. The central objective of this work is to
+minimize the total pose prediction error through joint
+optimization of sensing, communication, and computation
+resource allocation. The main contributions of this paper
+are summarized as follows:
+• We propose a CRB-guided mmWave human pose
+prediction and tracking framework for resource-
+constrained ISCC systems. In this framework, an
+ET-Mamba-based prediction model is developed to
+predict future human joint positions from historical
+mmWave point-cloud sequences, where lightweight
+prediction heads are attached after different inference
+layers to support adaptive model-depth execution
+under computation constraints.
+• We formulate a joint resource allocation problem for
+minimizing the total pose prediction error to support
+continuous human pose prediction and tracking. To
+the best of our knowledge, this is the first work
+that jointly considers point-cloud perturbation, model
+inference depth, and resource allocation in ISCC
+systems.
+• To solve this problem, we first develop a sigmoid-
+variant empirical model to characterize the relation-
+ship among sensing SNR, model inference depth,
+and pose prediction error. Based on this model,
+we propose an AO-based algorithm, where closed-
+form solutions and SDP are integrated to solve the
+formulated problem eﬀiciently.
+• Simulation results indicate that the proposed ET-
+Mamba achieves an MPJPE of 3.24 cm and a PA-
+MPJPE of 2.20 cm, outperforming representative
+point-cloud learning baselines. The proposed CRB-
+guided framework enhances prediction robustness,
+reducing the MPJPE by approximately 73.9% in
+the low-SNR regime. Moreover, the proposed op-
+timization method reduces the MPJPE by up to
+approximately 35% compared with the baseline.
+The rest of the paper is organized as follows. The
+system model is described in Section II. The CRB-guided
+pose prediction framework is proposed in Section III. The
+optimization problem is formulated in Section IV, and
+solution process is presented in Section V. The results
+and analysis of the proposed method are described in
+Section VI. Finally, the conclusions are drawn in Section
+VII. Throughout this paper, Tr(·), ∥·∥2, and ⊙denote the
+trace of a matrix, the ℓ2 norm, and the Hadamard product,
+respectively. The main notations used throughout this
+paper are summarized in Table I.
+II. System Model
+As shown in Fig. 1, a mmWave access point (AP)
+equipped with a uniform planar array (UPA) is deployed
+in the indoor ISCC system to support three capabilities:
+high-resolution sensing for the human target, communi-
+cation with U users, and local computing for point-cloud
+generation and pose prediction. At the beginning of each
+time slot, the system adaptively adjusts the resources
+according to the predicted human joint positions to ensure
+effective coverage of all human joints and maintain the
+
+
+--- Page 3 ---
+3
+AP
+user 1 
+user U
+.  .  .
+Human target
+Communication
+ Signal
+Sensing Signal
+FFT
+Echo signal
+(time slot t)
+Point-cloud Sequence
+.  .  .
+t
+t-1
+t-M+1
+Server
+Proposed Model
+Predicted Joints
+(time slot t+1)
+Indoor ISCC System
+Prediction Pipeline 
+Fig. 1: Illustration of the considered indoor mmWave ISCC
+system for human pose prediction and tracking.
+����
+Communication
+Sensing 
+��
+�����
+Generation
+Inference
+���
+���
+Server
+AP
+t
+Fig. 2: Time slot structure of the considered ISCC system
+human body within the sensing region. The system serves
+communication users u ∈U and operates over time slots
+indexed by t ∈N.
+Specifically, as shown in Fig. 2, the operational workflow
+of the considered ISCC system within one time slot
+consists of the following four stages:
+1) Sensing: During the sensing duration of time slot t,
+the AP transmits sensing signals toward the human
+target based on the predicted joint positions at time
+slot t −1.
+2) Point-cloud generation: During the sensing process,
+the AP continuously receives echoes reflected from the
+human body, while the server processes the received
+sensing signals online to generate mmWave point
+clouds.
+3) Inference: After point-cloud generation is completed,
+the server uses the generated point clouds together
+with historical point clouds to predict joint positions
+for time slot t + 1 of the sensing target, providing
+prior information for resource allocation in the next
+time slot.
+4) Communication: Throughout time slot t, the AP
+maintains data transmission with multiple users.
+Without loss of generality, the UPA is assumed to be
+placed on the Oxz plane and consists of Nt = NxNz
+antennas. To eliminate mutual interference between com-
+munication and sensing, the system achieves decoupling
+through a frequency division multiplexing (FDM) strat-
+egy, whereby a dedicated frequency band is allocated for
+sensing tasks. At each time slot t, the AP transmits a
+TABLE I: Main notations
+Symbol
+Description
+U
+Set of communication users
+U
+Number of communication users
+t
+Time-slot index
+N
+Set of time-slot indices
+Nt
+Number of antennas at the AP
+Nx, Nz
+Numbers of UPA elements along the x- and z-axes
+Bc
+Communication bandwidth
+Br
+Sensing bandwidth
+Ru
+Achievable communication rate of user u
+T
+Duration of one time slot
+Ts
+Sensing duration in one time slot
+C
+Selected model inference depth
+C
+Set of candidate model inference depths
+Cmax
+Maximum model inference depth
+fmax
+Maximum computation frequency
+G
+Set of final group tokens after GLF
+G
+Number of local point-cloud groups
+J
+Set of human joints
+J
+Number of human joints
+M
+Number of consecutive point-cloud frames
+Xi
+Point-cloud data of the i-th frame
+Zi
+Ordered token sequence of the i-th frame
+S
+Cross-temporal serialized token sequence
+Nc
+Number of sensing snapshots
+Ns
+FFT size for point-cloud generation
+τpc
+Point-cloud generation latency
+τin
+Model inference latency
+γ
+Effective switched-capacitance coeﬀicient
+Es
+Sensing transmission energy
+Ec
+Communication transmission energy
+Epc
+Energy consumption for point-cloud generation
+Ein
+Energy consumption for model inference
+Pmax
+Maximum allowable average power
+m(SNRs,o, C) Empirical MPJPE function
+wc,u
+Communication beamforming vector for user u
+wr
+Sensing beamforming vector
+fpc
+Computation frequency for point-cloud generation
+fin
+Computation frequency for model inference
+signal that consists of both communication and sensing
+components, which can be written as
+x[t] = wcsc[t] + wrsr[t],
+(1)
+where sc[t] ∈CU×1 denotes the communication sym-
+bol vector for U
+users at time slot t, and wc
+=
+[wc,1, . . . , wc,U] ∈CNt×U is the communication beam-
+forming matrix. The sensing waveform sr[t] ∈C is a scalar
+symbol transmitted for target probing, and wr ∈CNt de-
+notes the sensing beamforming vector for the sensing tar-
+get. The communication symbols satisfy the orthogonality
+and normalization condition E[sc[t]sH
+c [t]] = IU, while the
+sensing waveform is power-normalized as E[|sr[t]|2] = 1.
+sc[t] and sr[t] are statistically independent, satisfying
+E[sc[t]sH
+r [t]] = 0.
+A. Communication model
+We assume a standard half-wavelength element spacing,
+satisfying d = λ/2, where d and λ denote the element
+spacing and carrier wavelength, respectively. Given the
+azimuth angle θu and elevation angle ϕu of user u, where
+θu is measured in the xy-plane from the +y-axis toward
+the +x-axis and ϕu is measured from the xy-plane toward
+
+
+--- Page 4 ---
+4
+the +z-axis, the array steering vector of the UPA is defined
+as at(θu, ϕu) = ax(θu, ϕu)⊗az(θu, ϕu). Here, ax(θu, ϕu) =
+[1, ej 2πd
+λ
+sin(θu) cos(ϕu), . . . , ej(Nx−1) 2πd
+λ
+sin(θu) cos(ϕu)]T ,
+and
+az(θu, ϕu) = [1, ej 2πd
+λ
+sin(ϕu), . . . , ej(Nz−1) 2πd
+λ
+sin(ϕu)]T .
+Accordingly, the received signal of user u at time slot t
+can be expressed as:
+yu[t] = hH
+u wc,usc,u[t] +
+X
+i̸=u
+hH
+u wc,isc,i[t] + nu,
+(2)
+where hu is the downlink channel between the AP and
+the u-th user and nu ∼CN(0, σ2
+n) is the Gaussian noise.
+To account for both line-of-sight (LoS) and non-line-of-
+sight (NLoS) propagation, the channel is modeled as hu =
+√βuehu, where βu = β0(du/d0)−α denotes the large-scale
+channel power gain, β0 denotes the channel power gain at
+the reference distance d0 = 1 m. du is the distance between
+the AP and user u, and α is the path-loss exponent. The
+small-scale channel ehu follows a Rician fading model and
+is expressed as ehu =
+q
+Ku
+Ku+1at(θu, ϕu)+
+q
+1
+Ku+1gu, where
+Ku is the Rician factor given in [30], at(θu, ϕu) represents
+the LoS component, and gu ∼CN(0, INt) represents the
+NLoS scattering component.
+The signal-to-interference-plus-noise ratio (SINR) of
+user u can be expressed as:
+SINRu =
+|hH
+u wc,u|2
+P
+i̸=u |hH
+u wc,i|2 + σ2n
+.
+(3)
+The achievable communication rate of user u is then given
+by Ru = Bc log2(1 + SINRu).
+B. Sensing model
+At time slot t, the received sensing signal at the AP
+can be expressed as
+ys[t] = e[t] + c[t] + ns,
+(4)
+where e[t] is the echo signal at time slot t, c[t] denotes
+the static clutter component caused by environmental
+reflectors, and ns is the additive sensing noise, modeled
+as ns ∼CN (0, σ2
+zINt). We assume at(θ, ϕ) ∈CNt and
+ar(θ, ϕ) ∈CNt are the transmit and receive steering
+vectors, respectively.
+We model the human body as an extended target (ET)
+and denote its visible surface at time slot t by Svisible,t. It
+is partitioned into P non-overlapping regions {Sp,t}P
+p=1
+satisfying Svisible,t = SP
+p=1 Sp,t and Sp1,t ∩Sp2,t = ∅
+for all p1̸ = p2. The echo signals are modeled as the
+superposition of signals scattered from the visible surface
+elements, while the contribution from internal reflections
+is negligible due to severe penetration loss. Due to human
+motion and self-occlusion, the visible surface and the
+corresponding effective scatterers may vary across time
+slots. Following [31], each patch on the currently visible
+surface is modeled by a single scatterer, which can be
+expressed as:
+e[t] =
+Z
+Svisible,t
+ep[t] dρ ≈
+P
+X
+p=1
+ep[t],
+(5)
+where ep[t] denotes the echo from the p-th scatterer at
+time slot t. By superposing all reflected components, the
+overall echo signal is expressed as
+e[t] =
+P
+X
+p=1
+βp,tζar(θp,t, ϕp,t)aH
+t (θp,t, ϕp,t)wrsr
+
+t −2dp,t
+c
+
+,
+(6)
+where βp,t is the path-loss coeﬀicient at time slot t, ζ is
+the complex reflection coeﬀicient, dp,t is the propagation
+distance at time slot t, θp,t, ϕp,t denote the corresponding
+angles at time slot t, respectively, and c is the speed of
+light.
+We assume that the server mitigates the effect of static
+clutter via background suppression, and then applies Con-
+stant False Alarm Rate (CFAR) detection to identify the
+scattering points and eliminate isolated outlier detections.
+Finally, fast Fourier transform (FFT)-based processing is
+applied to the received echo signals to extract the range,
+Doppler, and angle information of the scattering points.
+Based on the extracted information, the corresponding
+mmWave point-cloud features are constructed, including
+spatial coordinates and radial velocity.
+III. CRB-Guided Pose Prediction
+In this section, we present the proposed CRB-guided
+pose prediction framework for mmWave point-cloud se-
+quences. The framework consists of two main components:
+an ET-Mamba-based pose prediction model and a CRB-
+guided anisotropic perturbation strategy for robustness
+enhancement. The ET-Mamba model exploits historical
+mmWave point-cloud frames to predict future human joint
+positions, while the CRB-guided perturbation strategy
+emulates sensing-quality variations caused by different
+resource allocation conditions.
+A. ET-Mamba Pose Prediction Model
+We adopt Mamba as the backbone of the pose pre-
+diction model. Mamba is built upon a selective state-
+space model (SSM) for sequence modeling. By replacing
+the quadratic self-attention with state updates, Mamba
+enables linear-time modeling for long sequences [28]. How-
+ever, Mamba requires a one-dimensional token sequence
+as input, while mmWave point clouds are inherently
+unordered and sparse. Therefore, a naive serialization
+may weaken the geometric relationships among point
+groups. To preserve point-cloud structures while exploiting
+Mamba’s sequential modeling ability, we propose ET-
+Mamba, whose overall framework is illustrated in Fig. 3.
+The model takes X = {Xi}M
+i=1 as input, where each
+point-cloud frame Xi contains Ni points, and predicts the
+3D human joint positions in the next time slot.
+Given the input point-cloud frame Xi, CRB-guided
+noise is first introduced to simulate sensing uncertainty
+caused by limited sensing resources. The detailed CRB-
+guided noise modeling is presented in Section III-B. To
+capture the global information of Xi, a global feature
+token fcls is extracted from the whole frame using a 1D
+
+
+--- Page 5 ---
+5
+Frame 1
+Frame 2
+Frame M
+...
+From size 1 to M 
+Y
+Z
+X
+CRB-noise Adding
+ KNN  (G groups)
+FPS
+Global Token
+����
+…
+��
+Local Group Token
+GLF: Global-Local Fusion
+����
+Norm
+MLP
+��
+…
+Norm
+MLP 
+��
+�
+Concat
+…
+�g
+��
+…
+Final Group Token
+Distance Ordering
+…
+Distance Ordering
+…
+Final Ordered Token Sequence of Frame i
+…
+��
+Concat
+1
+2
+...
+2G
+2G-1
+…
+�1
+��
+��
+…
+…
+…
+Cross-temporal Scanning Sequence S
+ Mamba Block 1
+ Mamba Block 2
+ Mamba Block C
+…
+MLP and
+Softmax
+MLP and
+Softmax
+MLP and
+Softmax
+Forward  
+Conv1d
+Backward  
+Conv1d
+Forward  
+SSM
+Backward  
+SSM
+Norm
+Mamba Block 
+�
+Norm
+�
+Projection
+Addition
+Sigmoid Activation
+Multiplication
+Fig. 3: Overview of the ET-Mamba framework for mmWave-based pose prediction.
+convolutional layer followed by max pooling. For local
+geometric representation, G group centers are selected
+by farthest point sampling (FPS), and the neighborhood
+of each center is constructed using K-nearest neighbors
+(KNN). Each local neighborhood is represented by center-
+normalized relative coordinates and velocity features, and
+is further encoded by a PointNet encoder [25] to obtain
+the local group token fg.
+While local group tokens preserve fine-grained geometric
+structures, their receptive fields are restricted to local
+neighborhoods, providing insuﬀicient global contextual
+information. This limited receptive field may restrict each
+local token from capturing its relationship with the overall
+point-cloud distribution. To address this issue, we design a
+global-local fusion (GLF) module, which adaptively injects
+global contextual information into each local group token.
+In the proposed GLF module, instead of directly con-
+catenating or simply adding fcls and fg, an adaptive gate
+αg is learned from their joint representation to regulate
+the contribution of global context to each local group. The
+gated fusion process is formulated as:
+αg = σ(Wα [fg; fcls] + bα) ,
+(7a)
+f ′
+g = fg + αg ⊙ψ(fcls),
+(7b)
+where [; ] denotes concatenation, σ(·) is the sigmoid
+function, Wα and bα are the learnable weight matrix
+and bias vector, respectively. ψ(·) is an MLP layer.
+The gate αg provides group-wise control over the
+injected global context. Therefore, each local group can
+selectively incorporate global information while maintain-
+ing its own local geometric representation. After global
+context injection, the fused local token is further refined
+by a residual feed-forward layer to obtain the final group
+token:
+Fg = f ′
+g + ψ(f ′
+g).
+(8)
+The proposed GLF module enriches each local group token
+with global contextual information, providing represen-
+tations that contain both neighborhood-level geometry
+and global point-cloud context for subsequent geometry
+ordering and temporal sequence modeling.
+Since Mamba operates on one-dimensional token se-
+quences, the spatial arrangement of point-cloud tokens
+directly affects the quality of sequential modeling. A
+naive flattening operation may weaken the geometric
+relationships among local groups. To preserve the spa-
+tial characteristics of mmWave point clouds, a geometry
+distance ordering strategy is introduced before sequence
+modeling.
+Let G = {F1, F2, . . . , FG} denote the set of final group
+tokens after GLF. Let Q = {qg ∈R3}G
+g=1 denote the set
+of corresponding group centers, where qg is the center of
+the g-th local group.
+To obtain a stable and geometry-aware ordering, two
+reference points are considered. The first reference point
+is the radar coordinate origin, and the group tokens are
+sorted in ascending order according to the Euclidean
+distances between their centers and the origin. The second
+reference point is the centroid of all group centers, and the
+group tokens are sorted again according to the Euclidean
+distances between their centers and this centroid.
+This reference point based ordering introduces explicit
+geometric relationships into the serialized sequence. The
+ordering based on the radar origin preserves the spatial
+distribution of point groups with respect to the sensing
+
+
+--- Page 6 ---
+6
+coordinate system, while the ordering based on the group-
+center centroid describes the relative organization of local
+groups within the observed point clouds.
+The two ordered sequences are concatenated along the
+token dimension to form the ordered token sequence of
+the i-th frame, denoted by Zi ∈R2G×dm, where 2G is the
+total number of ordered tokens and dm is the token feature
+dimension. After obtaining the ordered token sequence Zi
+for each frame, temporal serialization is required before
+Mamba-based modeling. Instead of arranging tokens frame
+by frame, point-group tokens from different time steps
+are interleaved in the serialized sequence. Specifically, the
+serialized sequence is constructed as:
+S = [z1,1, z2,1, . . . , zM,1, z1,2, z2,2, . . . , zM,2G],
+(9)
+where zi,j ∈Rdm denotes the j-th ordered group token of
+the i-th frame. This design places temporally related to-
+kens closer to each other in the one-dimensional sequence,
+thereby enabling the sequence model to capture cross-
+frame motion correlations more effectively.
+After serializing the original point-cloud sequence into
+a one-dimensional token sequence, we employ a six-layer
+Mamba block for sequential feature modeling [28]. Con-
+sidering that server-side power consumption and latency
+constraints may prevent full-depth inference, a lightweight
+prediction head is attached after each Bi-Mamba layer.
+Let C = {1, · · · , Cmax} denote the set of candidate model
+inference depths. In this way, the model can produce
+pose prediction results from intermediate layers when full-
+layer inference is not feasible, providing a flexible trade-off
+between inference accuracy and computational cost.
+B. CRB-Guided Perturbation and Training
+To improve the robustness of the prediction model
+under varying sensing quality, a CRB-guided anisotropic
+perturbation strategy is introduced during training. Since
+the quality of mmWave point clouds is affected by sens-
+ing conditions, such as sensing power and beamforming,
+perturbations are injected into the nominal point-cloud
+observations to emulate degradation under different sens-
+ing conditions. Motivated by the quasi-static property
+of indoor human motion, we assume that the channel
+environment and sensing quality remain relatively stable
+within a short time window. We adopt a CRB-based uncer-
+tainty model, where the perturbations in range, angle, and
+radial velocity are represented by independent Gaussian
+variables with variances given by the corresponding CRB
+expressions.
+As implied in (6), the echo can be expressed as a super-
+position of reflections from multiple scattering centers. We
+assume that the echoes from different scattering centers
+are approximately independent. Under this assumption,
+at each training epoch, we first determine the SNR at the
+beam center, which can be expressed as [29]:
+SNRs,o = |ζ|2 ∥A(θo, ϕo)wr∥2
+2
+4d4oσ2z
+,
+(10)
+where A(θo, ϕo) ≜ar(θo, ϕo)aH
+t (θo, ϕo). Then, for the i-th
+point, we apply a distance-dependent path-loss correction
+to obtain SNRs,i = GiSNRs,o( do
+di )4, where Gi is the
+beamforming gain, di is the range of the point and do
+is the distance from the radar to the beam center. Next,
+we obtain the beamforming gain by the following equation:
+Gi =
+aH
+t (θo, ϕo) at(θi, ϕi)
+2
+∥at(θo, ϕo)∥2 ∥at(θi, ϕi)∥2
+(11)
+We use closed-form CRB expressions to map SNRs,i
+to physically consistent noise variances for range, angle,
+and radial velocity, and inject independent zero-mean
+Gaussian perturbations accordingly. Specifically, the CRB
+variance for range is given by [29]:
+σ2
+d,i =
+c2
+8π2SNRs,iB2r
+.
+(12)
+The CRB for radial velocity is adopted from [32] as:
+σ2
+v,i =
+3λ2
+32π2T 2s SNRs,i Nc (N 2c −1),
+(13)
+where Ts is the sensing duration and Nc is the sensing
+snapshots. The CRB of the angles can be expressed [32]
+as
+σ2
+θ,i =
+λ2
+8π2Np SNRs,i κ2 Sx (cos ϕi cos θi)2 ,
+(14a)
+σ2
+ϕ,i =
+λ2
+8π2Np SNRs,i κ2
+h
+Sx (sin ϕi sin θi)2 + Sz (cos ϕi)2i,
+(14b)
+where Np denotes the number of snapshots used for
+angle estimation, κ is 2π/λ, Sx = Nzd2
+x
+Nx(N 2
+x−1)
+12
+and
+Sz = Nxd2
+z
+Nz(N 2
+z −1)
+12
+. Consequently, the injected pertur-
+bations are sampled according to ∆d,i ∼N(0, σ2
+d,i), ∆θ,i ∼
+N(0, σ2
+θ,i), ∆ϕ,i ∼N(0, σ2
+ϕ,i), and ∆v,i ∼N(0, σ2
+v,i).
+To map the sensing-parameter perturbations back to
+the point-cloud coordinate domain, we transform the
+perturbed range and angular parameters into Cartesian
+coordinates. Let pi = (xi, yi, zi) denote the initial coor-
+dinate of the i-th point. The perturbed coordinate p′
+i is
+obtained by:
+p′
+i = f(di + ∆d,i, θi + ∆θ,i, ϕi + ∆ϕ,i),
+(15)
+where
+f(·)
+denotes
+the
+spherical-to-Cartesian
+transformation,
+given
+by
+f(d, θ, ϕ)
+=
+[d sin θ cos ϕ, d cos ϕ cos θ, d sin ϕ]T .
+Finally, the augmented feature of the i-th point is
+expressed as q′
+i = [p′
+i, v′
+i], where v′
+i = vi + ∆v,i.
+During training, the original mmWave point-cloud data
+are segmented using a sliding window to generate overlap-
+ping point-cloud sequence samples. Each sample consists
+of M consecutive point-cloud frames and is used to predict
+the 3D human joint positions in the next frame. The
+network is optimized using Adam [33]. Each target frame
+contains J human joints, and the predicted and ground-
+truth positions of joint j ∈J in the b-th sample are
+denoted by ˆp(b)
+M+1,j and p∗(b)
+M+1,j, respectively. Let NB
+
+
+--- Page 7 ---
+7
+denote the batch size and b denote the b-th clip in the
+batch. The mean squared error (MSE) is adopted as the
+training objective:
+LMSE =
+1
+NBJ
+NB
+X
+b=1
+J
+X
+j=1
+ˆp(b)
+M+1,j −p∗(b)
+M+1,j
+2
+2.
+(16)
+IV. PERFORMANCE ANALYSIS AND PROBLEM
+FORMULATION
+In the optimization stage, the AP jointly determines
+the beamforming matrix, model inference depth, and com-
+putation frequency according to the communication QoS
+requirements and sensing performance demand, enabling
+adaptive coordination among sensing, communication, and
+computation. In particular, to support stable sensing and
+continuous pose tracking in future time slots, the pose
+prediction error, measured by MPJPE, is selected as the
+optimization objective in the resource allocation process.
+A. Energy Consumption and Latency
+The energy of the considered ISCC system consists of
+three parts: sensing transmission energy Es, communica-
+tion transmission energy Ec, and local computation energy
+Ecomp.
+For the local computation, the computational energy
+cost consists of two parts: point-cloud generation energy
+Epc and model inference energy Ein, i.e., Ecomp = Epc +
+Ein. For point-cloud generation, the main computation
+cost is caused by the FFT operation [2]. Specifically, in
+each sensing frame, the estimation requires an Ns-point
+FFT for each of the Nc sensing snapshots. Therefore, the
+total energy cost of point-cloud generation for each sensing
+frame can be expressed as
+Epc = γNcNsCpcf 2
+pclog2 Ns,
+(17)
+where Cpc represents the computational intensity of FFT
+operation (in CPU cycles/element) and fpc (in CPU
+cycles/s, i.e., Hz) denotes the computation resource of the
+server for point-cloud generation. The latency of point-
+cloud generation can be expressed as
+τpc = NcNsCpclog2 Ns
+fpc
+.
+(18)
+Let Cglo, Cgrp, and Cpred denote the average CPU cycles
+required for global point-cloud processing, group fea-
+ture construction, and final prediction head, respectively.
+Furthermore, let Ce = Cglo + Cgrp + Cpred denote the
+total CPU cycles for the depth-independent encoding and
+decoding stages, while CL denotes the CPU cycles required
+for each depth layer. The energy cost of the inference can
+be expressed as [34]:
+Ein = γM(Ce + CCL)f 2
+in.
+(19)
+The corresponding inference latency is given by:
+τin = M(Ce + CCL)
+fin
+.
+(20)
+With the duration of one timeslot T, and the duration of
+sensing in one timeslot Ts, the sensing and communication
+transmission energy can be expressed as:
+Es = Ts∥wr∥2
+2,
+Ec = T
+U
+X
+u=1
+∥wc,u∥2
+2.
+(21)
+B. Communication and sensing QoS
+In this paper, the communication users are assumed to
+be quasi-static within each time slot, and their locations
+are assumed to be accurately updated between consecutive
+slots using standard tracking methods, such as EKF. For
+the sensing target, the AP performs a rapid scan at task
+initialization to obtain an initial location estimate from
+the received echoes, which is used to initialize subsequent
+sensing beamforming and continuous tracking. Based on
+that, the communication rate Ru of user u should satisfy
+Ru ≥Rmin.
+To obtain accurate and complete human joint positions,
+the sensing QoS is constrained from two aspects: spatial
+coverage and echo detectability. First, a human-joint cov-
+erage constraint is introduced to ensure that all the human
+target joints can be effectively covered by the sensing
+beam. Then, an echo detectability threshold constraint
+is imposed to guarantee that the echo reflected from at
+least the human body center can be reliably detected.
+Meanwhile, the sensing power across the visible scatterers
+should be suﬀiciently balanced to avoid excessive beam
+concentration on only a small portion of the human body.
+Based on that, the beam coverage constraint of the sensing
+side is imposed as [35]:
+η min
+1≤j≤J
+ aH
+j Rr
+xaj
+
+−max
+1≤j≤J
+ aH
+j Rr
+xaj
+
+≥0,
+(22)
+where η denotes the coverage factor, aj is the direction
+vector of j-th joint with j ∈J , and Rr
+x = wrwH
+r
+is
+the sensing signal covariance matrix. The minimum and
+maximum terms in (22) correspond to the weakest and
+strongest illumination powers among all human joints,
+respectively. Let SNRr denote the minimum detection
+threshold, the SNR of the human center should satisfy
+SNRs,o ≥SNRr.
+C. Empirical Model of MPJPE
+The MPJPE generally decreases as the model inference
+depth increases, since a deeper model usually provides
+a stronger feature-extraction capability. Meanwhile, the
+achievable prediction accuracy is also limited by the
+quality of the sensing observations. A lower sensing SNR
+usually leads to less reliable input features, such as point-
+cloud perturbations, which results in a larger prediction er-
+ror. Hence, the MPJPE can be modeled as a monotonically
+decreasing function of both the sensing SNR and the model
+inference depth, denoted by MPJPE = m(SNRs,o, C). It
+is diﬀicult to derive a closed-form analytical expression
+for this relationship because their impacts are generally
+non-linear with possible saturation effects. Therefore, an
+empirical fitting model is established based on experimen-
+tal data. Specifically, a variant of the sigmoid function is
+
+
+--- Page 8 ---
+8
+0
+5
+10
+15
+20
+25
+30
+SNR (dB)
+3
+3.5
+4
+4.5
+5
+5.5
+6
+6.5
+7
+7.5
+8
+MPJPE (cm)
+Layer 1 true value
+Layer 1 fitting curve
+Layer 2 true value
+Layer 2 fitting curve
+Layer 3 true value
+Layer 3 fitting curve
+Layer 4 true value
+Layer 4 fitting curve
+Layer 5 true value
+Layer 5 fitting curve
+Layer 6 true value
+Layer 6 fitting curve
+(a) 2D fitted curves.
+(b) 3D fitted surface.
+Fig. 4: 2D fitted curves and 3D fitted surface of MPJPE
+under different SNRs and model inference depths.
+adopted to capture the nonlinear and saturating effects
+of sensing SNR and model inference depth on MPJPE.
+By averaging the results over multiple experiments, the
+relationship of MPJPE with respect to sensing SNR and
+model inference depth can be given by:
+m(SNRs,o, C) = a +
+b
+1 + eλ1(SNRs,o−s0)
++
+d
+1 + eλ2(C−c0) +
+g
+1 + e(λ3 SNRs,o+λ4C−µ) ,
+(23)
+where all the model parameters, a, b, d, g, λ1, λ2,
+λ3, λ4 and µ are estimated via non-linear least squares
+fitting. The fitted parameters are a = 4.01, (b, λ1, s0) =
+(4.28, 0.19, −10.00), (d, λ2, c0) = (10.00, 0.98, −0.25), and
+(g, λ3, λ4, µ) = (10.00, 0.14, 1.02, −1.82), corresponding
+to the constant, SNR, inference depth, and SNR-depth
+coupling terms, respectively. As illustrated in Fig. 4,
+this model closely captures the actual relationship among
+sensing SNR, model inference depth and MPJPE. The
+resulting fitting accuracy is evaluated using R2, root mean
+square error (RMSE), mean absolute error (MAE), and
+maximum error (MAXE), which are 0.9995, 0.02 cm,
+0.02 cm, and 0.05 cm, respectively.
+D. Problem Formulation
+In this paper, we aim to minimize the pose prediction
+error of the ISCC system. To this end, the fitted function
+is used to represent the final performance of the considered
+system. Therefore, the pose prediction error minimization
+problem can be formulated as
+min
+wc,u,wr,C,fpc,fin
+m (SNRs,o, C) ,
+(24)
+s.t.
+τpc + τin ≤T,
+(24a)
+Es + Ec + Epc + Ein ≤PmaxT,
+(24b)
+Ru ≥Rmin,
+∀u ∈U,
+(24c)
+SNRs,o ≥SNRr,
+(24d)
+1 ≤C ≤Cmax,
+C ∈C,
+(24e)
+0 ≤fpc ≤fmax,
+0 ≤fin ≤fmax,
+(24f)
+τpc ≥Ts,
+(24g)
+(22),
+(24h)
+where constraint (24a) ensures that point-cloud generation
+and model inference can be completed within one time
+slot. Constraint (24b) imposes the energy budget of the
+ISCC system. Constraint (24c) guarantees the commu-
+nication QoS of each user. Constraint (24d) ensures the
+minimum sensing SNR required for reliable echo detection
+at the human body center. Constraints (24e) and (24f)
+specify the feasible ranges of the model inference depth
+and computation frequency, respectively. Constraint (24g)
+ensures that the complete point-cloud can only be ob-
+tained after all sensing echoes within the time slot have
+been collected. Constraint (24h) imposes the sensing beam
+coverage requirement over the human joints.
+V. JOINT RESOURCE ALLOCATION ALGORITHM
+Problem (24) is diﬀicult to solve directly due to the
+integer variable and the non-convex objective function
+and constraints. To solve the optimization of beamforming
+matrix, model inference depth and computing frequency,
+we propose an alternating optimization scheme. Initially,
+we characterize the relationship among the sensing SNR,
+model inference depth and prediction error. Subsequently,
+the optimization problem is decomposed into two iterative
+subproblems. One optimizes the computation resources
+with fixed beamforming matrices, while the other opti-
+mizes the beamforming matrices with fixed computation
+resources. By alternately optimizing the two subproblems,
+the proposed AO-based scheme converges to a stationary
+solution (C∗, w∗
+r, {w∗
+c,u}U
+u=1, f ∗
+pc, f ∗
+in), which minimizes the
+pose prediction error.
+A. AO-Based Algorithm
+The proposed iterative algorithm consists of two sub-
+problems in each iteration. The first subproblem optimizes
+the model inference depth C and the CPU frequencies fpc
+and fin with fixed beamforming variables (wr, {wc,u}U
+u=1),
+while the second subproblem optimizes wr and {wc,u}U
+u=1
+based on the obtained (C, fpc, fin) in the previous step.
+1) Computation
+Resource
+Allocation
+With
+Fixed
+Beamforming Matrix: In this subproblem, since the sens-
+ing error function m(C) is monotonically decreasing with
+respect to the depth C, the optimal solution to this
+subproblem is the largest feasible C. To find the optimal
+C, we relax the discrete constraint (24e) as C ∈[1, Cmax].
+Accordingly, with fixed wc,u and wr, the relaxed com-
+putation block is formulated as:
+max
+C,f
+C
+(25)
+s.t.
+κpc
+fpc
++ κin(C)
+fin
+≤T,
+(25a)
+γκpcf 2
+pc + γκin(C)f 2
+in ≤ˆE,
+(25b)
+1 ≤C ≤Cmax,
+C ∈R,
+(25c)
+(24f),
+(24g)
+where κpc = NcNsCpclog2 Ns, κin(C) = M(Ce + CCL)
+and ˆE denotes PmaxT −Es −Ec.
+
+
+--- Page 9 ---
+9
+Lemma 1. For the computation subproblem with a fixed
+beamforming matrix, the latency constraint is always
+active at the optimal solution, which satisfies:
+κpc
+f ∗pc
++ κin(C∗)
+f ∗
+in
+= T.
+(26)
+Proof. Assume that at an optimal solution (C∗, f ∗
+pc, f ∗
+in),
+the latency constraint is inactive such that κpc/f ∗
+pc +
+κin(C∗)/f ∗
+in < T. Since the left-hand side is continuous
+and increases as frequencies decrease, there exists a
+suﬀiciently small perturbation that reduces f ∗
+pc or f ∗
+in
+while maintaining feasibility. However, the computational
+energy γκpcf 2
+pc + γκin(C)f 2
+in is strictly monotonically in-
+creasing with fpc and fin. Thus, reducing these frequencies
+would strictly decrease energy consumption, releasing
+more budget to further increase the depth C∗. This
+contradicts the optimality of (C∗, f ∗
+pc, f ∗
+in). Consequently,
+the latency constraint must be active at the optimal point,
+i.e., κpc/f ∗
+pc + κin(C∗)/f ∗
+in = T.
+Based on Lemma 1, the latency constraint is active at
+the optimal point. Therefore, the model inference depth
+C can be expressed as a function of the computation
+frequencies f = {fpc, fin}, which is given by:
+C(fpc, fin) = fin(Tfpc −κpc) −MCefpc
+MCLfpc
+.
+(27)
+By substituting C(fpc, fin) into (25), the computation
+resource subproblem can be rewritten as:
+max
+fpc,fin
+fin(Tfpc −κpc) −MCefpc
+MCLfpc
+(28)
+s.t.
+γκpcf 2
+pc + γf 3
+in
+
+T −κpc
+fpc
+
+≤ˆE,
+(28a)
+1 ≤fin(Tfpc −κpc) −MCefpc
+MCLfpc
+≤Cmax,
+(28b)
+κpc
+fpc
+≥Ts,
+(28c)
+(24f).
+To solve the non-convex problem (28), an AO-based
+method is proposed that iteratively optimizes fpc and fin.
+For the optimization of fpc with fixed fin, since m(C) is
+monotonically decreasing with respect to C and C(fpc, fin)
+is monotonically increasing with respect to fpc, minimizing
+m(C) is equivalent to maximizing fpc. Therefore, for fixed
+fin, the optimization of fpc in (28) can be denoted as:
+max
+fpc
+fpc
+(29)
+s.t.
+(28a), (28b), (28c), (24f).
+Proposition 1. The optimal point-cloud generation fre-
+quency f ∗
+pc for (29) is achieved at the boundary of the
+feasible region defined by the constraints. Specifically, the
+optimal solution is given by:
+f ∗
+pc = min{f E
+pc, f C
+pc, κpc
+Ts
+, fmax}
+(30)
+where f E
+pc, f C
+pc, and κpc
+Ts denote the upper bounds on fpc
+induced by constraints (28a), (28b) and (28c), respectively.
+Proof. The first order derivative of (28a) is 2γκpcfpc +
+γf 3
+inκpc
+f 2
+pc
+, which is positive and monotonically increasing
+with respect to fpc. This imposes an upper bound f E
+pc
+on fpc. Similarly, the first order derivative of (28b) is
+finκpc
+MCLf 2
+pc , the upper bound is denoted as f C
+pc. Therefore,
+f ∗
+pc is the minimum of all such individual upper bounds
+to ensure all constraints are simultaneously satisfied.
+Similarly, for the optimization of fin with fixed fpc,
+C(fpc, fin) is monotonically increasing with fin. Therefore,
+the optimization subproblem of fin with fixed fpc is given
+by:
+max
+fin
+fin
+(31)
+s.t.
+(28a), (28b), (24f).
+Similarly to (29), the relevant constraints in (31) are
+monotonically increasing with respect to fin, the optimal
+solution f ∗
+in is the maximum feasible value that satisfies
+all constraints simultaneously. The closed-form solution is
+given by:
+f ∗
+in = min
+
+f E
+in, f C
+in, fmax
+	
+,
+(32)
+where f E
+in and f C
+in denote the upper bounds on fin
+induced by the energy constraint (28a) and the model-
+depth constraint (28b), respectively.
+After the AO updates of fpc and fin, a continuous
+inference depth ˜C is obtained according to (27). Then,
+˜C is projected onto the feasible set C by selecting the
+largest feasible integer C∗that satisfies all constraints. In
+the proposed algorithm, a feasible initialization is adopted
+such that at least the minimum inference depth C = 1 can
+be supported. Once the discrete depth C∗is determined,
+the CPU frequencies fpc and fin are re-optimized to satisfy
+(26) while minimizing the computation energy Ecomp.
+By minimizing Ecomp for the fixed C∗, the remaining
+budget can then be reallocated to beamforming matrices
+in subsequent iterations of the alternating optimization.
+Thus, the CPU frequency fpc and fin re-optimization
+problem with fixed C∗can be expressed as:
+min
+fpc, fin
+γκpcf 2
+pc + γκin(C∗)f 2
+in
+(33)
+s.t.
+(25a), (24f).
+Proposition 2. The optimal f ∗
+pc and f ∗
+in with fixed C∗can
+be expressed as:
+f ∗
+pc = min
+κpc + κin(C∗)
+T
+, κpc
+Ts
+
+,
+f ∗
+in = κin(C∗)
+T −κpc
+f ∗
+pc
+.
+(34)
+Proof. The Lagrangian of the above problem is given by:
+L = γκpcf 2
+pc+γκinf 2
+in+λ
+
+κpc
+fpc + κin
+fin −T
+
++ν
+
+fpc −κpc
+Ts
+
+,
+where λ is the multiplier associated with the active latency
+constraint and ν ≥0 is the multiplier associated with
+the upper bound fpc ≤κpc/Ts. The Karush-Kuhn-Tucker
+(KKT) stationarity conditions are 2γκpcfpc −λ κpc
+f 2
+pc + ν =
+0,
+2γκinfin −λ κin
+f 2
+in = 0. Thus, the optimal solution can
+be obtained from the following two cases:
+
+
+--- Page 10 ---
+10
+1) When ν = 0, the upper-bound constraint is inactive.
+From the stationarity conditions, we have fpc = fin.
+Substituting this result into the latency equality constraint
+gives fpc = fin = κpc+κin(C∗)
+T
+.
+2) When ν > 0, the upper-bound constraint is active.
+Thus, fpc = κpc
+Ts , and the corresponding fin is obtained
+from the latency equality constraint as fin = κin(C∗)
+T −
+κpc
+fpc .
+Combining the above two cases, the optimal CPU
+frequencies are given by (34).
+2) Beamforming Matrix Design With Fixed Computa-
+tion Resources: Let ˜Ecomp denote the computation energy
+obtained from (fpc, fin and C) in the previous step.
+After solving the computation resource subproblem, we
+begin the subproblem of beamforming matrix design with
+fixed (fpc, fin and C). Let Rc
+x denote PU
+u=1 wc,uwH
+c,u, the
+subproblem about beamforming vector wc and wr can be
+expressed as:
+max
+wr,wc
+SNRs,o
+(35)
+s.t.
+Tr(Rc
+x)T + Tr(Rr
+x)Ts + ˜Ecomp ≤PmaxT,
+(35a)
+(24c), (24d), (22).
+To solve the beamforming design subproblem, semidef-
+inite relaxation (SDR) is adopted by defining Wr =
+wrwH
+r
+with the constraints Wr
+⪰0 and Wc,u
+=
+wc,uwH
+c,u with the constraints Wc,u ⪰0. Let Ao denote
+A(θo, ϕo)AH(θo, ϕo), Aj denote ajaH
+j , Hu ≜huhH
+u , and
+κs denote ≜
+|ζ|2
+4d4
+0σ2z , thus, SNRs,o can be expressed as
+κs Tr(WrAo).
+Accordingly, the objective function becomes
+m(Wr) = ¯a +
+b
+1 + e¯λ1Tr(WrAo)−¯s0 +
+g
+1 + e¯λ3Tr(WrAo)−¯µ ,
+(36)
+where ¯a, ¯s0, ¯µ, ¯λ1, and ¯λ3 are equivalent fitting parameters
+obtained after fixing C∗and substituting SNRs,o
+=
+κs Tr(WrAo). Since the error function m(Wr) is mono-
+tonically decreasing with respect to the scalar quantity
+Tr(WrAo). Therefore, the optimal beamforming design is
+obtained by maximizing the feasible value of Tr(WrAo).
+The minimum communication QoS can be equivalently
+transformed into the following SINR threshold constraint:
+SINRu ≥SINRmin,
+SINRmin = 2Rmin/Bc −1.
+(37)
+Therefore, the communication QoS requirement reduces
+to a set of fixed SINR constraints. Based on that, (35) can
+be reformulated as the following semidefinite programming
+Algorithm 1 AO-Based Joint Resource Allocation Algo-
+rithm
+1: Initialize C(0) = 1, and obtain f (0)
+pc and f (0)
+in
+according
+to Proposition 2.
+2: Initialize w(0)
+r
+as the minimum-power sensing beam-
+forming vector satisfying (24d).
+3: Initialize {w(0)
+c,u}U
+u=1 as the minimum-power communi-
+cation beamforming vectors satisfying (24c).
+4: Input hu, Aj, {w0
+c,u}U
+u=1, w0
+r, f 0
+pc, f 0
+in, C0.
+5: set I = 0 and set the maximal error tolerance ϵ > 0.
+6: Define Wc,u = wc,uwH
+c,u and Wr = wrwH
+r .
+7: while not converged do
+8:
+Set l = 0, C(l) = C(I), f (l)
+pc = f (I)
+pc , f (l)
+in = f (I)
+in
+9:
+Decouple C(l) from f (l)
+pc and f (l)
+in according to (27).
+10:
+repeat
+11:
+Update f (l+1)
+pc
+by Proposition 1 with given f (l)
+in .
+12:
+Update f (l+1)
+in
+by (32) with given f (l+1)
+pc
+.
+13:
+Set l = l + 1.
+14:
+until
+f (l+1)
+pc
+−f (l)
+pc
+ < ϵ and
+f (l+1)
+in
+−f (l)
+in
+ < ϵ.
+15:
+Obtain the continuous depth ˜C according to (27).
+16:
+Obtain C(I+1) by projecting ˜C onto the feasible
+integer set.
+17:
+Obtain f (I+1)
+pc
+and f (I+1)
+in
+according to Proposition
+2 with fixed C(I+1).
+18:
+Obtain {W(I+1)
+c,u
+}U
+u=1 and W(I+1)
+r
+by solving (38).
+19:
+Set I = I + 1.
+20: end while
+21: Recover {w⋆
+c,u}U
+u=1 and w⋆
+r from {W⋆
+c,u}U
+u=1 and W⋆
+r
+via Gaussian randomization.
+22: Output w⋆
+c,u, w⋆
+r, C⋆, f ⋆
+in, and f ⋆
+pc.
+(SDP) problem:
+max
+{Wc,u}, Wr
+Tr(WrAo)
+(38)
+s.t.
+U
+X
+u=1
+Tr(Wc,u)T + Tr(Wr)Ts ≤˜Et,
+(38a)
+Tr(HuWc,u) ≥SINRmin
+
+X
+i̸=u
+Tr(HuWc,i) + σ2
+n
+
+,
+(38b)
+κs Tr(AoWr) ≥SNRr,
+(38c)
+ηTr(AjWr) ≥Tr(AiWr),
+∀i, j ∈J ,
+(38d)
+Wc,u ⪰0,
+∀u ∈U,
+(38e)
+Wr ⪰0,
+(38f)
+where ˜Et = PmaxT −˜Ecomp. (38) is convex and we can
+solve it eﬀiciently using CVX [36]. To obtain rank-one
+beamformers, Gaussian randomization [35] is employed to
+recover feasible beamforming vectors {wc,u}U
+u=1 and wr
+from {Wc,u}U
+u=1 and Wr.
+With the objective of minimizing pose prediction error,
+the proposed AO-based algorithm can eﬀiciently solve
+the coupled optimization of beamforming, model inference
+depth, and computation frequency.
+
+
+--- Page 11 ---
+11
+B. Algorithm Analysis
+The proposed AO-based algorithm alternately optimizes
+the computation resources and the beamforming matrices.
+In each iteration, the computation resource allocation step
+updates the CPU frequencies and model inference depth
+within the feasible region, while the beamforming design
+step solves an SDP problem to improve the sensing SNR.
+Since the fitted prediction error decreases with both model
+depth and sensing SNR, each update does not increase the
+objective value. Since MPJPE is non-negative and lower-
+bounded, the generated objective sequence is guaranteed
+to converge. In addition, the model depth is selected from
+a finite discrete set, so the algorithm reaches a stable
+solution after a finite number of iterations in practice.
+1) Complexity Analysis: As shown in Algorithm 1, for
+each AO iteration, the complexity of the computation
+subproblem can be treated as O(1). The complexity
+of the beamforming subproblem can be expressed as
+O
+ I(U+1)3N 6
+t
+
+, where I denotes the number of iterations.
+For comparison, exhaustive search over the model infer-
+ence depth first checks the feasibility of each candidate C
+and solves the beamforming subproblem only for feasible
+candidates. Let NC ≤Cmax denote the number of feasible
+inference depths. Its computational complexity is therefore
+O
+ Cmax + NC(U + 1)3N 6
+t
+
+. Therefore, the proposed AO
+algorithm has a lower computational complexity than
+exhaustive search.
+VI. Results and Analysis
+A. Experimental and Simulation Settings
+1) Experimental
+Settings:
+The
+evaluation
+of
+ET-
+Mamba uses the MM-Fi dataset [37], a publicly available
+multimodal dataset designed for indoor human sensing
+tasks. This dataset contains mmWave radar point clouds
+and pose annotations derived from a depth camera.
+The point-cloud data are segmented into M = 8 frame
+sequences using a sliding-window strategy, where each
+sequence is used to predict the 3D human joint positions
+in the next frame. The generated sequence samples are
+then divided into training and test sets with an 8:2 ratio.
+MPJPE and PA-MPJPE are adopted to quantitatively
+evaluate the pose prediction performance. PA-MPJPE
+further aligns the predicted pose with the ground truth
+through Procrustes analysis, including optimal rotation,
+translation, and scaling, before computing the MPJPE.
+This metric reduces the influence of global misalignment
+and better reflects the structural accuracy of the predicted
+pose. Lower values of both MPJPE and PA-MPJPE
+indicate higher pose prediction accuracy.
+The proposed model is implemented in PyTorch. The
+Adam optimizer is used with an initial learning rate of
+0.001 and a batch size of 128. The model is trained for
+100 epochs. For local feature grouping, the number of
+neighbors in KNN is set to 16, and the group size is set to
+32. The input data dimension is Ni × 4, and the feature
+dimension is set to 384. All experiments are conducted on
+an NVIDIA A100 GPU.
+TABLE II: SIMULATION PARAMETERS
+Parameter
+Value
+Number of communication users, U
+4
+UPA size, (Nx, Nz)
+(4, 4)
+Communication noise power, σ2
+n
+10−6
+Sensing noise power, σ2
+z
+10−6
+Communication bandwidth, Bc
+0.5 GHz
+Sensing bandwidth, Br
+0.5 GHz
+Minimum communication rate, Rmin
+3 Gbps
+Slot duration, T
+0.1 s
+Sensing duration, Ts
+0.05 s
+Minimum sensing SNR threshold, SNRr
+0 dB
+Coverage factor, η
+3
+Maximum computation frequency, fmax
+109 Hz
+Maximum Mamba depth, Cmax
+6
+Effective switched-capacitance coeﬀicient, γ
+10−25
+Number of snapshots per frame, Nc
+128
+FFT size, Ns
+256
+TABLE III: Performance comparison of different methods
+for mmWave pose prediction
+Method
+MPJPE (cm)
+PA-MPJPE (cm)
+Parameters (M)
+FLOPs (G)
+PointMamba
+7.79
+4.23
+15.8
+2.5
+PointFormer
+5.54
+3.17
+14.1
+16.6
+STPM
+3.85
+2.42
+15.9
+3.4
+ET-Mamba (Ours)
+3.24
+2.20
+15.4
+3.5
+TABLE IV: Ablation study
+Method
+MPJPE (cm)
+PA-MPJPE (cm)
+ET-Mamba (Full)
+3.24
+2.20
+ET-Mamba w/o CRB noise
+3.27
+2.21
+ET-Mamba w/o distance ordering (radar)
+3.58
+2.34
+ET-Mamba w/o distance ordering (center)
+3.49
+2.37
+ET-Mamba w/o GLF
+3.54
+2.32
+2) Simulation Settings: All system and computation
+parameters are summarized in Table II. Unless otherwise
+specified, these parameters are used as the default settings
+in the following simulations.
+B. Performance of ET-Mamba
+For comparison, the baseline methods include Point-
+Mamba [25], PointFormer [38], and STPM [28]. These
+baselines are selected to provide a comprehensive compar-
+ison across different types of point-cloud learning archi-
+tectures. Specifically, PointFormer represents attention-
+based methods, PointMamba represents recent Mamba-
+based architectures, and STPM highlights a BiMamba-
+based baseline for point-cloud sequences. All methods
+are trained and evaluated under the same experimental
+protocol to ensure a fair comparison. The relevant results
+are shown in Table III.
+1) Quantitative
+Comparison:
+The
+proposed
+model
+is compared with representative baselines in terms of
+MPJPE, PA-MPJPE, model parameters, and FLOPs.
+The results show that ET-Mamba achieves the best
+performance in terms of both MPJPE and PA-MPJPE,
+indicating its superior performance in mmWave-based
+pose prediction. Compared with the strongest baseline
+STPM, ET-Mamba reduces MPJPE from 3.85 cm to
+3.24 cm and PA-MPJPE from 2.42 cm to 2.20 cm,
+
+
+--- Page 12 ---
+12
+0
+6
+12
+18
+24
+30
+SNR (dB)
+2
+4
+6
+8
+10
+12
+14
+16
+18
+MPJPE (cm)
+With Noise Adding
+Without Noise Adding
+(a)
+(b)
+Fig. 5: Robustness evaluation and qualitative pose prediction results under different sensing SNR levels.
+corresponding to relative improvements of 15.84% and
+9.09%, respectively. Compared with the attention-based
+PointFormer, ET-Mamba reduces the FLOPs by 78.92%,
+with the MPJPE and PA-MPJPE reduced by 41.52%
+and 30.60%, respectively. Overall, ET-Mamba achieves
+a favorable balance between prediction accuracy and
+computational complexity.
+2) Ablation Study: As shown in Table IV, a compre-
+hensive ablation study is conducted on the MM-Fi dataset
+to quantify the contribution of different components in the
+proposed ET-Mamba framework. Compared with the vari-
+ant without the multi-sort strategy, removing the distance
+ordering with the radar as the reference point increases
+MPJPE to 3.58 cm and PA-MPJPE to 2.34 cm, while
+removing the distance ordering with the center as the ref-
+erence point increases MPJPE to 3.49 cm and PA-MPJPE
+to 2.37 cm. This is because the two distance-ordering
+strategies provide different geometric views of the point-
+cloud. Specifically, the radar-based ordering describes
+the spatial distribution of local groups from the sensing
+viewpoint by measuring their distances to the radar origin,
+while the center-based ordering characterizes the internal
+geometric organization of the point-cloud by measuring
+their distances to the centroid of all group centers.
+Removing either ordering strategy reduces the geometric
+information preserved in the serialized token sequence, de-
+grading the subsequent Mamba-based sequence modeling.
+In addition, compared with the variant without the GLF
+module, the full model reduces MPJPE from 3.54 cm to
+3.24 cm and PA-MPJPE from 2.32 cm to 2.20 cm. This is
+because, without the GLF module, each local group token
+is mainly represented by its neighborhood-level features
+and cannot effectively incorporate the global contextual
+information of the entire point cloud, thereby degrading
+pose prediction performance.
+Although the improvement in average prediction per-
+formance is limited, the CRB-guided perturbation is de-
+signed to expose the model to sensing uncertainty during
+training.
+To evaluate its robustness, we compare the models
+trained with and without CRB-guided perturbation un-
+der different SNR levels during testing. As shown in
+Fig. 5(a), the proposed model with CRB-guided pertur-
+bation maintains a consistently low MPJPE across the
+entire SNR range, indicating strong robustness to sensing
+uncertainty. In contrast, the model trained without CRB-
+guided perturbation is highly sensitive to SNR variations,
+especially in the low-SNR regime. At 0 dB, the proposed
+method reduces the MPJPE from about 17.6 cm to 4.6 cm,
+corresponding to an improvement of approximately 73.9%.
+Even at 30 dB, a noticeable gain is still observed, with
+the MPJPE reduced from about 5.8 cm to 4.0 cm, i.e.,
+an improvement of about 31.0%. This confirms that the
+proposed perturbation strategy not only improves low-
+SNR scenarios, but also provides stable performance gains
+over the entire sensing quality range. Fig. 5(b) further
+visualizes the predicted human pose under different SNR
+levels, demonstrating the robustness of the proposed CRB-
+guided strategy under varying sensing conditions.
+C. Performance of the ISCC System
+We compare the proposed adaptive scheme with three
+baselines, labeled fixed C = 1, fixed SNRs,o = 0 dB, and
+fixed fin = 0.4 GHz. These baselines isolate the effects
+of model inference depth, sensing quality, and computa-
+tion frequency allocation, respectively. The fixed C = 1
+baseline uses the minimum inference depth and prioritizes
+sensing quality, while the fixed SNRs,o = 0 dB baseline
+only meets the minimum sensing QoS requirement and
+prioritizes computation resources. The fixed fin = 0.4 GHz
+baseline keeps the computation frequency constant, where
+the computation cost is adjusted only through the selected
+model inference depth.
+As shown in Fig. 6(a), the MPJPE generally decreases
+as the average power budget increases, since additional
+power provides more resources for improving sensing qual-
+ity and supporting a more effective inference configuration.
+The proposed scheme consistently achieves the lowest
+MPJPE. In the low-power region, it reduces the MPJPE
+to about 5.4 cm, compared with around 6.8 cm for the
+fixed C = 1 baseline, corresponding to an error reduction
+of approximately 21%. Among the baselines, the fixed
+fin = 0.4 GHz baseline is infeasible at Pmax = 1 W
+because its high fixed inference frequency incurs excessive
+computation energy, while its MPJPE decreases rapidly
+as the power budget increases because the relaxed energy
+constraint allows the fixed-frequency configuration to
+support deeper inference. The fixed C = 1 scheme changes
+only slightly with the power budget because the minimum
+model inference depth limits the inference capability. The
+
+
+--- Page 13 ---
+13
+1
+1.5
+2
+2.5
+3
+3.5
+4
+3.5
+4
+4.5
+5
+5.5
+6
+6.5
+7
+(a)
+20
+30
+40
+50
+60
+70
+80
+4
+4.5
+5
+5.5
+6
+6.5
+7
+(b)
+0.5
+1
+1.5
+2
+2.5
+3
+3.5
+4
+4.5
+5
+5.5
+6
+6.5
+7
+7.5
+(c)
+Fig. 6: MPJPE performance versus average power budget, sensing duration, and minimum communication rate.
+fixed SNRs,o = 0 dB scheme achieves lower MPJPE than
+the fixed C = 1 scheme, but its improvement is limited
+by the minimum sensing-quality constraint.
+As shown in Fig. 6(b), the MPJPE increases with the
+sensing duration Ts. This is because a larger Ts decreases
+inference time while increasing inference frequency. The
+proposed adaptive scheme consistently achieves the lowest
+MPJPE over the whole range of Ts. When Ts increases
+from 20 ms to 60 ms, the proposed scheme keeps the
+MPJPE around 4.1–4.3 cm, while the fixed C = 1 baseline
+remains above 6.4 cm, corresponding to an error reduction
+of about 33%. Even at Ts = 80 ms, the proposed scheme
+still achieves a lower MPJPE than the other baselines.
+The fixed fin = 0.4 GHz baseline remains flat at small
+Ts because suﬀicient inference time is still available to
+maintain a similar model depth, but rises sharply once the
+remaining inference time becomes insuﬀicient under the
+fixed inference frequency. This verifies that the proposed
+scheme can effectively allocate resources to maintain
+robust pose prediction performance.
+As shown in Fig. 6(c), the MPJPE increases with
+the communication rate Rmin, especially in the high-rate
+region. A larger Rmin forces the system to allocate more
+resources to communication, reducing the resources avail-
+able for sensing and computation. The proposed scheme
+consistently achieves the lowest MPJPE. It maintains an
+MPJPE of about 4.3 cm when Rmin is below 2.5 Gbps,
+reducing the error by approximately 35% compared with
+the fixed C = 1 baseline and about 9% compared with the
+fixed fin = 0.4 GHz baseline. Even when Rmin increases
+to 3.5 Gbps, the proposed scheme still outperforms all
+baselines. This verifies that adaptive joint allocation can
+better balance communication QoS and sensing accuracy
+under stringent rate requirements.
+To investigate the energy consumption required to
+achieve different prediction performance, Fig. 7 compares
+the average total energy consumption under two MPJPE
+targets, i.e., 4.5 cm and 4.2 cm, under different values of C.
+N/A means that the corresponding model inference depth
+cannot satisfy the MPJPE target of 4.2 cm, indicating
+the limited prediction capability of shallow models. The
+0.163
+0.106
+0.175
+0.288
+N/A
+0.392
+0.228
+0.324
+3
+4
+5
+6
+Model Inference Depth C
+0
+0.05
+0.1
+0.15
+0.2
+0.25
+0.3
+0.35
+0.4
+0.45
+Average Total Energy Consumption (J)
+MPJPE 
+ 4.5 cm
+MPJPE 
+ 4.2 cm
+Fig. 7: Average total energy consumption under different
+MPJPE requirements and model inference depths.
+results show that a stricter performance requirement gen-
+erally leads to higher energy consumption. For example,
+when C = 5, reducing the MPJPE target from 4.5 cm
+to 4.2 cm increases the energy consumption from 0.175 J
+to 0.228 J. However, the energy consumption does not
+vary monotonically with the model inference depth under
+the same MPJPE requirement. For instance, under the
+MPJPE target of 4.5 cm, increasing the model inference
+depth from C = 3 to C = 4 decreases the energy
+consumption from 0.163 J to 0.106 J, whereas further
+increasing C leads to higher energy consumption. This is
+because a shallow model requires more sensing resources
+to compensate for its limited inference capability, while an
+excessively deep model introduces additional computation
+energy consumption. Therefore, these results demonstrate
+the importance of selecting an appropriate model inference
+depth to balance sensing and computation energy under
+different prediction accuracy requirements.
+To investigate the impact of inference frequency on pre-
+diction performance, Fig. 8 compares the proposed scheme
+with several fixed-frequency baselines. When Pmax =
+1.5 W, the proposed scheme reduces the MPJPE by about
+14% and 32% compared with the fixed fin = 0.30 GHz and
+fin = 0.40 GHz baselines, respectively. When Pmax = 1 W,
+
+
+--- Page 14 ---
+14
+1
+1.5
+2
+2.5
+3
+3.5
+4
+4
+4.5
+5
+5.5
+6
+6.5
+7
+7.5
+Fig. 8: MPJPE performance versus Pmax under different
+inference frequencies.
+1
+1.5
+2
+2.5
+3
+3.5
+4
+4
+4.5
+5
+5.5
+6
+6.5
+7
+Fig. 9: MPJPE performance versus Pmax under different
+model inference depths.
+these two baselines become infeasible because their rel-
+atively high fixed inference frequencies incur excessive
+computation energy under the stringent power budget. For
+the fixed fin = 0.20 GHz baseline, the MPJPE decreases
+rapidly as Pmax increases from 1 to 1.5 W, since the
+additional energy allows a deeper model to be adopted.
+When Pmax ≥2 W, the performance gradually saturates
+because the low fixed inference frequency becomes limited
+by the inference latency.
+To investigate the impact of model inference depth on
+prediction performance, Fig. 9 compares the proposed
+scheme with several fixed-depth baselines. It can be
+observed that a larger model inference depth generally
+leads to lower MPJPE, since deeper inference can extract
+more effective temporal and spatial features for pose
+prediction. For example, when Pmax = 2 W, the proposed
+method reduces the MPJPE by about 33%, 15%, and
+4% compared with the fixed C = 1, C = 2, and C = 3
+baselines, respectively. When Pmax = 1 W, the fixed C = 3
+baseline becomes infeasible due to its higher computation
+requirement.
+VII. Conclusion
+In this paper, we have proposed a CRB-guided sensing
+framework for indoor ISCC systems with human pose
+prediction. We have developed ET-Mamba as a lightweight
+prediction model that supports adaptive-depth inference
+under resource-constrained conditions. We have also de-
+signed a CRB-guided anisotropic perturbation strategy to
+simulate point-cloud perturbations under different sensing
+SNR levels. We have formulated a joint optimization
+of the beamforming matrix, model inference depth, and
+computation frequency to minimize the pose prediction
+error, which is the first study to jointly consider sensing
+quality, model inference depth and resource allocation in
+mmWave ISCC systems. To address this issue, we have
+proposed an alternating optimization scheme. First, we
+have established an empirical relationship among pose
+prediction error, sensing SNR, and model inference depth.
+Subsequently, we have proposed an AO-based algorithm,
+where closed-form updates and SDP were combined to
+eﬀiciently solve the problem. Simulation results show that
+the proposed method reduces the MPJPE by up to ap-
+proximately 35% compared with the baseline, verifying the
+effectiveness of conducting joint sensing, communication,
+and computation design in ISCC systems. Future work will
+extend the proposed framework to multi-person scenarios
+and online adaptation with real-time sensing feedback.
+References
+[1] D. Wen, Y. Zhou, X. Li, Y. Shi, K. Huang, and K. B. Letaief,
+“A survey on integrated sensing, communication, and compu-
+tation,” IEEE Communications Surveys & Tutorials, vol. 27,
+no. 5, pp. 3058–3098, 2025.
+[2] W. Chen, Y. He, G. Yu, J. Wang, and H. Luo, “Sensing frame-
+work design and performance optimization with action detection
+for ISCC,” IEEE Transactions on Wireless Communications,
+2025.
+[3] F. Liu, Y. Cui, C. Masouros, J. Xu, T. X. Han, Y. C. Eldar,
+and S. Buzzi, “Integrated sensing and communications: Toward
+dual-functional wireless networks for 6G and beyond,” IEEE
+Journal on Selected Areas in Communications, vol. 40, no. 6,
+pp. 1728–1767, 2022.
+[4] Z. Liu, X. Chen, H. Wu, Z. Wang, X. Chen, D. Niyato, and
+K. Huang, “Integrated sensing and edge ai: Realizing intelligent
+perception in 6G,” IEEE Communications Surveys & Tutorials,
+2025.
+[5] Y. Wu, Z. Jiang, H. Ni, C. Mao, Z. Zhou, W. Wang, and J. Han,
+“mmHPE: Robust multiscale 3-D human pose estimation using
+a single mmwave radar,” IEEE Internet of Things Journal,
+vol. 12, no. 1, pp. 1032–1046, 2024.
+[6] L. Engel, J. Mueller, E. J. F. Rendon, E. Dorschky, D. Krauss,
+I. Ullmann, B. M. Eskofier, and M. Vossiek, “Advanced millime-
+ter wave radar-based human pose estimation enabled by a deep
+learning neural network trained with optical motion capture
+ground truth data,” IEEE Journal of Microwaves, 2025.
+[7] Z. Ren, X. Song, Y. Fang, L. Qiu, and J. Xu, “Fundamental
+CRB-Rate tradeoff in multi-antenna multicast channel with
+ISAC,” in 2022 IEEE Globecom Workshops (GC Wkshps),
+pp. 1261–1266, 2022.
+[8] B. Li, X. Wang, and F. Fang, “Maximizing the value of
+service provisioning in multi-user ISAC systems through fairness
+guaranteed collaborative resource allocation,” IEEE Journal on
+Selected Areas in Communications, vol. 42, no. 9, pp. 2243–
+2258, 2024.
+[9] Y. Yao, J. Zhang, P. Miao, L. Zhang, G. Chen, F. Shu, and K.-
+K. Wong, “Hybrid RIS-enhanced ISAC secure systems: Joint
+optimization in the presence of an extended target,” IEEE
+Transactions on Communications, 2025.
+[10] Y. Yao, J. Sun, P. Miao, G. Chen, and R. Tafazolli, “Energy-
+eﬀicient beamforming for STAR-RIS-aided isac with hardware
+impairments: A generative AI-enabled DRL method,” IEEE
+Transactions on Wireless Communications, 2026.
+
+
+--- Page 15 ---
+15
+[11] R. Liu, M. Li, Q. Liu, and A. L. Swindlehurst, “SNR/CRB-
+constrained joint beamforming and reflection designs for RIS-
+ISAC systems,” IEEE Transactions on Wireless Communica-
+tions, vol. 23, no. 7, pp. 7456–7470, 2023.
+[12] G. Chai, Z. Yu, X. Wu, M. Nabeel, and G. Caire, “Joint transmit
+and receive codebook design for self-interference suppression in
+a mmWave ISAC terminal device,” in 2024 IEEE International
+Conference on Acoustics, Speech, and Signal Processing Work-
+shops (ICASSPW), pp. 575–579, 2024.
+[13] P. Li, M. Li, R. Liu, Q. Liu, and A. L. Swindlehurst, “MIMO-
+OFDM ISAC waveform design for range-doppler sidelobe sup-
+pression,” IEEE Transactions on Wireless Communications,
+vol. 24, no. 2, pp. 1001–1015, 2024.
+[14] A. Gupta, J. Singh, S. Srivastava, A. K. Jagannatham, and
+L. Hanzo, “Bayesian learning aided parameter estimation and
+joint beamformer design in mmWave MIMO-OFDM ISAC sys-
+tems,” IEEE Transactions on Communications, vol. 73, no. 11,
+pp. 12518–12532, 2025.
+[15] P. Wang, J. Fang, X. Zeng, Z. Chen, and H. Li, “Low-complexity
+joint transceiver optimization for MmWave/THz MU-MIMO
+ISAC systems,” IEEE Internet of Things Journal, vol. 12, no. 5,
+pp. 5289–5304, 2025.
+[16] X. Zhang, N. Yan, Y. Su, Y. Deng, and T. Mahmoodi,
+“Communication-aware knowledge distillation for federated
+llm
+fine-tuning
+over
+wireless
+networks,”
+arXiv
+preprint
+arXiv:2509.01750, 2025.
+[17] Z. Ren, Y. Peng, X. Song, Y. Fang, L. Qiu, L. Liu, D. W. K. Ng,
+and J. Xu, “Fundamental CRB-Rate tradeoff in multi-antenna
+ISAC systems with information multicasting and multi-target
+sensing,” IEEE Transactions on Wireless Communications,
+vol. 23, no. 4, pp. 3870–3885, 2024.
+[18] H. Hua, T. X. Han, and J. Xu, “MIMO integrated sensing
+and communication: CRB-Rate tradeoff,” IEEE Transactions
+on Wireless Communications, vol. 23, no. 4, pp. 2839–2854,
+2024.
+[19] J. Wang, Z. Zhao, Y. Ding, Z. Qin, Z. Yang, M. Chen, and
+M. Shikh-Bahaei, “Semantic feature multiple access empow-
+ered integrated learning and communication networks,” arXiv
+preprint arXiv:2604.09255, 2026.
+[20] J. Wang, Y. Yang, Z. Yang, C. Huang, M. Chen, Z. Zhang,
+and M. Shikh-Bahaei, “Generative AI empowered semantic
+feature multiple access (SFMA) over wireless networks,” IEEE
+Transactions on Cognitive Communications and Networking,
+vol. 11, no. 2, pp. 791–804, 2025.
+[21] Z. Liu, Y. Ding, Y. Yang, and M. Shikh-Bahaei, “CRB-guided
+framework design and resource allocation for indoor mmwave
+ISCC systems,” arXiv preprint arXiv:2605.29939, 2026.
+[22] X. Zhang, Y. Deng, and T. Mahmoodi, “TT-Prune: Joint
+model pruning and resource allocation for communication-
+eﬀicient time-triggered federated learning,” IEEE Transactions
+on Vehicular Technology, 2026.
+[23] H. Tang, W. Chen, Y. Yan, Y. Tang, Y. Yang, Y. Feng,
+X. Jiang, J. Lu, Y. Xu, and Q. Fang, “GF-DecNet: Geometry-
+aware feature decoupling network for millimeter-Wave radar
+pose estimation,” IEEE Internet of Things Journal, 2025.
+[24] X. Shi, M. Bouazizi, and T. Ohtsuki, “mmPoint-Attention:
+A unified attention framework for human pose and activity
+recognition from mmwave radar point clouds,” IEEE Sensors
+Journal, vol. 25, no. 14, pp. 26794–26805, 2025.
+[25] D. Liang, X. Zhou, W. Xu, X. Zhu, Z. Zou, X. Ye, X. Tan,
+and X. Bai, “Pointmamba: A simple state space model for
+point cloud analysis,” Advances in neural information processing
+systems, vol. 37, pp. 32653–32677, 2024.
+[26] L. Diao, S. Song, Y. Qian, and D. Ren, “Zigzagpointmamba:
+Spatial-semantic mamba for point cloud understanding,” arXiv
+preprint arXiv:2505.21381, 2025.
+[27] J. Liu, J. Han, L. Liu, A. I. Aviles-Rivero, C. Jiang, Z. Liu, and
+H. Wang, “Mamba4d: Eﬀicient 4d point cloud video understand-
+ing with disentangled spatial-temporal state space models,” in
+2025 IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), pp. 17626–17636, IEEE, 2025.
+[28] Y. Chen, Z. Guo, H. Zhang, and M. Xu, “STPM: Spatial-
+temporal point mamba for activity recognition using mmwave
+radar point clouds,” in 2025 IEEE International Conference on
+Multimedia and Expo (ICME), pp. 1–6, IEEE, 2025.
+[29] N. D. M. Quang, C. Liu, S. Li, H.-N. Vu, D. W. K. Ng, and
+W. Xiang, “Diffusion model-enhanced environment reconstruc-
+tion in ISAC,” IEEE Wireless Communications Letters, 2026.
+[30] D. G. Han, Y. J. Kim, and Y. S. Cho, “Eﬀicient preamble
+design technique for Millimeter-Wave cellular systems with
+beamforming,” Sensors, vol. 16, no. 7, p. 1129, 2016.
+[31] Y. Wang, M. Tao, and S. Sun, “Cramér-rao bound analysis and
+beamforming design for integrated sensing and communication
+with extended targets,” IEEE Transactions on Wireless Com-
+munications, vol. 23, no. 11, pp. 15987–16000, 2024.
+[32] A. Dogandzic and A. Nehorai, “Cramer-rao bounds for estimat-
+ing range, velocity, and direction with an active array,” IEEE
+transactions on Signal Processing, vol. 49, no. 6, pp. 1122–1137,
+2001.
+[33] A. Adhikari and S. Sur, “Misleep: Human sleep posture identi-
+fication from deep learning augmented millimeter-wave wireless
+systems,” ACM Transactions on Internet of Things, vol. 5, no. 2,
+pp. 1–33, 2024.
+[34] Y. Ding, Y. Yang, J. Wang, Z. Liu, Z. Yang, M. Chen, and
+M. Shikh-Bahaei, “Energy eﬀicient federated learning with
+hyperdimensional computing (hdc),” in ICC 2026-IEEE Inter-
+national Conference on Communications, pp. 1–6, IEEE, 2026.
+[35] Y. Wang, M. Tao, S. Sun, J. Mo, and W. Cao, “3d extended tar-
+get sensing in isac: Cramér-rao bound analysis and beamforming
+design,” IEEE Transactions on Wireless Communications, 2026.
+[36] X. Zhang, Y. Deng, and T. Mahmoodi, “Joint model pruning
+and resource allocation for wireless time-triggered federated
+learning,” in GLOBECOM 2024-2024 IEEE Global Commu-
+nications Conference, pp. 950–955, IEEE, 2024.
+[37] J. Yang, H. Huang, Y. Zhou, X. Chen, Y. Xu, S. Yuan, H. Zou,
+C. X. Lu, and L. Xie, “MM-Fi: Multi-modal non-intrusive
+4D human dataset for versatile wireless sensing,” Advances in
+Neural Information Processing Systems, vol. 36, pp. 18756–
+18768, 2023.
+[38] W. Shi and R. Rajkumar, “Point-GNN: Graph neural network
+for 3D object detection in a point cloud,” in Proceedings of
+the IEEE/CVF conference on computer vision and pattern
+recognition, pp. 1711–1719, 2020.
