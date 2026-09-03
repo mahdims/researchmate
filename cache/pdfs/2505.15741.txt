@@ -1,0 +1,2505 @@
+--- Page 1 ---
+Large Language Models and Evolutionary Computation: A Critical Review
+of Bidirectional Interaction, Automated Algorithm Design, and
+Co-Adaptive Systems
+Dikshit Chauhana, Bapi Duttab, Indu Balac, Niki Van Steind, Thomas Bäckd, Anupam Yadave,∗
+aDepartment of Electrical and Computer Engineering, National University of Singapore, Singapore 119077
+bDepartment of Computer Science, Universidad de Jaén, Spain
+cSchool of Computer and Mathematical Sciences, University of Adelaide, Australia- 5005
+dLeiden Institute of Advanced Computer Science, University of Leiden, Netherlands
+eDepartment of Mathematics and Computing, Dr. B. R. Ambedkar National Institute of Technology, Jalandhar, India
+Abstract
+Large Language Models (LLMs) and Evolutionary Computation (EC) are increasingly being combined to
+support automated optimization, algorithm design, and adaptive decision-making. This survey reviews the
+bidirectional interaction between these two paradigms and examines how their complementary strengths can
+be leveraged in hybrid intelligent systems. First, we analyze how EC can enhance LLM-based systems through
+prompt optimization, hyperparameter tuning, and architecture search. Second, we review how LLMs can im-
+prove EC by supporting metaheuristic design, surrogate reasoning, adaptive operator control, and heuristic
+generation. We further discuss emerging co-adaptive frameworks in which LLMs and EC interact through
+iterative feedback loops. Beyond summarizing recent developments, the survey provides a structured perspec-
+tive on interaction mechanisms, application patterns, and methodological challenges, including computational
+cost, reproducibility, interpretability, benchmarking, and generalization. The paper concludes by outlining
+open research questions and future directions for developing more robust, transparent, and scalable LLM-EC
+systems.
+Keywords: Large Language Models, Evolutionary Computation, Metaheuristics, Automated Algorithm
+Design, Prompt Optimization, Co-Adaptive Systems
+1. Introduction
+Large Language Models (LLMs) have become a central paradigm in artificial intelligence (AI), demon-
+strating strong capabilities in natural language understanding, generation, reasoning, and code synthesis [1, 2].
+Built primarily on Transformer-based architectures and trained on massive corpora, these models can perform
+a wide range of tasks with high fluency and adaptability, often under zero-shot and few-shot settings. Their
+growing impact now extends well beyond traditional natural language processing (NLP), influencing software
+engineering, scientific discovery, decision support, and increasingly, automated optimization and algorithm
+design. As a result, LLMs are no longer viewed only as language interfaces but also as computational compo-
+nents that can guide search, generate heuristics, and support the automation of complex design workflows.
+In parallel, Evolutionary Computation (EC) has long served as a powerful family of derivative-free op-
+timization methods inspired by natural evolution [3, 4]. By iteratively evolving populations of candidate
+∗Corresponding author
+Email addresses: dikshitchauhan608@gmail.com (Dikshit Chauhan), bdutta@ujaen.es (Bapi Dutta ),
+indu.bala@adelaide.edu.au (Indu Bala), n.van.stein@liacs.leidenuniv.nl (Niki Van Stein),
+t.h.w.baeck@liacs.leidenuniv.nl (Thomas Bäck), anupam@nitj.ac.in (Anupam Yadav )
+arXiv:2505.15741v3  [cs.NE]  29 Aug 2026
+
+
+--- Page 2 ---
+solutions through variation and selection, EC methods are well-suited to high-dimensional, multimodal, non-
+convex, and non-differentiable search spaces where classical optimization techniques may struggle. Their
+robustness, flexibility, and model-agnostic nature have made them valuable across engineering design, ma-
+chine learning, scheduling, scientific modeling, and many other domains. These same properties also make
+EC particularly attractive for improving or steering LLM-based systems, especially in black-box settings where
+gradients, internals, or exact performance landscapes may be inaccessible.
+From a broader computer-science perspective, the intersection of LLMs and EC is important not only
+because it may improve performance, but because it speaks directly to a larger shift toward automated algo-
+rithm design. LLMs contribute semantic abstraction, prior knowledge, code generation, and flexible reasoning,
+whereas EC contributes structured exploration, diversity preservation, black-box optimization, and robustness
+under weak modeling assumptions. Their combination, therefore, offers a promising route toward AI systems
+that can not only solve tasks but also help design, adapt, and optimize the procedures used to solve them.
+1.1. Overview of LLMs and EC
+Definition 1. Large Language Model (LLM): An LLM is a deep neural network that models the conditional
+probability distribution of a token sequence T = {t1,t2,...,tn} as
+p(tn | t1,t2,...,tn−1;θ),
+where θ denotes the model parameters learned through large-scale self-supervised training, typically via next-
+token prediction. In practice, modern LLMs leverage Transformer-based architectures, large pretraining cor-
+pora, and transfer learning to acquire contextual, semantic, and task-general reasoning capabilities.
+Definition 2. Evolutionary Computation (EC): EC refers to a family of population-based stochastic optimiza-
+tion methods inspired by natural evolution. An EC algorithm evolves a population of candidate solutions
+Pt = {x1,x2,...,xN} over generations using variation and selection operators to optimize an objective function
+f(x):
+x∗= argmax
+x∈X f(x),
+or equivalently argmin for minimization problems. Representative EC paradigms include genetic algorithms
+(GA), differential evolution (DE), evolution strategies (ES), genetic programming (GP), and swarm-based
+methods.
+Their distinguishing characteristics include diversity-driven exploration, robustness in complex
+search spaces, and applicability in settings where gradients are noisy, unavailable, or uninformative [5].
+In this review, we use the term evolutionary computation (EC) in a broad computer-science sense. Specifically,
+EC serves here as an umbrella term for population-based and evolution-inspired search methods, including
+canonical evolutionary algorithms such as genetic algorithms, differential evolution, evolution strategies, and
+genetic programming, as well as closely related population-based metaheuristics such as swarm-intelligence
+methods when they play a methodologically comparable role in LLM-related optimization and algorithm-
+design settings. By contrast, evolutionary algorithms (EAs) are treated as a more specific subset within this
+broader landscape, while metaheuristics is used as a higher-level term for general-purpose heuristic optimiza-
+tion frameworks that may include both evolutionary and non-evolutionary methods [6]. For convenience,
+Table 1 summarizes the main terminology and abbreviations used throughout the survey.
+Table 1: Important terminology and abbreviations used throughout the survey.
+Term
+Definition / Description
+Large Language Model
+LLM
+Transformer-based deep neural network trained on massive text corpora for
+language understanding, reasoning, and generation.
+Evolutionary Computation
+EC
+Population-based optimization paradigm inspired by biological evolution.
+2
+
+
+--- Page 3 ---
+Table 1 - Continued from previous page
+Term
+Definition / Description
+Evolutionary Algorithm
+EA
+Subclass of EC employing selection, crossover, mutation, and replacement op-
+erators.
+Genetic Algorithm
+GA
+Evolutionary optimization algorithm based on chromosome evolution.
+Differential Evolution
+DE
+Population-based optimization algorithm using vector differences for mutation.
+Evolution Strategies
+ES
+Evolutionary optimization methods emphasizing adaptive mutation mecha-
+nisms.
+Genetic Programming
+GP
+Evolutionary technique that evolves executable programs or symbolic expres-
+sions.
+Neural Architecture Search
+NAS
+Automated optimization of neural network architectures.
+Prompt Optimization
+PO
+Automatic optimization of prompts to improve LLM performance.
+Hyper-Heuristic
+HH
+Method that searches over heuristics.
+Metaheuristic
+MH
+General-purpose optimization framework applicable to diverse problems.
+Surrogate Model
+SM
+Approximate model used in place of expensive objective evaluations.
+Fitness Function
+FF
+Objective function used to evaluate candidate solutions.
+Population
+–
+Collection of candidate solutions evolved during optimization.
+Individual
+–
+Single candidate solution within a population.
+Selection
+–
+Process of selecting promising individuals for reproduction.
+Mutation
+–
+Random modification of candidate solutions to introduce diversity.
+Crossover
+–
+Recombination of parent solutions to generate offspring.
+Exploration
+–
+Search strategy emphasizing diversity and global search.
+Exploitation
+–
+Search strategy emphasizing refinement of promising solutions.
+Quality-Diversity
+QD
+Optimization paradigm for high-quality and diverse solutions simultaneously.
+Particle Swarm Optimization
+PSO
+Swarm intelligence algorithm inspired by flocking behavior.
+Artificial Bee Colony
+ABC
+Swarm optimization algorithm inspired by honeybee foraging.
+Grey Wolf Optimizer
+GWO
+Nature-inspired optimization algorithm based on grey wolf hunting behavior.
+Whale Optimization Algorithm
+WOA
+Population-based optimizer inspired by humpback whale hunting.
+Self-Organizing Migrating Algorithm
+SOMA
+Evolutionary optimization algorithm based on cooperative migration.
+Ant Colony Optimization
+ACO
+Optimization algorithm inspired by pheromone-guided ant foraging.
+Bayesian Optimization
+BO
+Sample-efficient optimization for expensive black-box functions.
+Black-box Optimization
+BBO
+Optimization without explicit knowledge of gradients or objective structure.
+Prompt Engineering
+PE
+Manual or automated design of prompts for LLMs.
+Automated Algorithm Design
+AAD
+Automatic generation and optimization of algorithms using AI techniques.
+Program Synthesis
+PS
+Automatic generation of executable programs satisfying desired objectives.
+Algorithm Discovery
+AD
+Automatic creation of novel optimization algorithms.
+FunSearch
+–
+LLM-based framework integrating code generation with evolutionary evalua-
+tion.
+LLaMEA
+–
+LLM-assisted evolutionary algorithm generation and evaluation framework.
+Co-Adaptive System
+–
+Hybrid framework where LLMs and EC iteratively improve one another
+through feedback.
+Co-Evolutionary System
+–
+Framework in which both LLMs and EC undergo mutual evolutionary adapta-
+tion.
+Search Space
+–
+Domain containing all feasible candidate solutions.
+Objective Function
+–
+Mathematical function defining the optimization objective.
+Benchmark
+–
+Standard dataset or optimization problem used for evaluation.
+Explainability
+XAI
+Ability to interpret and understand model predictions and optimization behav-
+ior.
+3
+
+
+--- Page 4 ---
+These definitions reveal a useful complementarity. LLMs excel at representing and generating structured
+knowledge, while EC excels at searching difficult spaces under limited structural assumptions. Recent ad-
+vances in LLM capability have therefore intensified interest in using EC to optimize prompts, hyperparame-
+ters, architectures, and interaction policies of LLM-based systems. Conversely, LLMs are increasingly being
+used to assist EC by generating heuristics, proposing operators, providing surrogate judgments, and supporting
+automated metaheuristic design. This bidirectional interaction motivates a more unified view of how the two
+paradigms exchange information, constraints, and search bias.
+The convergence of LLMs and EC thus creates opportunities at multiple levels of abstraction. In one
+direction, EC can improve LLM-centered pipelines through prompt optimization, hyperparameter tuning, neu-
+ral architecture search, and other black-box adaptation mechanisms [7, 8, 9, 10]. In the opposite direction,
+LLMs can improve EC by generating promising candidate solutions, proposing variation operators, designing
+heuristics, and injecting domain knowledge into evolutionary search [11, 12, 13, 14].
+Beyond these two
+direct modes, a third emerging direction involves co-adaptive or co-evolutionary frameworks in which LLMs
+and EC iteratively influence one another through feedback loops. In this review, co-adaptive is used as the
+broader term for repeated mutual adjustment between the two components, whereas co-evolutionary is re-
+served for the narrower case in which both components explicitly undergo coupled adaptation or evolutionary
+update in response to each other. Fig. 1 summarizes the evolution of LLM-EC interaction from foundational
+language-model advances to prompt optimization, automated algorithm design, co-adaptive systems, and the
+recent emphasis on benchmarking and reproducibility. The timeline is intended as a synthesis of representative
+developments discussed later in the paper rather than as an exhaustive publication chronology.
+2017-2020
+2022
+2023
+2024
+2024-2025
+2025
+2025-2026
+Transformer/GPT-
+era foundation
+LLM-generated
+operators and hybrid
+metaheuristics
+Language-mediated
+evolutionary search
+Benchmarking and
+reproducibility phase
+Prompt optimiza-
+tion with EC
+Hyper-
+heuristic/program-
+synthesis frameworks
+Co-adaptive
+LLM-EC systems
+Figure 1: Evolution of LLM-EC interaction, from foundational LLM advances to prompt optimization, algorithm-generation frame-
+works, language-mediated search, co-adaptive systems, and the growing emphasis on benchmarking and reproducibility. Repre-
+sentative milestones reflected in the timeline include foundational LLM surveys and model developments [1, 2], early evolutionary
+prompt optimization studies [15, 7], language-mediated evolutionary search [13], and benchmarking-oriented algorithm-generation
+frameworks such as LLaMEA [16].
+To clarify this relationship, Table 2 provides a compact comparison of the complementary properties of
+LLMs and EC across learning, search, and optimization dimensions. Rather than treating them as competing
+paradigms, the table highlights why they are natural partners in automated design and optimization workflows
+and serves as a conceptual backdrop for the bidirectional interaction patterns discussed later in the paper.
+Among the most visible examples of this integration is prompt optimization. Since LLM outputs are highly
+sensitive to prompt wording and structure, prompt engineering has become an important lever for improving
+downstream performance. However, manually identifying high-quality prompts is labor-intensive and often
+task-specific. Evolutionary prompt optimization frameworks such as EvoPrompt automate this search by
+generating and selecting improved prompt variants over time [7, 17]. More broadly, prompt optimization
+illustrates a recurring pattern throughout this survey: EC provides efficient search over difficult design spaces,
+while LLMs provide semantic structure and evaluative priors that can reshape those searches.
+More generally, hybrid LLM-EC systems are most useful when neither component alone is sufficient for
+4
+
+
+--- Page 5 ---
+Figure 2: Overview of the survey structure around three complementary perspectives: EC for LLM enhancement, LLMs for EC
+enhancement, and emerging co-adaptive frameworks that connect the two through iterative feedback and refinement.
+5
+
+
+--- Page 6 ---
+Table 2: Compact comparison of LLMs and EC across learning, search, and optimization dimensions. The table highlights their
+complementary properties and provides a conceptual backdrop for the bidirectional interaction patterns discussed later in the survey.
+Dimension
+Large Language Models (LLMs)
+Evolutionary Computation (EC)
+Learning Properties
+Core principle: Learn statistical and semantic structure
+from large-scale token data.
+Learning mechanism: Gradient-based representation learn-
+ing from pretraining and adaptation data.
+Knowledge representation: Distributed latent embeddings
+and contextual token representations.
+Core principle: Evolve candidate solutions through
+variation, selection, and population adaptation.
+Learning
+mechanism:
+Fitness-driven
+stochastic
+search over populations of solutions.
+Knowledge representation: Explicit symbolic, nu-
+meric, or structural encodings of candidate solutions.
+Search Properties
+High-dimensional semantic and latent spaces, with explo-
+ration and exploitation shaped indirectly through prompt-
+ing, decoding, and learned priors from pretraining and in-
+struction tuning.
+Problem-dependent decision spaces over parameters,
+rules, structures, or programs, with exploration and
+exploitation controlled explicitly through mutation,
+recombination, selection pressure, diversity mainte-
+nance, and fitness design.
+Optimization Proper-
+ties
+Objectives typically involve likelihood, utility, alignment,
+or downstream task quality.
+Main strengths include
+rich semantic reasoning, cross-task transfer, and natural-
+language/code-level abstraction. Main weaknesses include
+hallucination, bias, prompt sensitivity, high compute de-
+mand, and limited transparency of internal reasoning.
+Objectives are defined through user-specified fitness
+functions.
+Main strengths include robust global
+search in black-box, non-differentiable, and multi-
+modal spaces. Main weaknesses include sensitivity
+to representation and fitness design, risk of premature
+convergence, and high evaluation cost for expensive
+objectives.
+the design problem at hand. In particular, their combination is especially justified when the object being opti-
+mized has semantic, textual, or code-level structure, but its quality must still be assessed through a black-box,
+non-differentiable, multimodal, expensive, or weakly structured evaluation process. This situation arises, for
+example, when prompts, heuristics, candidate algorithms, or interaction policies must be generated or refined
+using contextual knowledge, while robust global exploration and iterative performance feedback remain nec-
+essary. More broadly, the practical value of LLM-EC integration is strongest when manual design is costly,
+gradient-based adaptation is unavailable or unreliable, and purely language-based generation is not sufficient
+to ensure systematic search, robustness, or reproducible improvement.
+The broader significance of this interaction lies not only in improved performance, but in its potential to
+support automated design workflows in which semantic generation and evolutionary search complement one
+another. As illustrated in Fig. 2, this survey treats these interactions as a structured design space organized
+around EC for LLM enhancement, LLMs for EC enhancement, and emerging co-adaptive systems.
+1.2. Related Surveys and Research Gaps
+The literature surrounding LLMs and EC has expanded rapidly, and several recent surveys now cover
+adjacent parts of this space. Consequently, the key research gap is no longer the absence of prior reviews, but
+the absence of a balanced, EC-aware, and critically synthesized account of how LLMs and EC interact across
+representation, search, automation, evaluation, and application levels.
+Existing survey literature can be grouped into four broad categories. First, general LLM surveys estab-
+lished the architectural, training, and application foundations of large language models, but did not focus
+on optimization or evolutionary computation [1]. Second, optimization-oriented surveys examined LLMs as
+optimizers, problem solvers, or assistants for algorithmic tasks, thereby clarifying the LLM→optimization
+direction but offering limited treatment of EC-specific mechanisms [18]. Third, recent reviews have explicitly
+addressed the interaction between EC and LLMs, most notably through a survey-and-roadmap perspective
+centered on evolutionary computation in the era of LLMs [19, 20]. Fourth, broader reviews on LLMs for al-
+gorithm design and LLM-driven meta-optimizers have further expanded the landscape by covering automated
+algorithm design, meta-optimization, and heuristic generation under a wider methodological umbrella [21, 22].
+These works have significantly advanced the field, but they also reveal a remaining need for a survey
+tailored to the goals of this paper. Existing reviews tend to emphasize one of the following: (i) general
+algorithm design with LLMs, (ii) EC research in the LLM era from an EA-centered viewpoint, or (iii) LLM-
+6
+
+
+--- Page 7 ---
+driven meta-optimization at a broader level that is not limited to EC. What remains insufficiently synthesized is
+a unified treatment of EC for LLM enhancement, LLM for EC enhancement, and co-adaptive LLM-EC systems,
+together with a critical discussion of benchmarking practice, reproducibility, generalization, computational
+cost, and deployment considerations. Table 3 summarizes the most relevant review papers and closely related
+survey-style works, highlighting their scope, key contribution, and the specific gap they leave open for the
+present survey.
+Table 3: Chronological summary and comparative analysis of the most relevant prior surveys and review-oriented works related to
+LLM-EC integration.
+Year
+Reference
+Scope
+Key Contribution
+Main Limitation Relative to This Survey
+2023
+Zhao et al. [1]
+General LLMs
+Comprehensive survey of the
+background, key findings, and
+mainstream techniques of LLMs,
+with emphasis on pre-training,
+adaptation
+tuning,
+utilization,
+and capacity evaluation.
+Does not focus on optimization, evolutionary
+computation, or the bidirectional interaction be-
+tween LLMs and EC.
+2024
+Yu et al. [18]
+Optimization
+with AI
+Reviews automated optimization
+with deep generative models and
+LLMs.
+Treats EC only partially and does not develop a
+dedicated LLM-EC taxonomy.
+2025
+Wu et al. [19]
+EC ↔LLM
+Survey and roadmap focused on
+evolutionary computation in the
+era of LLMs.
+Strongly relevant, but primarily EA-centered and
+less focused on a broader computer-science syn-
+thesis of interaction mechanisms, evaluation is-
+sues, and cross-domain design patterns.
+2025
+Wang et al. [20]
+LLM ↔EA
+Discusses conceptual parallels,
+enhancement opportunities, and
+challenges
+when
+LLMs
+meet
+evolutionary algorithms.
+Provides a broad perspective, but limited method-
+ological classification and limited critical synthe-
+sis of evaluation practice.
+2026
+Liu et al. [21]
+LLM →Algo-
+rithm Design
+Systematic
+survey
+of
+LLMs
+for algorithm design, including
+roles,
+prompting,
+search,
+and
+applications.
+Broader than EC; does not specifically center the
+bidirectional relationship between EC and LLMs.
+2026
+Zheng
+et
+al. [22]
+LLM →Meta-
+Optimization
+Reviews
+LLM-driven
+meta-
+optimizers
+for
+automated
+intelligent optimization.
+Focuses primarily on LLMs as meta-optimizers,
+rather than on the full reciprocal and co-adaptive
+LLM-EC landscape.
+Motivated by these observations, the novelty of the present survey lies not in chronological priority, but
+in the specific combination of scope, taxonomy, and methodological emphasis. Relative to the reviews sum-
+marized in Table 3, the present paper differs in four concrete ways. First, it treats the interaction as explicitly
+bidirectional by covering both EC for LLM enhancement and LLMs for EC enhancement within the same
+framework, rather than emphasizing only one direction [18, 19, 20, 21, 22]. Second, it organizes the lit-
+erature through an EC-aware taxonomy that separates interaction modes by optimization target, functional
+role, and degree of autonomy, while also clarifying overlap cases and distinguishing between co-adaptive and
+co-evolutionary systems. Third, it places stronger emphasis on the quality and limits of current empirical
+evidence, especially with respect to benchmarking, reproducibility, computational cost, contamination, and
+generalization. Fourth, it integrates emerging co-adaptive systems and algorithm-discovery workflows into a
+single critical synthesis, thereby positioning LLM-EC interaction as a broader computer-science problem of
+automated algorithm design rather than merely a collection of isolated methods or applications.
+Accordingly, the added value of the present review lies less in covering any single subtopic in isolation than
+in combining these dimensions into one structured and evaluative synthesis. So, the main novelty of the survey
+lies not in introducing a new, isolated subfield, but in integrating these perspectives into a single EC-aware and
+methodologically critical account of the current LLM-EC landscape. In this sense, the taxonomy proposed in
+the paper should be read as a structured classification of current interaction patterns rather than as a final or
+universally fixed ontology of the LLM-EC field.
+7
+
+
+--- Page 8 ---
+The review is intended for two overlapping audiences: (a) researchers in evolutionary computation who
+seek to leverage LLMs for heuristic generation, surrogate reasoning, algorithm design, or adaptive control; and
+(b) researchers in AI, optimization, and automated programming who seek to incorporate evolutionary search
+principles into LLM adaptation, prompting, architecture design, and self-improving systems.
+1.3. Review Scope and Methodology
+This article is positioned as a structured narrative review rather than a fully systematic meta-analysis. The
+goal is to provide a critical and conceptually organized synthesis of the emerging interaction between LLMs
+and EC, with emphasis on bidirectional enhancement mechanisms, methodological trends, and open research
+challenges.
+To support this goal, the literature was collected and organized through a retrospective multi-source search
+procedure. The primary sources included Google Scholar, IEEE Xplore, the ACM Digital Library, Springer-
+Link, ScienceDirect, and arXiv. Because the area evolves rapidly and several influential works first appeared
+as preprints, workshop papers, or conference companion papers, the search was not restricted to journal arti-
+cles alone. Instead, the emphasis was placed on identifying papers that introduced representative frameworks,
+methodological advances, benchmark-oriented studies, or survey-level discussions relevant to LLM-EC inter-
+action.
+The search process combined broad and targeted keyword queries. Representative search terms included
+combinations of: “large language model”, “LLM”, “GPT”, “evolutionary computation”, “evolutionary algo-
+rithm”, “genetic algorithm”, “differential evolution”, “genetic programming”, “swarm intelligence”, “meta-
+heuristic”, “hyper-heuristic”, “prompt optimization”, “neural architecture search”, “algorithm design”, and
+“meta-optimizer”. Additional backward and forward screening was performed by inspecting the reference
+lists and citation links of influential papers already identified in the initial search.
+The search primarily focused on publications from 2021–2026, reflecting the rapid emergence of LLM-
+driven optimization research, while seminal references on evolutionary computation and automated algorithm
+design were also included to provide historical context. Duplicate records were removed, and the remaining
+papers were screened based on relevance to the interaction between LLMs and evolutionary computation.
+Studies that did not contain a substantial methodological contribution, experimental analysis, or conceptual
+discussion related to the integration of LLMs and EC were excluded. Following the screening process, 72
+publications were carefully selected for detailed review.
+The inclusion criteria were as follows: (i) the work addressed LLMs or closely related generative lan-
+guage models in an optimization, search, algorithm-design, or heuristic-design setting; (ii) the work involved
+EC, evolutionary algorithms, genetic programming, swarm-based search, metaheuristics, or closely related
+population-based optimization methods; or (iii) the work provided survey, benchmarking, or conceptual ma-
+terial directly relevant to understanding the interaction between these areas. Papers were excluded when they
+focused only on general NLP applications of LLMs without an optimization component, only on classical
+EC without relevance to LLMs or automated algorithm design, or on prompt engineering topics that were not
+meaningfully connected to the LLM-EC interface.
+For clarity, the reviewed literature should be interpreted in three broad groups. Core studies are those in
+which the interaction between LLMs and EC is direct and central to the method being proposed or evaluated.
+Adjacent studies are those included because they illustrate a methodological interaction pattern that is directly
+relevant to the survey, even when the immediate target application is not itself an LLM-centered system. His-
+torical/background studies are included selectively to contextualize emerging LLM-EC developments through
+earlier work on evolutionary search, genetic programming, benchmarking, or automated heuristic generation.
+Under this principle, adjacent studies were retained only when they clarified an interaction mechanism
+that is relevant to the survey taxonomy, whereas background studies were used mainly to support conceptual
+context rather than to serve as central evidence for current LLM-EC claims.
+Given the recency of the field, both archival and non-archival sources were considered. When a journal or
+conference version was available, it was preferred over earlier preprints. Preprints were retained when they
+8
+
+
+--- Page 9 ---
+described influential and actively discussed frameworks for which no archival version was yet available, or
+when they represented very recent developments that materially affected the positioning of the survey. How-
+ever, preprint results were interpreted more cautiously than mature archival studies, especially in discussions
+of empirical evidence, benchmarking, and generalization. Accordingly, areas of the literature that remain dom-
+inated by recent or non-archival studies are interpreted in this review as methodologically promising but still
+provisional, especially where reproducibility, benchmark breadth, or cross-domain validation remain limited.
+The final taxonomy was constructed iteratively after screening the collected literature. Papers were grouped
+according to the direction of interaction between the two paradigms, the optimization target, and the role
+played by the LLM or EC component within the overall system. This process resulted in the main categories
+used throughout the paper: EC for LLM enhancement (including prompt optimization, hyperparameter tun-
+ing, and architecture search), LLMs for EC improvement (including surrogate reasoning, operator adaptation,
+hyper-heuristics, and metaheuristic generation), and emerging co-adaptive LLM-EC systems. This taxonomy
+was refined further by considering representation level, degree of automation, and methodological maturity.
+The purpose of this methodology is therefore not to claim exhaustive coverage of every related publication,
+but to provide a transparent and reproducible basis for a critical survey of the most relevant and representative
+developments in this rapidly evolving area. Given the rapid pace of developments in this area, the present
+review prioritizes representative, methodologically informative, and conceptually influential works rather than
+claiming exhaustive coverage of every related publication.
+1.4. Main Contributions
+The main contributions and distinguishing features of this survey are summarized as follows:
+(i) Bidirectional and EC-aware synthesis: We provide a structured review of both directions of interac-
+tion, namely EC for enhancing LLMs and LLMs for enhancing EC, while also discussing emerging
+co-adaptive frameworks and the more specific conditions under which these may be regarded as co-
+evolutionary.
+(ii) Structured classification of interaction mechanisms: We organize the literature through an EC-aware
+classification of current interaction patterns, including prompt and hyperparameter optimization, neural
+architecture search, surrogate modeling, operator adaptation, hyper-heuristics, metaheuristic generation,
+and co-adaptive/co-evolutionary pipelines. This framework is intended to clarify how LLMs and EC in-
+teract at different representation and control levels, while acknowledging that some category boundaries
+remain overlapping or historically fluid.
+(iii) Critical perspective on evidence and evaluation: Beyond cataloging methods, we emphasize empirical
+and methodological issues that are central to a review article, including benchmark selection, repro-
+ducibility, generalization, computational overhead, and the difference between proof-of-concept success
+and robust cross-domain performance.
+(iv) Cross-cutting interaction contexts and representative applications: We discuss how LLM-EC synergy
+appears across optimization, algorithm design, scientific problem solving, and decision-support settings,
+highlighting representative application contexts and recurring interaction roles.
+(v) Open problems and research agenda: We identify major challenges and future directions, including
+scalable hybrid search, interpretable algorithm generation, safer autonomous design loops, principled
+benchmarking, and the development of more reliable co-adaptive LLM-EC systems.
+Taken together, these contributions and distinguishing features position the survey as a conceptual bridge
+between evolutionary search and modern generative intelligence. The goal is not merely to summarize an
+emerging literature, but to provide a clearer foundation for organizing, evaluating, and advancing future re-
+search on hybrid LLM-EC systems, with emphasis on interaction mechanisms, methodological critique, and
+open research challenges.
+9
+
+
+--- Page 10 ---
+The remainder of this paper is organized as follows. Section 2 examines how EC can be used to enhance
+LLMs, including prompt optimization, hyperparameter tuning, and architecture search. Section 3 reviews
+how LLMs can improve EC through heuristic generation, surrogate reasoning, adaptive operator control, and
+automated metaheuristic design. Section 4 discusses co-adaptive frameworks, open challenges, and future
+research directions. Finally, Section 5 concludes the survey.
+2. EC for LLM Enhancement
+This section reviews how EC can enhance LLMs when the optimization target lies outside the core pre-
+trained parameters, such as prompts, hyperparameters, architectural configurations, or interaction strategies.
+In this survey, LLMs are treated primarily as fixed or partially fixed models accessed in a black-box or limited-
+access manner, which makes gradient-free optimization particularly relevant. From a computer-science per-
+spective, this direction is important because it shows how EC can support the automated design and adaptation
+of LLM-based systems without relying exclusively on manual tuning or end-to-end retraining. Fig. 3 posi-
+tions the major interaction modes surveyed in this paper according to their level of automation and three broad
+interaction regions: EC for LLM enhancement, LLMs for EC enhancement, and co-adaptive systems. This
+direction is especially relevant when LLM-based systems expose semantically rich design variables, such as
+prompts or interaction policies, but must still be optimized under black-box, expensive, or weakly structured
+evaluation conditions.
+EC for LLM enhancement
+Co-adaptive systems
+LLMs for EC enhancement
+Level of automation
+Prompt
+optimization
+Hyperparameter
+tuning
+Neural architecture
+search (NAS)
+Surrogate
+reasoning
+Operator
+control
+Hyper-heuristics/
+program synthesis
+Metaheuristic
+generation
+Co-adaptive
+LLM-EC systems
+low
+high
+Figure 3: Taxonomy-positioning map of the surveyed interaction modes between LLMs and EC. The horizontal axis indicates
+increasing levels of automation and autonomy, while the vertical structure is organized into three broad regions: EC for LLM
+enhancement, LLMs for EC enhancement, and co-adaptive systems as a more integrated interaction zone.
+Among the different mechanisms available, prompt optimization remains the most visible and mature
+interface through which EC enhances LLMs. More recently, EC has also been explored for hyperparameter
+tuning, architecture search, and related design problems in which the search space is large, heterogeneous,
+or only weakly structured. The following subsections review these developments with emphasis not only on
+representative methods and search spaces, but also on the empirical maturity of the literature, the strength
+of available evidence, computational cost, reproducibility, and the extent to which current results support
+generalizable conclusions.
+10
+
+
+--- Page 11 ---
+2.1. Prompt Optimization as the Main Interface
+Prompt engineering concerns the design of textual or embedding-based inputs that steer an LLM toward
+accurate, coherent, and task-appropriate responses. Because LLM outputs can be highly sensitive to prompt
+wording, structure, and example selection, prompt design has become a central component of downstream
+adaptation [23, 24, 25]. Manual prompt design, however, is difficult to scale: it is labor-intensive, sensitive
+to human bias, and often fails to generalize consistently across tasks and datasets [24, 26]. These limitations
+make prompt optimization a natural target for evolutionary search.
+From an optimization perspective, the literature is divided into two broad branches: hard prompting, where
+the search acts on discrete human-readable text, and soft prompting, where the optimization acts on continuous
+prompt embeddings. Hard prompting is currently the more developed branch because it is easier to interpret
+and more compatible with mutation and crossover operators. Soft prompting remains less explored from
+an evolutionary perspective and should be viewed as a promising but still immature direction. A concise
+background note on hard and soft prompting, included only for completeness, is provided in Appendix B.
+2.2. EC in Hard Prompting and Representative Frameworks
+Hard-prompt optimization uses EC to search over discrete textual instructions. Early studies such as Ge-
+netic Prompt Search (GPS) [15] and GrIPS [27] showed that relatively simple gradient-free edits to prompt
+text can improve task performance. Hsieh et al. [28] extended this line by handling longer prompts and pre-
+serving useful context across generations. Taken together, these studies established that evolutionary search
+can replace ad hoc manual prompt crafting with a more systematic optimization process.
+A more consequential shift occurred when LLMs themselves became part of the evolutionary machinery.
+EvoPrompt [7] uses language-model-generated crossover and mutation to create new prompts, while selec-
+tion remains governed by EC principles. PromptBreeder [29] further extends this idea by co-evolving both
+prompts and the mutation instructions used to transform them. Related frameworks, including EvoPrompt
+[30], PhaseEvo [31], PROMST [32], EMO-Prompts [33], GenAP [34], and PEDO [35], broaden the design
+space toward multi-phase optimization, human-in-the-loop refinement, multi-objective search, and domain-
+specific prompt design.
+Among the representative systems discussed above, EvoPrompt, PhaseEvo, and GAAPO were selected
+for detailed comparison because they illustrate three distinct methodological design strategies in evolutionary
+prompt optimization: direct LLM-based evolutionary operators, structured multi-phase optimization, and hy-
+brid orchestration of multiple prompt-generation strategies. Table 4 is therefore intended as a representative
+comparison rather than an exhaustive inventory of all prompt-optimization frameworks. Other relevant ap-
+proaches, including PromptBreeder, PROMST, EMO-Prompts, GenAP, and PEDO, remain important and are
+discussed in the surrounding text as complementary developments. Their strengths, limitations, and typical
+application domains are also included in Table 4.
+Overall, the literature on hard prompting shows a clear progression: from token-level search over discrete
+prompts to hybrid frameworks in which LLMs actively generate, mutate, and refine candidate prompts inside
+an evolutionary loop. This progression is important to the survey’s broader theme because it illustrates a
+concrete form of LLM-EC synergy: EC provides structured search and selection pressure, while the LLM
+provides semantic flexibility and linguistic variation.
+From a critical perspective, hard-prompt evolution currently has a stronger empirical base than most other
+EC-for-LLM directions. However, the available evidence remains concentrated in relatively narrow task fam-
+ilies and benchmark settings. Many reported gains are promising, yet cross-task robustness, sensitivity to
+evaluation design, and reproducibility across models and prompt initializations remain insufficiently docu-
+mented.
+2.3. EC in Soft Prompting
+Soft prompting, also known as prompt tuning, optimizes continuous prompt embeddings rather than ex-
+plicit text. In contrast to hard prompts, these representations operate directly in the embedding space of the
+11
+
+
+--- Page 12 ---
+Table 4: Comparison of three representative evolutionary prompt optimization frameworks selected to illustrate distinct methodolog-
+ical design strategies: direct LLM-based evolutionary operators (EvoPrompt), structured multi-phase optimization (PhaseEvo), and
+hybrid orchestration of multiple prompt-generation strategies (GAAPO). The table combines a feature-/mechanism-level compari-
+son with a practical appraisal of strengths, limitations, and application domains.
+Feature
+EvoPrompt
+PhaseEvo
+GAAPO
+Design and mechanism
+Primary Goal
+Discrete prompt optimization
+Unified instruction & example opti-
+mization
+Hybrid prompt optimization via strategy
+integration
+Core Algorithm
+GA/DE
+Custom multi-phase EA
+GA as controller
+LLM Role
+Implements generic EA oper-
+ators (crossover, mutation)
+Implements phased operators (feed-
+back, EDA, crossover, semantic
+mutation)
+Component within diverse generation
+strategies (OPRO-like, APO-like, etc.)
+Optimization Target
+Primarily instruction
+Joint instruction & examples
+Primarily instruction (with few-shot gen-
+erator for examples)
+Key
+Operators/Strate-
+gies
+LLM-based crossover, LLM-
+based mutation
+Feedback mutation, EDA mutation,
+crossover mutation, semantic muta-
+tion
+OPRO-like, APO-like, random mutator,
+crossover, few-shot
+Evaluation
+Development-set score
+Development-set score
+Flexible: complete, successive halving,
+bandit selection
+Notable Innovations
+LLM as direct EA operator;
+gradient-free black-box opti-
+mization
+Unified ICL optimization; multi-
+phase structure; task-aware similar-
+ity metric
+Hybrid
+integration
+of
+multiple
+APO
+strategies; flexible evaluation; trade-off
+analysis
+Practical appraisal
+Strengths
+Interpretable,
+gradient-free,
+black-box compatible,
+and
+suitable for discrete prompt
+optimization
+Unified, multi-phase, task-aware,
+and
+well-suited
+to
+instruction–
+example optimization
+Integrates diverse optimization strategies,
+supports flexible evaluation, and can im-
+prove robustness across tasks
+Limitations
+Performance may vary across
+tasks, depends strongly on
+LLM capability, and may suf-
+fer from prompt drift
+Implementation complexity, high
+API cost, and sensitivity to initial-
+ization
+Computationally expensive; may overfit
+with large populations; depends on the
+quality of integrated strategies
+Application Domain
+Sentiment and topic classi-
+fication, summarization, and
+reasoning tasks (e.g., BBH)
+BBH reasoning, instruction induc-
+tion, and sarcasm detection
+Hate
+speech
+detection,
+professional
+benchmarks, and graduate-level Q&A
+Note: EA: Evolutionary algorithm; GA: Genetic algorithm; DE: Differential evolution; ICL: In-context learning; APO: Automatic
+prompt optimization; OPRO: Optimization by prompting; EDA: Estimation-of-distribution algorithm; BBH: Big-Bench Hard.
+Strengths, limitations, and application domains (previously the separate appendix table) have been merged into this table.
+model and can provide compact task adaptation. Most existing soft-prompt methods rely on gradient-based
+optimization, reinforcement learning, or sequential optimal learning rather than EC [36, 37, 38].
+The limited use of EC in soft prompting is not accidental. Evolutionary search in high-dimensional em-
+bedding spaces poses several difficulties, including designing meaningful mutation and crossover operators,
+avoiding degenerate or adversarial embeddings, incurring the cost of repeated model inference, and defin-
+ing fitness measures that capture subtle performance differences. These issues make soft-prompt evolution
+considerably harder to interpret and often more expensive than text-level prompt search.
+We emphasize that these observations concern the current maturity and interpretability of the evolutionary
+soft-prompting literature rather than an inherent limitation of EC in continuous spaces: population-based
+search is, in principle, well-suited to non-convex and multimodal embedding spaces, and the present gap
+is primarily empirical, which reflects underdeveloped operators and limited comparative validation.
+12
+
+
+--- Page 13 ---
+Despite these limitations, soft prompting remains a promising area for EC. Population-based search is natu-
+rally suited to non-convex and multimodal spaces, and hybrid strategies that combine EC with gradient-based
+updates may improve exploration while controlling overfitting. Surrogate-assisted search, low-dimensional
+encodings, and co-evolutionary schemes that jointly optimize hard and soft prompts also appear promising.
+For this survey, soft prompting should be viewed less as a mature EC application area than as an open method-
+ological frontier for future hybrid search strategies.
+At present, however, the literature in this area is better interpreted as a methodological opportunity than
+as an empirically validated direction, since reproducible evidence against strong gradient-based or hybrid
+baselines remains very limited.
+2.4. Evolutionary Hyperparameter Tuning for LLMs
+Beyond prompt optimization, EC has also been used to tune a broader set of design variables in LLM-
+centered pipelines, including architectural hyperparameters, control parameters, and model-composition set-
+tings. This broader view of hyperparameter tuning is especially relevant when LLMs are accessed as black-box
+systems or when the design space contains interacting variables that are expensive to optimize manually.
+The main appeal of EC in this setting is its gradient-free, population-based search. Rather than optimizing
+a single configuration locally, EC can explore multiple candidate settings in parallel and capture interactions
+among hyperparameters that simpler search methods may miss. Table 5 summarizes representative studies,
+while a reorganized synthesis by hyperparameter category is moved to Appendix A.1.2.
+At the same time, the literature remains relatively scattered. Some studies focus on architecture-related
+hyperparameters, such as layer counts and hidden dimensions, whereas others target model merging, self-
+adaptation, or more general machine-learning hyperparameters. The main takeaway is not the number of
+available examples, but the recurring pattern: EC is most useful when the search space is difficult to model
+explicitly, gradients are unavailable or expensive, and multiple competing objectives, such as performance, ef-
+ficiency, and latency, must be balanced. Compared with prompt optimization, however, the empirical literature
+on EC-based hyperparameter tuning for LLM-centered systems remains limited, and the available evidence is
+still fragmented across heterogeneous optimization settings.
+To clarify when EC is preferable, it is useful to position it against the main alternatives for hyperpa-
+rameter and configuration search in LLM-centered pipelines. Random search is a simple, naturally parallel
+baseline that is often surprisingly competitive, but it is uninformed and exploits neither evaluation history
+nor interactions among variables. Grid search is exhaustive and interpretable, yet scales poorly with dimen-
+sionality and wastes evaluations on irrelevant regions. Bayesian optimization is highly sample-efficient for
+low-dimensional, continuous, and expensive objectives, but it is largely sequential and becomes difficult to
+apply in high-dimensional, conditional, or mixed discrete-continuous spaces [39, 40]. Reinforcement learning
+can learn adaptive search policies, but is typically sample-inefficient, sensitive to reward design, and costly to
+stabilize. Gradient-based optimization is efficient when gradients or differentiable relaxations are available,
+but is inapplicable to black-box LLM access, discrete architectural choices, or non-differentiable objectives
+[37]. Against this backdrop, EC occupies a distinct niche: it is gradient-free, population-based, naturally par-
+allel, and well-suited to heterogeneous, mixed, multimodal, and multi-objective spaces with interacting vari-
+ables. Its principal cost is the large number of evaluations required, which is precisely why EC is frequently
+combined with surrogate-assisted search rather than treated as an alternative to it [14]. In short, EC is most
+attractive when the configuration space is black-box, heterogeneous, and multi-objective, whereas Bayesian
+optimization, gradient-based methods, or simple random search may dominate in lower-dimensional, differ-
+entiable, or cheaply evaluable settings. More broadly, the relevance of EC to LLM-centered hyperparameter
+and configuration search is consistent with the wider literature on hierarchical and bilevel optimization, where
+evolutionary algorithms and learning-based methods have been studied as complementary tools for tackling
+nested, black-box design problems [41].
+Critically, this area remains less mature than prompt optimization. The available studies suggest that EC
+can be useful when the design space is heterogeneous, black-box, or multi-objective, but the evidence base
+13
+
+
+--- Page 14 ---
+is still too fragmented to support broad claims of superiority over alternative tuning strategies across LLM-
+centered settings.
+Table 5: Representative studies on EA-based hyperparameter optimization for LLM-centered pipelines.
+Study/Method
+EA used
+Targeted Hyperparameters
+LLM/Task
+Context
+Key Finding/Contribution
+AutoTinyBERT [10]
+Custom
+EA
+(Evolver)
+Architectural
+dimensions,
+layers (lt, dm, etc.)
+BERT/efficiency
+(latency)
+Automated architectural HPO using
+EA and a proxy model for efficient
+PLMs.
+Evolutionary
+Merg-
+ing [8]
+CMA-ES
+Model-merging
+recipe
+(TIES/DARE)
+Foundation
+model merging
+EA automates the discovery of ef-
+fective merging hyperparameters.
+Tani et al. [42]
+GA, PSO
+General ML hyperparameters
+ML
+for
+high-
+energy physics
+Explored GA/PSO for autonomous
+HPO in a domain-specific setting.
+Note: EA: Evolutionary algorithm; CMA-ES: Covariance matrix adaptation evolution strategy; GA: Genetic algorithm; PSO:
+Particle swarm optimization; HPO: Hyperparameter optimization; PLM: Pretrained language model.
+2.5. Evolutionary Architecture Optimization for LLMs
+Neural architecture search (NAS) provides another important avenue for EC to enhance LLMs. The appeal
+of EC in this setting lies in its ability to handle heterogeneous, partly discrete design spaces while balancing
+multiple objectives, including accuracy, latency, memory, and parameter efficiency. These properties make
+evolutionary NAS particularly relevant for compressed, specialized, or resource-constrained LLM variants.
+Evolutionary NAS has been applied at different abstraction levels, including overall backbone discovery,
+macro-level structural hyperparameters, layer configuration, pruning, and code-level modifications. Some
+studies in this category, such as LLM-guided code-level design for graph neural networks, are included here
+as adjacent rather than core LLM-architecture studies. Their relevance lies not in optimizing the internal
+architecture of an LLM itself, but in illustrating a broader methodological pattern in which language-guided
+evolutionary search is used to generate or refine candidate architectures at the code level. Accordingly, this
+subsection includes both core LLM-related NAS studies and a small number of adjacent code-level studies
+that help clarify this broader interaction pattern. In some cases, the LLM participates directly by generating
+or mutating code-level architectural variants; in others, the architecture is searched through more conventional
+EC encodings. Table 6 summarizes the main categories of evolutionary NAS relevant to LLM-related settings,
+while a more detailed study-wise summary is provided in Appendix A.1.3.
+From a review perspective, the main point is that EC is valuable here not simply because it searches
+broadly, but because it can accommodate heterogeneous design choices and multiple objectives more naturally
+than many gradient-based approaches. However, evolutionary NAS for LLMs still faces a severe evaluation
+bottleneck, since even an approximate assessment of candidate architectures can be expensive. This limitation
+remains a central barrier to wider adoption.
+The critical limitation of evolutionary NAS in this context is therefore not only computational cost, but
+also evidentiary depth. Many studies demonstrate methodological feasibility, but far fewer establish robust
+comparative advantage under realistic evaluation budgets, model scales, or deployment constraints.
+2.6. Current Challenges and Future Directions
+Taken together, the literature reviewed in this section suggests an uneven maturity profile across EC-for-
+LLM directions. Prompt optimization currently has the strongest and most visible evidence base, particularly
+in hard-prompt settings where the search space is discrete, interpretable, and naturally compatible with evo-
+lutionary variation operators. By contrast, EC-based hyperparameter tuning remains more fragmented across
+heterogeneous optimization settings, and evolutionary NAS for LLM-related systems is still constrained by
+severe evaluation cost and limited large-scale comparative evidence.
+14
+
+
+--- Page 15 ---
+Table 6: Overview of evolutionary NAS directions in LLM-related settings.
+Category
+Description
+Representative Examples
+Optimized Architectural Aspects
+Overall
+Structure/Backbone
+Discovery of fundamental model architectures, including backbone
+design and high-level attention structure
+AutoBERT-Zero [43]
+Macro-Level
+Hyperparameters
+Optimization of high-level structural choices such as the number of
+blocks, hidden dimensions, attention heads, and FFN sizes
+SuperShaper [44],
+AutoTinyBERT [10]
+Component Choices
+Search over discrete module-level design choices within model
+components; (e.g., operation/primitive selection such as attention vs.
+convolution, and activation functions)
+Evolved Transformer [45].
+Layer Configuration
+Optimization of layer-specific hyperparameters and connectivity
+patterns
+LiteTransformerSearch [46]
+Code-Level/LLM-
+Assisted Modifications
+LLM-guided or code-level generation and refinement of candidate
+architectures in evolutionary search pipelines
+LLMatic [9],
+EvoPrompting [30]
+Evolutionary NAS Methods and Techniques
+Standard EC
+(GA/NSGA-II)
+Classical evolutionary search, including single-objective and
+multi-objective variants
+AutoBERT-Zero [43],
+DistilBERT NAS [47]
+Multi-Objective EAs
+(MOEAs)
+Joint optimization of competing objectives such as accuracy, latency,
+memory, and model size
+LiteTransformerSearch [46]
+QD
+Search for diverse high-performing solutions rather than a single
+optimum
+LLMatic [9]
+LLM-Guided
+Evolution
+Use of LLMs as variation or generation operators within an
+evolutionary architecture-search loop
+EvoPrompting [30]
+Note: NAS: Neural architecture search; GA: Genetic algorithm; NSGA-II: Non-dominated sorting GA II; MOEA: Multi-objective
+evolutionary algorithm; QD: Quality-diversity.
+Despite this promise, the field remains constrained by several recurring bottlenecks. The first is evaluation
+cost: prompt candidates, hyperparameter settings, and architectural variants often require repeated model in-
+ference, partial retraining, or proxy evaluation, which makes large-scale evolutionary search expensive. This
+issue is especially acute in architecture search, where even approximate assessment is costly, as in AutoTiny-
+BERT [10] and the training-free workaround adopted by LiteTransformerSearch [46]; prompt-level search
+such as EvoPrompt [7] similarly incurs repeated inference per candidate. A second challenge is representa-
+tion. Prompts, embeddings, and architectures require different encodings, and poorly aligned representations
+can distort search behavior or limit the usefulness of mutation and crossover. This is particularly visible in soft-
+prompt evolution (Section 2.3), where operator design over continuous embeddings remains underdeveloped
+[48], and in large architecture spaces such as AutoBERT-Zero [43] and LLMatic [9], where encoding choices
+strongly shape search behavior. A third challenge concerns reliability and transferability, since approximate
+or surrogate fitness estimates may not generalize consistently across tasks, datasets, model scales, or evalua-
+tion setups [49]. For example, the proxy- and surrogate-based fitness used to contain cost (as in training-free
+NAS [46]) may not transfer consistently across these conditions.
+For these reasons, future work should focus less on simply expanding the number of hybrid methods and
+more on improving their methodological foundations. Particularly important directions include: (i) low-cost
+and reliable fitness evaluation, including surrogate-assisted and multi-fidelity search; (ii) better encodings and
+operators for continuous prompts and large architectures; (iii) hybrid EC–gradient or EC–LLM methods that
+combine broad exploration with local refinement; (iv) stronger evaluation protocols addressing robustness,
+reproducibility, and generalization across tasks and models; and (v) more principled treatment of practical
+constraints such as latency, safety, and resource usage.
+In summary, EC offers a compelling toolbox for improving LLM systems when the optimization problem
+15
+
+
+--- Page 16 ---
+is black-box, discrete, multimodal, or multi-objective. Its strongest current impact is in prompt optimization,
+while hyperparameter tuning and evolutionary NAS remain important but methodologically less mature di-
+rections. As the literature develops, the key challenge will be to move from proof-of-concept demonstrations
+toward scalable, reproducible, and better-validated EC-based adaptation pipelines for LLMs.
+3. LLMs for EC Enhancement
+This section reviews how LLMs enhance EC at progressively higher levels of autonomy. At the most con-
+servative level, LLMs assist existing EC pipelines by approximating fitness, tuning parameters, or extracting
+useful structural patterns from observed search behavior. At a more advanced level, they act as hyper-heuristic
+engines that generate, refine, or select search rules. At the highest level, they can propose complete meta-
+heuristics or directly mediate parts of the evolutionary search process itself. This progression is important for
+understanding the broader significance of LLMs in EC: their role is not limited to text generation, but extends
+to reasoning, abstraction, program synthesis, and adaptive control. Implementation-oriented supplementary
+details supporting selected parts of this section are collected in Appendix A.
+From a methodological perspective, these interactions can be understood at three levels of representa-
+tion. Numerical representations correspond to parameter values and continuous controls; symbolic representa-
+tions encode algorithmic structures such as trees, operators, or programs; and textual representations describe
+heuristics or search procedures in natural language. Much of the recent literature on LLM-enhanced EC can
+be interpreted as moving between these levels: LLMs describe or generate algorithmic ideas in text, these
+ideas are instantiated in symbolic or executable form, and their performance is assessed numerically through
+search outcomes. This multi-representational perspective helps clarify why LLMs are particularly well-suited
+to high-level design tasks within EC.
+Because several recent frameworks combine multiple roles within a single pipeline, the categories used
+in this section should be interpreted as a structured organizing framework rather than as fully disjoint classes
+or a final fixed taxonomy. In cases of overlap, a method is assigned to the category that best reflects the
+primary functional role played by the LLM in the evolutionary process. This classification is based primarily
+on three criteria: the object being generated or modified (e.g., a heuristic component, surrogate judgment, an
+operator-control signal, or a full algorithm), the level of autonomy attributed to the LLM, and the dominant
+methodological contribution emphasized in the original work. Under this principle, overlaps are acknowledged
+explicitly, but each framework is discussed in the subsection that most clearly captures its main role in the
+LLM-EC interaction.
+In line with this organizing framework, the discussion in this section remains evaluative rather than merely
+descriptive, with particular attention to differences in autonomy, reproducibility, empirical support, and the
+extent to which current frameworks go beyond proof-of-concept demonstrations.
+3.1. LLM-Guided Heuristic and Metaheuristic Design
+An early and influential line of work uses LLMs to propose new search operators or hybrid metaheuristics
+from textual prompts. Pluháˇcek et al. [50] showed that GPT-4 can generate new mutation strategies for dif-
+ferential evolution (DE), demonstrating that language models can contribute nontrivial algorithmic variation
+rather than merely describing existing methods. In related work, Pluháˇcek et al. [12] used GPT-4 to com-
+pose hybrid swarm-intelligence algorithms by recombining elements from particle swarm optimization (PSO),
+cuckoo search (CS), artificial bee colony (ABC), grey wolf optimizer (GWO), the self-organizing migrating
+algorithm (SOMA), and the whale optimization algorithm (WOA). A subsequent extension applied repeated
+prompting to refine the Self-Organizing Migrating Algorithm (SOMA), further suggesting that LLMs can
+iteratively improve metaheuristic design when performance feedback is available [11].
+Taken together, these studies indicate that LLMs can function as meta-level generators of search strategies.
+Their main contribution lies in semantic recombination: rather than searching directly over numeric solutions,
+the model searches over descriptions of operators, rules, and algorithmic structures. This capability is attractive
+16
+
+
+--- Page 17 ---
+for EC because it can reduce the manual effort required to design new metaheuristics, though the resulting
+methods still require careful empirical validation and benchmarking.
+From a critical perspective, the evidence in this area is currently more convincing for proof-of-concept
+semantic recombination than for robust methodological advance. Existing studies show that LLMs can propose
+nontrivial operator variants and hybrid metaheuristic structures, but far fewer establish reproducible gains over
+carefully tuned classical design workflows or expert-crafted baselines across diverse problem classes. As a
+result, the present value of this literature lies more in demonstrating a new mode of algorithmic assistance than
+in confirming broad performance superiority.
+3.2. LLM-Based Hyper-Heuristic and Program-Synthesis Frameworks
+A more structured direction treats LLMs as hyper-heuristic engines. Unlike a conventional metaheuristic,
+which operates directly in the solution space, a hyper-heuristic operates over the space of heuristics, selecting,
+generating, or refining search rules. In this review, frameworks in this category are classified primarily by the
+fact that the LLM operates at the level of heuristic components, search rules, controller logic, or executable
+heuristic fragments, rather than by producing a complete standalone optimization algorithm. In this context,
+LLMs are appealing because they can express search logic in natural language, translate it into code, and revise
+it based on historical performance.
+A landmark example is FunSearch [51], which combines LLM-based code generation with iterative eval-
+uation and selection. Candidate code snippets are proposed by the model, scored by a task-specific evaluator,
+and recycled into future generations. This closed-loop design inspired related systems such as FunBO [40],
+which evolves Bayesian-optimization acquisition functions, and Evolution of Heuristics (EoH) [52], which
+jointly represents heuristic ideas in natural language and executable code. EoH is particularly notable because
+it makes the dual role of language explicit: LLMs do not simply emit code, but also articulate the rationale
+behind candidate heuristics.
+Subsequent extensions strengthen this paradigm. MEoH [53] generalizes EoH to multi-objective settings
+by maintaining diversity across both solution quality and heuristic form. ReEvo [54] adds reflective feedback,
+distinguishing between short-term reflections tied to recent parents and long-term reflections accumulated
+across the search history. LLaMEA [16] integrates GPT-4 into an EA-style outer loop and evaluates generated
+algorithms systematically with the IOHprofiler suite [55, 56, 57], while LLaMEA-HPO couples the same
+idea with Bayesian optimization for hyperparameter refinement [58].
+These frameworks mark an important shift in EC research: instead of handcrafting heuristics and then
+tuning them, the search process can increasingly generate and refine the heuristics themselves. For a review
+article, the main contribution of this literature is conceptual as much as practical. It suggests that LLMs may
+serve as a new layer of abstraction in EC, one in which algorithm design, explanation, and adaptation can be
+partially unified inside a single search loop. At the same time, much of this literature remains recent and,
+in several cases, heavily dependent on proprietary LLMs, benchmark-specific evaluation, or limited ablation
+evidence, which makes reproducibility and cross-domain generalization important open concerns.
+To improve reproducibility in this area, future studies should report prompts, model versions, seeds, infer-
+ence settings, and evaluation budgets more systematically, and should release code and generated heuristics
+whenever possible. Where feasible, evaluation with open-weight models, stronger ablations, and held-out
+testing would further help distinguish genuine methodological gains from dependence on a particular propri-
+etary model setup. As a result, current evidence is more convincing in showing that LLMs can participate
+meaningfully in heuristic-generation loops than in establishing that these frameworks consistently outperform
+well-tuned classical design strategies across problem classes.
+3.3. LLM-Assisted EC Tuning and Surrogate Reasoning
+Not all LLM-based contributions aim to design new heuristics. A second line of work improves existing
+EC algorithms by using LLMs as surrogates, tuning agents, or pattern extractors. This direction is especially
+relevant when objective evaluations are expensive, search behavior is difficult to interpret numerically, or
+adaptation decisions benefit from textual reasoning over historical search data.
+17
+
+
+--- Page 18 ---
+3.3.1. Surrogate Modeling for EA Optimization
+Hao et al. [14, 39] proposed LLM-assisted EA (LAEA), where surrogate modeling is reformulated as an
+inference problem. Instead of fitting a conventional surrogate model, the LLM is prompted with historical
+candidate-fitness pairs and asked to estimate the quality of new candidates through classification or regression.
+In parallel, LLAMBO [59] integrates LLMs into Bayesian optimization by converting prior configuration-
+performance information into textual context, thereby helping initialize surrogates and guide sampling under
+limited data.
+The significance of these studies lies less in outperforming all classical surrogates and more in showing
+that LLMs can act as knowledge-rich approximators when structured numerical history is converted into text.
+This idea is intriguing for EC because it broadens the notion of surrogate assistance: the surrogate need
+not be purely statistical, but can also leverage semantic inference from contextualized search trajectories. A
+generic workflow and an illustrative regression-style prompt are provided in Appendix A.2 and Appendix A.3,
+respectively.
+3.3.2. Adaptive Operator and Parameter Control via LLMs
+LLMs have also been used to adapt the behavior of existing metaheuristics online. Martinek et al. [60]
+studied LLM-driven parameter refinement for algorithms such as GA, ACO, PSO, and SA on problems in-
+cluding the TSP and graph coloring. Here, the LLM receives summaries of the problem, current parameters,
+and preliminary performance statistics and returns updated parameter suggestions. This effectively turns the
+model into an adaptive controller that reasons over optimization history rather than relying on fixed update
+rules.
+This direction is especially relevant because it highlights a broader design pattern: LLMs can sit above an
+existing EC algorithm as an interpretable control layer. The strength of this approach is flexibility; its main
+limitation is limited reliability, since performance depends heavily on prompt formulation, the fidelity of the
+summary statistics, and the consistency of the model’s recommendations across runs. Representative prompt
+templates used in this style of LLM-guided tuning are listed in Appendix A.4.
+3.3.3. Pattern-Guided Evolution
+A related but more problem-structured approach is illustrated by OptiPattern [61], which augments a
+biased random key genetic algorithm (BRKGA) with LLM-derived structural priors for the multi-hop influence
+maximization problem. Rather than directly generating solutions, the LLM infers node-selection probabilities
+from graph descriptions, and these probabilities bias the decoder toward promising regions of the search space.
+This example is important because it shows that LLMs can contribute to EC without replacing the search
+process itself. Instead, they inject domain-structured bias into the evolutionary loop. More broadly, this sug-
+gests a practical middle ground between purely hand-designed heuristics and fully LLM-generated algorithms.
+From a critical standpoint, the studies discussed throughout this section are important primarily because
+they expand the role of LLMs within EC pipelines, not because they have yet displaced classical surrogates
+or adaptive controllers in a broadly validated way. Their current value is therefore more methodological and
+exploratory than decisively performance-driven.
+3.4. LLM-Generated Metaheuristics
+At the highest level of autonomy, LLMs are used not only to guide or tune EC algorithms, but to generate
+complete metaheuristics. This direction differs from the hyper-heuristic literature in one key respect: the target
+is no longer a heuristic component, controller, or local search rule, but an entire search procedure with its own
+inspiration, logic, and update rules. Accordingly, methods are classified here as LLM-generated metaheuristics
+when the dominant output is a full algorithmic search procedure rather than a partial heuristic element within
+a broader design loop.
+18
+
+
+--- Page 19 ---
+3.4.1. Metaheuristic Generation via Structured Prompting
+A representative example is Zoological Search Optimization (ZSO) [62], which was generated by ChatGPT-
+3.5 under the CRISPE prompting framework. The method illustrates how structured prompting can produce
+a full algorithmic template, including inspiration, equations, parameter definitions, and flowchart-style logic.
+Its importance lies less in the specific zoological metaphor and more in what it demonstrates: LLMs can act
+as autonomous algorithm inventors when given a sufficiently scaffolded design prompt.
+3.4.2. Language-Mediated Evolutionary Search
+Liu et al. [13] proposed LMEA, a zero-shot framework in which the LLM itself performs selection,
+crossover, and mutation through prompt-based reasoning. Rather than treating the LLM as an auxiliary as-
+sistant, LMEA embeds it directly inside the evolutionary loop. Candidate solutions and their fitness values are
+presented as in-context examples, and the model is instructed to generate offspring in a structured format. A
+self-adaptive temperature mechanism is used to moderate exploration and exploitation over time.
+LMEA is conceptually significant because it blurs the line between evolutionary algorithms and language
+models. Instead of manually specifying evolutionary operators, the search process is described in language
+and enacted by the model itself. This makes LMEA a useful case study for the future of language-mediated op-
+timization, although its scalability, stability, and reproducibility still require careful study. A detailed example
+of the LMEA prompt structure is provided in Appendix A.5.
+Taken together, the literature on LLM-generated metaheuristics suggests a continuum of autonomy. At
+one end, LLMs suggest changes to an existing algorithm; at the other, they instantiate the algorithmic search
+procedure itself. This continuum is useful for organizing the field because it makes clear that “LLMs for EC” is
+not a single methodological category but a layered design space. This makes the literature on LLM-generated
+metaheuristics conceptually significant but empirically unsettled. In many cases, claims of novelty are easier
+to make than to validate, and the evidence remains stronger for the feasibility of generation than for the
+robust demonstration of algorithmic originality or broad performance advantage. In particular, future studies
+in this area should distinguish more clearly between novelty in presentation and in the search mechanism, and
+should validate the latter through matched-budget comparisons, traceability to known algorithm families, and
+contamination-aware assessment.
+3.5. Genetic Programming and Learning-Enhanced Evolution
+The interaction between LLMs and EC also connects naturally to genetic programming (GP) and learnable
+evolution models, both of which emphasize the generation of structured search rules rather than direct numer-
+ical optimization. Although not all work in this area uses modern LLMs explicitly, it provides an important
+bridge between classical program evolution and emerging language-driven algorithm design.
+3.5.1. GP-Based Generative Hyper-Heuristics
+Zhang et al. [63] introduced a multitask GP-based generative hyper-heuristic framework for dynamic
+scheduling, where the goal is not merely to select among existing heuristics but to evolve new ones across
+related tasks. Zhang et al. [64] extended this idea to a multitask multi-objective setting for dynamic flexible
+job shop scheduling, using task-aware crossover to preserve task relevance while enabling cross-task knowl-
+edge sharing.
+These studies are relevant here because they show that heuristic generation and knowledge transfer were
+already important themes in EC before the arrival of modern LLMs. LLM-based systems inherit and extend
+this perspective by replacing or augmenting symbolic program evolution with language-guided synthesis and
+explanation.
+3.5.2. Learnable Evolution Models
+Dashti et al. [65] proposed LEMABE, which combines a learnable evolution model with analogy-based
+estimation for software cost prediction. The framework alternates between evolutionary search and learning-
+guided refinement of feature weights, thereby illustrating a broader principle: evolutionary search becomes
+19
+
+
+--- Page 20 ---
+more efficient when the generation of new candidates is informed by learned patterns rather than solely by
+blind variation.
+For the present survey, the main value of such models is conceptual: they help position modern LLM-
+enhanced EC within a longer trajectory of research on intelligent variation, learned priors, and automated
+heuristic design. Critically, this bridge literature is more valuable as conceptual context than as direct em-
+pirical evidence for the current generation of LLM-enhanced EC systems. It shows that intelligent variation,
+heuristic generation, and learnable search bias all have deeper roots in EC, but it does not by itself validate
+stronger contemporary claims about LLM-driven algorithm design, cross-domain generalization, or consistent
+superiority over established baselines. Its main contribution to the present review is therefore interpretive: it
+helps situate recent LLM-based developments within a longer methodological lineage rather than serving as
+decisive evidence for their effectiveness.
+3.6. Synthesis and Perspective
+The literature reviewed in this section shows that LLMs improve EC in at least three distinct ways. These
+categories are analytically useful but not always fully disjoint, since several frameworks combine heuristic
+generation, reflective revision, surrogate assistance, and algorithm-level design within a single pipeline. For
+this reason, the preceding classification should be interpreted according to the primary functional role assigned
+to the LLM in each case. More broadly, it should be read as a structured classification of current interaction
+patterns rather than as a set of rigid methodological partitions. First, they provide reasoning-aware assistance
+through surrogate modeling, parameter adaptation, and pattern extraction. Second, they provide heuristic-
+level abstraction through hyper-heuristics and program-synthesis frameworks that generate and refine search
+rules. Third, they enable algorithm-level generation, in which complete metaheuristics or language-mediated
+evolutionary procedures are generated from prompts and feedback.
+In particular, the main distinction across the preceding subsections is between frameworks that generate
+or refine heuristic elements inside a broader search process and those whose dominant output is a full search
+procedure. Algorithm discovery is discussed in Section 4 as the broader research agenda that spans both cases.
+Taken together, however, the strength of empirical support remains uneven across these categories. The
+strongest evidence is for assistance-oriented and heuristic-generation roles, where LLMs meaningfully con-
+tribute to design, adaptation, or search support without fully replacing the evolutionary process. By contrast,
+the evidence is less mature for broader claims about robust algorithmic discovery, reproducibility across prob-
+lem classes, and consistent superiority over strong classical baselines.
+The most important conclusion is that LLM-enhanced EC should not be judged solely by whether a single
+generated heuristic outperforms a baseline on a benchmark. Its broader significance lies in how it changes the
+workflow of algorithm design: from manually specified search rules toward systems that can propose, explain,
+revise, and sometimes implement those rules automatically. At the same time, this shift raises open questions
+about reliability, evaluation standards, generalization, reproducibility, and the extent to which linguistic rea-
+soning can substitute for principled algorithmic design. Table 7 provides a compact summary of representative
+frameworks discussed in this section. A broader comparative synthesis across the major interaction modes,
+including performance evidence, computational burden, reproducibility, and generalization, is provided later
+in Table 8.
+4. Future Directions and Open Challenges
+The interaction between EC and LLMs is moving beyond isolated proof-of-concept studies toward more
+integrated, adaptive, and autonomous systems. Earlier sections of this survey examined the two main directions
+of influence: EC for improving LLMs and LLMs for improving EC. A natural next step is to study frameworks
+in which the two components interact continuously, exchange information across iterations, and co-adapt over
+time. From a computer-science perspective, this shift is important because it reframes LLM-EC integration as
+a broader problem of automated algorithm design, interactive decision support, and hybrid intelligent systems
+20
+
+
+--- Page 21 ---
+Table 7: Representative frameworks for LLM-enhanced EC, organized by their primary functional role in the evolutionary pipeline.
+Framework
+Primary Role
+Core Idea
+Main Relevance to This Sur-
+vey
+SOMA/SOMA-
+ATA [11, 12]
+LLM-guided
+meta-
+heuristic refinement
+Uses LLMs to generate or revise search operators and
+hybrid swarm-intelligence strategies
+Illustrates early LLM-assisted
+algorithm design
+EoH/MEoH
+[52, 53]
+Hyper-heuristic genera-
+tion
+Evolves heuristics through a combination of natural-
+language reasoning and executable code
+Shows how LLMs can search
+over heuristic space rather than
+solution space
+ReEvo [54]
+Reflective heuristic evo-
+lution
+Uses short-term and long-term reflection to iteratively
+improve generated heuristics
+Introduces
+meta-cognitive
+feedback into EC design
+ZSO [62]
+Full metaheuristic gen-
+eration
+Generates an entire optimization algorithm through
+structured prompting
+Demonstrates autonomous al-
+gorithm invention from lan-
+guage prompts
+LMEA [13]
+Language-mediated
+evolutionary search
+Uses an LLM to perform selection, crossover, and muta-
+tion directly through prompting
+Blurs the boundary between
+EA operators and language
+generation
+LLaMEA [16]
+Algorithm
+generation
+and refinement
+Embeds GPT-4 in an EA-style loop evaluated with IOH-
+profiler tools
+Provides a more systematic
+benchmarking-oriented frame-
+work
+Multitask GP [63]
+Generative
+hyper-
+heuristics
+Evolves heuristics across related tasks using GP and
+multitask learning
+Connects LLM-era work to
+earlier
+program-evolution
+ideas
+Multiobjective GP
+[64]
+Multi-task
+heuristic
+generation
+Uses task-aware crossover and multi-objective search for
+scheduling heuristics
+Shows structured knowledge
+transfer in heuristic evolution
+LEMABE [65]
+Learnable evolution
+Combines learning-guided evolution with analogy-based
+estimation
+Illustrates the broader princi-
+ple of intelligent variation
+OptiPattern [61]
+Pattern-guided
+evolu-
+tion
+Uses LLM-derived structural priors to bias BRKGA de-
+coding
+Shows how LLMs can inject
+domain knowledge without re-
+placing EC
+Note: GP: Genetic programming; BRKGA: Biased random-key GA; SOMA: Self-organizing migrating algorithm; ATA:
+Auto-tuning assistant.
+engineering, rather than as a narrow collection of optimization tricks. These directions emerge not from a
+single line of work, but from recurring patterns observed across the literature reviewed in Sections 2 and 3.
+At the same time, the field remains immature. Many current results are encouraging but highly task-
+dependent, often demonstrated on limited benchmarks, under inconsistent evaluation protocols, or with sig-
+nificant dependence on prompting choices and proprietary model behavior. For this reason, the main value
+of this section is not to enumerate speculative applications but to identify the most consequential emerging
+directions and the major obstacles that must be addressed for LLM-EC systems to become reliable scientific
+and engineering tools [19, 20].
+4.1. Toward Co-Adaptive and Co-Evolutionary LLM-EC Systems
+One of the most important emerging directions is the development of co-adaptive systems, where LLMs
+and EC interact through repeated feedback and iterative adjustment rather than one-way assistance. In these
+architectures, EC optimizes components such as prompts, algorithmic components or hyperparameters, while
+the LLM simultaneously refines its generation strategies or internal guidance based on evolutionary history.
+This represents a more robust integration than simple hybridization, as both modules participate in a shared
+adaptive loop [19, 20, 66].
+Figure 4 illustrates this progression, conceptualizing co-adaptive systems not as an isolated third category,
+but as an emergent synthesis of the two primary interaction channels, EC for LLM and LLM for EC. By
+combining these channels into bidirectional feedback loops, the framework enables reflective improvement
+and iterative refinement of both search and reasoning, effectively shifting the system toward a self-improving
+design pipeline[19, 66].
+21
+
+
+--- Page 22 ---
+EC for LLM Enhancement
+Prompt optimization
+Hyperparameter tuning
+Architecture search
+Interaction-policy refinement
+LLM for EC Enhancement
+Heuristic generation
+Operator and parameter control
+Surrogate reasoning
+Pattern-guided evolution
+Co-Adaptive LLM-EC Systems
+Bidirectional feedback loops
+Reflective improvement
+Multi-stage algorithm design
+Iterative refinement of
+search and reasoning
+Figure 4: Conceptual view of the three increasingly integrated modes of interaction between EC and LLMs: EC for LLM enhance-
+ment, LLM for EC enhancement, and co-adaptive systems in which both components iteratively influence each other.
+In this review, the distinction between co-adaptive and co-evolutionary systems is important. We use
+co-adaptive in a broad sense to refer to iterative LLM-EC frameworks in which the two sides influence one
+another through feedback, repeated revision, or staged mutual adjustment, even when only one component is
+directly optimized at a given step. By contrast, co-evolutionary is used in a narrower sense for settings in which
+both components constitute explicitly adapting entities, and the update of each side depends on the behavior,
+outputs, or performance of the other [67, 68]. Under this distinction, many current LLM-EC frameworks are
+more accurately described as co-adaptive rather than fully co-evolutionary.
+Conceptually, co-adaptive LLM-EC systems can operate at multiple levels. At the lowest level, the LLM
+may provide local guidance while EC performs a global search. At an intermediate level, the LLM may
+revise operators, heuristics, or candidate programs based on population statistics and evaluation feedback.
+At the highest level, the entire system may behave as a self-improving design pipeline in which prompts,
+heuristics, and algorithmic structures are iteratively generated, evaluated, and refined. Existing frameworks
+such as PhaseEvo, PromptBreeder, ReEvo, LLaMEA, and related systems suggest the feasibility of such loops,
+but current evidence remains preliminary and does not yet establish robust long-term co-adaptive behavior
+across diverse tasks or evaluation settings [16, 29, 31, 54].
+A key open question is how to distinguish genuine co-evolutionary behavior from looser forms of tool
+coupling or one-sided adaptation. In many current studies, only one component truly adapts, while the other
+remains fixed. For future work, a more rigorous notion of co-adaptation will be useful, one that specifies
+which parts of the LLM-EC pipeline evolve, how feedback is represented, and how mutual improvement is
+measured. Clarifying this distinction will help prevent conceptual overstatement and improve comparability
+across studies.
+4.2. Future Directions in Algorithm Discovery
+A second major direction is the use of LLMs for discovering new optimization algorithms. This theme
+has already appeared in recent work on LLM-generated heuristics, reflective search, and language-mediated
+evolutionary operators, but it remains methodologically underdeveloped [11, 12, 16, 52, 54, 62]. The central
+challenge is that “novel algorithm design” is often claimed more easily than it is established. In review terms,
+true algorithmic novelty should not be assessed only by narrative originality or biological metaphor, but by
+whether a method introduces meaningful search mechanisms, demonstrates robust empirical advantage, and
+generalizes beyond a narrow benchmark set.
+In the present survey, algorithm discovery is treated not as a separate taxonomic class parallel to the Sec-
+tion 3 categories, but as a broader future-oriented perspective under which several of those categories may
+evolve. In particular, both hyper-heuristic generation and LLM-generated metaheuristics can be viewed as
+contributing to algorithm discovery, but they differ in the level at which the generated artifact operates and in
+the strength of evidence currently available for genuine novelty.
+22
+
+
+--- Page 23 ---
+More explicitly, algorithmic novelty in LLM-assisted design should be evaluated at several levels rather
+than treated as a binary label. A generated method may appear novel at the narrative level because it uses a
+new metaphor, explanation, or naming convention, while remaining close to familiar templates at the mech-
+anism level. For this reason, stronger novelty claims should be grounded in at least three complementary
+forms of evidence: (i) mechanism-level novelty, meaning that the method introduces a meaningfully distinct
+search operator, population-update logic, selection rule, memory structure, or interaction pattern rather than a
+superficial restatement of a known family; (ii) empirical novelty, meaning that the method demonstrates robust
+value under matched-budget evaluation against strong baseline algorithms across held-out tasks or benchmark
+families; and (iii) traceability and contamination-aware assessment, meaning that the generated code or algo-
+rithmic structure is compared against known template families and interpreted with caution when training-data
+leakage, public-code overlap, or benchmark memorization may plausibly explain the output.
+For this reason, future research on LLM-assisted algorithm discovery should distinguish more clearly
+between at least two cases. The first is improvement of existing algorithms, where the LLM modifies a known
+baseline by proposing new operators, structures, or hybrid combinations [11, 12, 50]. The second is de novo
+algorithm generation, where the system attempts to derive a search procedure from broader optimization
+principles without relying mainly on rearrangements of familiar templates such as GA, PSO, or DE [16, 62].
+Current evidence suggests that the first case is considerably more mature than the second.
+In both cases,
+claims of novelty should be supported not only by performance results, but also by explicit comparison to
+known algorithmic families, clear identification of the mechanism that is genuinely new, and discussion of
+whether the generated structure may reflect recombination of publicly available templates.
+A useful design framework for future work is therefore iterative and diagnostic rather than purely genera-
+tive. An LLM may propose candidate algorithmic changes, but those candidates should then be tested against
+well-chosen baselines, analyzed for actual novelty at the mechanism level, and refined using structured feed-
+back [66, 69]. In this sense, human-LLM collaboration remains important. Rather than treating the human
+as an external evaluator only, future frameworks may benefit from explicitly incorporating expert critique,
+failure analysis, and interpretability checks into the algorithm-discovery loop. This iterative structure is sum-
+marized in Figure 5. The loop begins with a prompting stage that takes as input both the optimization task
+and design objective and any accumulated human critique from prior iterations, and uses these to instruct the
+LLM to generate a candidate algorithmic structure and accompanying code. This candidate is then passed
+to an evaluation stage that assesses novelty, robustness, and performance against strong baselines, following
+the mechanism-level, empirical, and traceability criteria discussed above. The outcome of this evaluation is
+twofold: candidates that do not meet these criteria are routed back into the loop as critique that informs the
+next round of prompting, while candidates that pass are advanced to the final stage as a validated algorithmic
+contribution. This depiction emphasizes that algorithm discovery is not a single generative step but a cycle in
+which human judgment and empirical scrutiny are applied repeatedly before any claim of novelty is accepted.
+Prompting
+LLM
+Generate candidate
+algorithm and code
+Evaluate: novelty,
+robustness, and
+benchmarking
+Human critique
+and creative
+refinement
+Optimization
+task and de-
+sign objective
+Validated algorith-
+mic contribution
+Figure 5: High-level view of an LLM-assisted algorithm-discovery loop in which candidate designs are generated, critically evalu-
+ated, and refined through feedback before being treated as validated contributions.
+23
+
+
+--- Page 24 ---
+4.3. Decision Support, Explainability, and Human-in-the-Loop Systems
+Another promising direction lies in decision support. Although many EC methods are powerful, they
+often remain difficult for non-experts to formulate, configure, and interpret. LLMs offer a natural interface
+layer through which users may describe problems in ordinary language, receive suggestions about optimiza-
+tion formulation, obtain recommendations for suitable algorithms, and request explanations of why particular
+search decisions were made [70, 71]. In this way, LLMs could substantially broaden access to optimization
+technology beyond specialist communities.
+Within this theme, explainability is especially important.
+Several current LLM-enhanced EC frame-
+works already hint at more interpretable evolutionary workflows. Some systems generate natural-language
+“thoughts” alongside executable heuristics, whereas others translate surrogate decisions into textual inferences
+or use structured prompts to expose how problem patterns influence search bias. These are not yet fully ex-
+plainable EC frameworks, but they point toward an important design principle: LLMs can make evolutionary
+search more communicable, self-documenting, and interactive [72, 73, 74, 75].
+Human-in-the-loop optimization is likely to be particularly valuable in this setting [76]. Rather than aiming
+for full autonomy in every application, future platforms may combine human problem knowledge, LLM-based
+reasoning, and EC-based search within a collaborative loop. In practical terms, this could support problem
+formulation, algorithm recommendation, adaptive hyperparameter tuning, and post-hoc explanation of search
+behavior [60, 70, 71]. This direction is also consistent with earlier examples in which LLMs contribute natural-
+language rationale, surrogate judgments, or adaptive recommendations without fully replacing the evolutionary
+search process. The key issue is therefore not whether such systems are possible in principle, but how to design
+them so that human intervention improves reliability rather than merely masking methodological weaknesses
+[77].
+Finally, the automation of code generation and execution in LLM-EC systems introduces distinct safety
+risks. Unlike conventional LLM applications, these loops compile and execute unreviewed code across large
+populations, creating a structural bottleneck where human auditing of every candidate is impractical [78].
+To mitigate risks such as execution-environment compromise, reward hacking, and unsafe exploration, future
+work must transition from ad-hoc implementation to a standard of safety by design [79]. This includes: (i) strict
+sandboxing and resource-bounded execution to isolate generated code; (ii) explicit auditing of fitness functions
+to detect harness-exploiting or degenerate behavior; and (iii) staged autonomy, where the scale of unsupervised
+execution is gated by prior reliability checks. Reporting these safety practices should be treated as a necessary
+component of methodological transparency, complementary to the benchmark reporting standards discussed
+in Section 4.4.
+4.4. Benchmarking, Evaluation, and Reproducibility
+Benchmarking remains one of the most urgent methodological issues in LLM-EC research. Many current
+studies evaluate generated heuristics or hybrid pipelines on narrow benchmark sets, with limited attention to
+cross-instance generalization, computational budget, prompt sensitivity, or statistical robustness. This creates
+a serious risk of overinterpreting isolated successes. Recent work has already shown that LLM-generated
+or LLM-guided heuristics can appear impressive under favorable conditions while failing to generalize un-
+der broader or more rigorous evaluation [80, 81]. In this setting, benchmarking is not merely a reporting
+convention, but a core part of establishing whether an apparently novel LLM-EC system represents genuine
+methodological progress.
+Future benchmarking protocols for LLM-EC systems should therefore go beyond single-best-score com-
+parisons and define clearer minimum expectations for reporting, robustness testing, and claim validity. At
+minimum, evaluation should include: (i) diverse benchmark suites spanning continuous, combinatorial, and
+algorithm-design tasks; (ii) multiple independent runs with variance reporting; (iii) ablation studies that sep-
+arate the contribution of the LLM from that of the evolutionary search itself; (iv) reporting of prompt tem-
+plates, seeds, model versions, and compute budgets; and (v) robustness tests under distribution shift, prompt
+24
+
+
+--- Page 25 ---
+perturbation, or alternative evaluators. These practices are especially important because both EC and LLM in-
+ference are stochastic, making reproducibility substantially harder than in conventional deterministic pipelines
+[82, 83].
+More concretely, a minimally credible evaluation protocol for LLM-EC systems should report at least the
+following: (i) the intended evaluation regime, including whether the claim concerns broad algorithm discovery
+or problem-specific design; (ii) the benchmark scope, including the number and diversity of tasks, instances,
+or suites used for assessment; (iii) multiple independent runs with seed disclosure and variance reporting;
+(iv) ablation studies that separate the contribution of the LLM, the evolutionary search component, and any
+auxiliary tuning or reflection mechanism; (v) comparisons against strong manual and automated baselines
+under matched or clearly disclosed computational budgets; and (vi) full disclosure of prompts, model versions,
+API settings, inference budgets, and stopping criteria.
+The evaluation design should also reflect the type of claim being made. For general-purpose algorithm
+discovery, stronger evidence should come from diverse benchmark families, held-out problem classes, and ro-
+bustness across prompt formulations, model versions, or evaluator choices. By contrast, for problem-specific
+algorithm design, narrower evaluation can be acceptable, but studies should then report held-out instances,
+adaptation budget, reliability under deployment constraints, and clear failure cases rather than presenting nar-
+row benchmark success as broad methodological progress. In both cases, contamination-aware testing and
+mechanism-level novelty assessment should accompany performance claims whenever the generated outputs
+resemble known algorithm families or publicly available code patterns [84]. Accordingly, broad benchmark
+coverage should be interpreted as a requirement for claims of general algorithmic scope, not as a universal
+requirement for every LLM-EC design setting.
+This distinction also reflects a broader change in the economics of algorithm development. In traditional
+EC research, proposing a new algorithm often required substantial manual effort, which naturally encouraged
+validation on broad benchmark suites to justify that cost. In semi-automated LLM-assisted workflows, how-
+ever, it may become far more practical to generate specialized algorithms for narrower problem classes or
+instance families. This shift does not reduce the need for rigorous evaluation, but it does change what kind of
+evaluation is most appropriate: broad benchmark coverage is essential when claiming general methodological
+contribution, whereas tailored evaluation may be more appropriate when the goal is reliable and cost-effective
+performance on a specific target problem class. Accordingly, broad benchmark coverage should be interpreted
+as a requirement for claims of general algorithmic scope, not as a universal requirement for every LLM-EC
+design setting.
+At the same time, direct quantitative comparison across the reviewed literature remains difficult because
+studies differ substantially in tasks, benchmark suites, evaluation budgets, model access, and reporting pro-
+tocols. For this reason, Table 8 does not attempt a formal meta-analysis of incompatible raw metrics. In-
+stead, it provides a structured comparative synthesis of the major interaction modes, based on reported per-
+formance evidence, computational burden, reproducibility, and generalization, using qualitative ordinal judg-
+ments grounded in the breadth and rigor of the published evaluations.
+Building on the minimally credible evaluation protocol outlined above, Fig. 6 consolidates these com-
+ponents into a single visual summary highlighting the core dimensions of credible LLM-EC evaluation, es-
+pecially for settings that claim broad algorithmic scope or general-purpose methodological contribution. In
+narrower problem-specific design settings, these dimensions remain relevant, but their implementation should
+be adapted to the target problem class, deployment constraints, and intended use context.
+4.5. Memorization and Contamination in LLM-Generated Algorithms
+Among the credible LLM-EC evaluation dimensions summarized in Fig. 6, contamination and memoriza-
+tion deserve separate and more detailed treatment given their methodological importance and their relevance
+to several directions discussed above [84]. Since many powerful LLMs are trained on large and largely undis-
+closed corpora, it is often difficult to determine whether a strong algorithmic output reflects genuine reasoning
+(novelty) over the stated problem or the recovery of patterns already present in training data. This concern is
+25
+
+
+--- Page 26 ---
+Table 8: Comparative synthesis of major LLM-EC interaction modes (IntM) in terms of reported performance evidence (RPE),
+computational burden (CompB), reproducibility (Rep), and generalization (Gen). The ratings are qualitative and ordinal rather than
+meta-analytic because the reviewed studies differ substantially in tasks, benchmarks, model access, evaluation budgets, and reporting
+protocols.
+IntM
+RPE
+CompB
+Rep
+Gen
+Interpretive Summary
+Hard-prompt
+opti-
+mization
+Moderate to Strong
+Moderate
+Moderate
+Limited
+to
+Moderate
+Most mature EC-for-LLM direction; multiple
+studies report useful gains, but evidence re-
+mains concentrated in relatively narrow task
+families and benchmark settings.
+Soft-prompt evolution
+Limited
+High
+Limited
+Limited
+Conceptually promising, but still immature
+from an evolutionary perspective, with underde-
+veloped operators and limited comparative val-
+idation.
+EC-based
+hyperpa-
+rameter tuning
+Limited to Moderate
+Moderate
+to
+High
+Limited
+Limited
+Useful in heterogeneous, black-box, or multi-
+objective settings, but evidence remains frag-
+mented across different optimization targets and
+tasks.
+Evolutionary NAS for
+LLM-related systems
+Limited to Moderate
+High
+Limited
+Limited
+Methodologically relevant, but strongly con-
+strained by evaluation cost and relatively weak
+large-scale comparative evidence.
+LLM-assisted
+heuristic/hyper-
+heuristic generation
+Moderate
+Moderate
+Limited
+Limited
+to
+Moderate
+Stronger conceptual and methodological evi-
+dence than broad performance evidence; cur-
+rent results are more convincing for feasibility
+than for consistent superiority over strong clas-
+sical baselines.
+LLM-assisted
+surro-
+gate
+reasoning
+and
+adaptive control
+Limited to Moderate
+Moderate
+Limited
+Limited
+Expands the role of LLMs within EC pipelines,
+but remains exploratory and not yet broadly val-
+idated against established surrogate or control
+methods.
+LLM-generated
+metaheuristics
+and
+language-mediated
+search
+Limited
+Moderate
+Limited
+Limited
+Conceptually significant but empirically unset-
+tled; claims of novelty and broad performance
+advantage remain much easier to assert than to
+validate.
+Co-adaptive LLM-EC
+systems
+Very Limited
+High
+Very Limited
+Very Limited
+Important emerging direction, but still dom-
+inated by proof-of-concept studies with lim-
+ited long-horizon, cross-task, or contamination-
+aware validation.
+distinct from, but closely related to, the traceability criterion introduced in Section 4.2, which asks whether
+a generated structure can be matched to known algorithm families, whereas contamination asks whether the
+underlying training process had direct or indirect access to the specific benchmark, dataset, or solution being
+evaluated [84].
+This issue is particularly serious when the target tasks involve well-known benchmark problems, canonical
+algorithm templates, or widely available source code, since in such cases an impressive result may partly reflect
+memorized implementations, common template structures, or training-data leakage rather than genuine algo-
+rithmic discovery. The risk is compounded in LLM-generated metaheuristics and hyper-heuristic frameworks
+(Sections 3.2-3.4), where the LLM is directly responsible for producing executable code. In such settings, a
+method that performs well may do so because it closely reproduces a publicly documented routine for that
+specific benchmark, rather than because the search process discovered a mechanism that generalizes beyond
+it. Co-adaptive systems (Section 4.1) and de novo algorithm-discovery claims (Section 4.2) are especially ex-
+posed to this risk, since both rely on extended generation and refinement loops in which contaminated outputs
+can be reinforced across iterations rather than identified and discarded.
+Mitigating this risk requires evaluation practices that go beyond reporting performance comparison. As a
+baseline practice, future studies should: (i) disclose, where possible, whether the target benchmark or closely
+related instances are likely to appear in public training corpora; (ii) compare generated algorithms against
+26
+
+
+--- Page 27 ---
+Credible
+LLM-EC
+Evaluation
+Benchmark breadth
+Continuous, com-
+binatorial, and
+algorithm-design tasks
+Multiple runs
+/variance
+Independent trials and
+statistical robustness
+Ablations
+Separate LLM effects
+from EC effects
+Compute-
+budget reporting
+Inference cost, search
+cost, and resource use
+Prompt/model
+disclosure
+Prompts, seeds,
+versions, and settings
+Contamination/leakage
+checks
+Memorization, source
+overlap, and originality
+Figure 6: Layered evaluation framework for credible LLM-EC research. Reliable assessment depends not only on reported per-
+formance but also on benchmark breadth, repeated evaluation, ablation studies, compute-budget transparency, prompt and model
+disclosure, and contamination-aware testing.
+known template families to assess whether claimed novelty is mechanism-level or merely a restatement of
+memorized structure; (iii) test on held-out, recently introduced, or synthetically constructed problem instances
+that are unlikely to have been seen during pretraining; and (iv) treat unusually strong zero-shot performance on
+canonical benchmarks with particular caution rather than as default evidence of genuine discovery. These prac-
+tices complement, rather than replace, the broader evaluation dimensions summarized in Fig. 6, and should be
+considered a necessary component of credible reporting whenever an LLM is used to generate or substantially
+modify executable algorithmic code [84].
+4.6. Core Open Challenges
+The most important open challenges in the field can be grouped into five categories.
+First, computational complexity and scalability. Hybrid LLM-EC systems are often expensive because
+they combine repeated evolutionary evaluation with costly model inference or generation. This limits feasible
+population sizes, benchmark breadth, and accessibility for many research groups. More efficient surrogates,
+selective evaluation, and lower-cost interaction protocols will be essential. A concrete future step will be
+reporting a compute-normalized comparison (e.g., performance per LLM-inference call or per token budget)
+alongside raw performance, so that gains are not confounded with sheer evaluation expenditure, as argued
+for cost-controlled agent evaluation more broadly [85]. Existing EC benchmarking infrastructure such as
+IOHprofiler already logs granular per-evaluation trajectories [55, 56, 57], and extending this logging to also
+capture LLM-inference cost would allow such compute-normalized comparisons to be adopted with minimal
+additional changes.
+Second, weak theoretical grounding. While classical evolutionary computation has developed rigorous
+theoretical foundations for runtime analysis, convergence, and fitness-landscape analysis [14, 68], comparable
+theory for LLM-EC systems remains unexplored in the current literature. Existing approaches have primarily
+been validated through empirical evaluation, leaving fundamental questions about how language-guided op-
+erators influence convergence, search-space exploration, diversity preservation, and optimization performance
+across problem classes. Future work should develop formal models of LLM-generated variation operators,
+27
+
+
+--- Page 28 ---
+characterize their effects on symbolic and executable search spaces, derive theoretical guarantees on conver-
+gence and runtime where possible, and identify the problem characteristics under which semantic guidance
+improves or hinders evolutionary search.
+Third, fitness design and semantic evaluation. Hybrid systems often optimize outputs that are not easily
+captured by a single numerical metric. When LLMs generate prompts, heuristics, code, or explanations,
+evaluation may need to account for correctness, novelty, semantic validity, robustness, and cost simultaneously.
+Designing principled multi-criteria fitness functions remains an open problem.
+Fourth, interpretability and causal understanding: LLMs can generate plausible algorithmic variations,
+but it remains unclear whether they capture the causal mechanisms that make certain search strategies effective.
+This raises a deeper scientific question: are LLMs discovering algorithmic principles, or mainly recombining
+patterns seen during training? Addressing this question requires evaluation beyond solution quality. Future
+work should develop diagnostic benchmarks that distinguish genuine algorithmic abstraction from memoriza-
+tion, including counterfactual optimization problems, intervention-based evaluations of search dynamics, and
+tasks requiring symbolic explanation alongside empirical validation [51, 86, 87]. Integrating these benchmarks
+with mechanistic interpretability and symbolic reasoning techniques [88, 89] could provide stronger evidence
+about whether LLMs acquire transferable algorithmic principles or mainly exploit statistical regularities in
+their training data.
+Fifth, system-level integration. Distributed, federated, and long-horizon hybrid systems raise additional
+issues of communication, memory, catastrophic forgetting, and coordination across evolving components.
+These settings remain largely unexplored, yet they are likely to become increasingly important as LLM-EC
+frameworks grow in scope and autonomy.
+Taken together, these challenges suggest that the next phase of research should emphasize methodological
+discipline as much as algorithmic creativity. The field has already shown that LLMs and EC can be combined
+in interesting ways; the harder, more important task now is to determine how to make these combinations
+robust, interpretable, reproducible, and scientifically credible.
+4.7. Limitations of the Present Review
+Like the literature it surveys, the present review has several limitations. First, this article is structured as
+a critical narrative review rather than a fully systematic review or meta-analysis. Although the search and
+screening process has been made more transparent, the review does not claim exhaustive coverage of every
+relevant publication in this rapidly expanding area. Second, the field itself is highly dynamic and partly shaped
+by recent conference papers, workshop papers, and preprints, which means that the maturity, reproducibility,
+and archival stability of the underlying evidence remain uneven across topics.
+Third, some of the methodological categories used in this survey are analytically useful but not fully dis-
+joint. Several recent LLM-EC frameworks combine multiple roles within the same pipeline, including heuristic
+generation, reflective revision, surrogate assistance, and algorithm-level design. For this reason, the proposed
+taxonomy should be interpreted as a structured organizing framework rather than as a final or universally fixed
+classification of the field. Fourth, the empirical evidence reviewed in the paper is heterogeneous in both quality
+and scope. In several areas, especially co-adaptive systems and LLM-generated algorithm design, the literature
+is still dominated by proof-of-concept studies, limited benchmark sets, and inconsistent reporting practices.
+These limitations do not reduce the importance of the reviewed direction, but they do shape how the
+present survey should be interpreted. The paper is intended to provide a transparent, critical, and conceptually
+organized synthesis of the most relevant developments to date, while also making clear where the current
+evidence base remains incomplete, unstable, or methodologically underdeveloped.
+5. Conclusion
+This survey reviewed the emerging interplay between evolutionary computation (EC) and large language
+models (LLMs) from a bidirectional perspective. On one side, EC enhances LLM-centered systems through
+28
+
+
+--- Page 29 ---
+prompt optimization, hyperparameter tuning, and architecture search. On the other, LLMs enhance EC through
+heuristic generation, surrogate reasoning, adaptive control, and automated algorithm design. Across both di-
+rections, a broader pattern emerges: LLMs contribute abstraction, semantic reasoning, and generative flexi-
+bility, whereas EC contributes structured search, diversity maintenance, and robustness in difficult optimiza-
+tion spaces. The survey also highlighted a more ambitious frontier in which LLMs and EC interact through
+co-adaptive loops. This direction is especially significant because it shifts the focus from isolated method en-
+hancement toward automated algorithm design and hybrid intelligent systems. However, the current literature
+remains uneven. Many results are still proof-of-concept and are supported by limited benchmarks, inconsis-
+tent evaluation, or insufficient attention to reproducibility and generalization. As a result, the field should
+be regarded as promising but methodologically unsettled. The present review should therefore be read with
+appropriate caution: it offers a structured and critical synthesis of the current literature, but not an exhaus-
+tive or final account of a rapidly evolving field. Several priorities emerge for future research. First, stronger
+benchmarking and reporting standards are needed to support fair comparison and cumulative progress. Sec-
+ond, hybrid systems require firmer theoretical grounding, especially regarding search dynamics, causal under-
+standing, and the interaction between language-based reasoning and evolutionary search. Third, future work
+should place greater emphasis on interpretability, human-AI collaboration, and practically useful decision-
+support frameworks rather than on autonomous generation alone. Finally, scalability, computational cost, and
+contamination-aware evaluation will remain central barriers to broader adoption. Overall, the significance of
+LLM-EC integration lies not only in improved performance on specific tasks, but also in its potential to re-
+shape how optimization algorithms are designed, adapted, and deployed. By connecting linguistic intelligence
+with evolutionary search, this emerging area opens a path toward more flexible, interactive, and self-improving
+computational systems. Whether that potential can be realized will depend less on isolated benchmark wins
+than on the development of rigorous, transparent, and conceptually sound research practices. More broadly,
+the reviewed literature points less to a single application taxonomy than to recurring interaction roles, in-
+cluding prompt adaptation, heuristic generation, surrogate reasoning, operator guidance, and algorithm-level
+design support. Taken together, these features distinguish the present survey from adjacent reviews that focus
+mainly on one interaction direction, one methodological family, or broader LLM-based optimization without
+an EC-aware critical synthesis.
+Acknowledgment
+This work was supported by Dr. B. R. Ambedkar National Institute of Technology Jalandhar; the Anu-
+sandhan National Research Foundation, Government of India (Award No. MTR/2021/000503), the Australian
+Researcher Cooperation Hub through the Australia-India Women Researchers’ Exchange Program; and the
+Spanish Ministry of Economy and Competitiveness through the Ramón y Cajal Research Grant (Award No.
+RYC2023-045020-I).
+Compliance with ethical standards
+Conflict of interest: All the authors declare that they have no conflict of interest.
+Ethical approval: This article does not contain any studies with human participants or animals performed by
+any of the authors.
+Appendix A. Supplementary Technical Details for LLM-Enhanced EC Frameworks
+This appendix collects implementation-oriented details that support the discussion in Sections 2 and 3
+but are not essential to the main survey narrative. These materials are included to preserve methodological
+transparency while keeping the main paper focused on conceptual synthesis, comparative analysis, and open
+research challenges.
+29
+
+
+--- Page 30 ---
+Appendix A.1. Supplementary Tables for EC-Based LLM Enhancement
+This subsection collects detailed comparative tables moved from Section 2 to keep the main text focused
+on synthesis rather than inventory-style presentation.
+Appendix A.1.1. Supplementary Summary of Representative Prompt-Optimization Frameworks
+This supplementary subsection provides additional comparative detail for the three representative prompt-
+optimization frameworks discussed in Section 2.2. As explained in the main text, EvoPrompt, PhaseEvo, and
+GAAPO were selected for focused comparison because they illustrate three distinct methodological design
+strategies in evolutionary prompt optimization: direct LLM-based evolutionary operators, structured multi-
+phase optimization, and hybrid orchestration of multiple prompt-generation strategies.
+Appendix A.1.2. Supplementary Synthesis of Hyperparameter-Tuning Directions
+This supplementary subsection reorganizes the hyperparameter-tuning literature discussed in Section 2.4
+into a more synthetic category-based view. Because the main text emphasizes conceptual interpretation rather
+than inventory-style coverage, Table A.9 collects representative hyperparameter types, corresponding evolu-
+tionary techniques, and typical example settings in a compact comparative format. The goal is not to claim a
+large or fully mature body of evidence, but rather to show the main directions in which EC has been used for
+hyperparameter optimization in LLM-centered pipelines.
+Table A.9: Supplementary comparative synthesis of EA applications in LLM hyperparameter optimization.
+Targeted Hyperparameters
+Evolutionary Techniques Employed
+Case Studies and Examples
+Architectural Hyperparameters: (i) num-
+ber of Transformer layers, (ii) hidden
+state dimension, (iii) number of attention
+heads, and (iv) feed-forward network in-
+termediate size
+Custom EC: (i) selection via performance
+ranking, (ii) mutation of hyperparameters,
+and (iii) architecture exploration
+AutoTinyBERT and related architecture-
+oriented studies
+Model-Merging Hyperparameters: (i) pa-
+rameters for TIES-Merging + DARE and
+(ii) weight combination strategies
+Evolution Strategies/CMA-ES
+Evolutionary model merging for founda-
+tion models
+EA-Specific Hyperparameters: (i) step-
+size in ES, (ii) temperature in LMEA, and
+(iii) self-adaptation mechanisms
+ES, CMA-ES, and LLM-guided adapta-
+tion
+LLM-guided step-size control and hybrid
+LLM-EA tuning
+General ML Hyperparameters: (i) learn-
+ing rate, batch size, dropout, and (ii) other
+training controls
+GA and PSO
+General autonomous HPO settings
+Note: EA: Evolutionary algorithm; HPO: Hyperparameter optimization; CMA-ES: Covariance matrix adaptation evolution
+strategy; ES: evolution strategy; GA: Genetic algorithm; PSO: Particle swarm optimization.
+Appendix A.1.3. Supplementary Summary of Evolutionary NAS Studies
+This subsection summarizes representative evolutionary NAS studies discussed in Section 2.5. It is in-
+cluded here to document the broader study landscape without interrupting the main-text emphasis on method-
+ological synthesis, comparative interpretation, and evidence quality (Table A.10).
+Appendix A.2. Illustrative Surrogate-Model Workflow
+Algorithm 1 summarizes a generic workflow for using an LLM as a surrogate model within an evolutionary
+optimization loop. It is included for illustration only; in the main text, surrogate modeling is discussed at a
+conceptual level.
+30
+
+
+--- Page 31 ---
+Table A.10: Supplementary summary of evolutionary approaches for neural architecture search in LLM-related settings.
+Study/Method
+EA/Search Technique
+Optimized Aspects
+Objectives/Metrics
+Key Finding/Contribution
+AutoBERT-Zero
+Custom EA
+BERT backbone struc-
+ture
+Performance
+Evolved backbone structures
+using EA-based NAS.
+DistilBERT NAS
+NSGA-II (MOEA)
+Attention heads, FFN
+design, encoder blocks
+QA
+performance
+vs.
+model size
+Applied MOEA-based NAS
+under resource constraints.
+LLMatic
+QD
+(MAP-Elites)
++
+LLM
+Code-level
+architec-
+tures
+Accuracy + diversity
+Dual-archive
+search
+with
+LLM-guided variation.
+EvoPrompting
+LM operator + evolu-
+tionary search
+Code-level
+GNN
+de-
+sign
+Performance + diver-
+sity
+Uses language-model-guided
+search for architecture gener-
+ation.
+LiteTransformerSearch
+MOEA
+Decoder-layer hyperpa-
+rameters
+Perplexity vs.
+latency
+vs. memory
+Training-free
+MOEA-NAS
+for efficient GPT-style mod-
+els.
+SuperShaper [44]
+EA
+Hidden dimensions
+Task-agnostic
+pre-
+training
+Searches hidden dimensions
+for efficient BERT variants.
+Klein et al. [90]
+MOEA
+Subnetwork
+struc-
+tures/pruning
+Performance vs. model
+size
+Multi-objective
+structural
+pruning via NAS.
+Choong et al. [91]
+MO-MFEA
+Model configurations
+Multi-task performance
+vs. size
+Multi-task
+evolutionary
+search for specialized smaller
+models.
+GPT-NAS [92]
+EA + LLM
+Network architecture
+Performance
+Combines LLM generation
+with evolutionary search.
+Guided Evolution [66]
+EA + LLM
+Code-level models
+Performance
+Uses LLM guidance within
+an evolutionary improvement
+loop.
+Note: NAS: Neural architecture search; EA: Evolutionary algorithm; NSGA-II: Non-dominated sorting GA II; MOEA:
+Multi-objective EA; QD: Quality-diversity.
+Note: This supplementary table includes both core LLM-related NAS studies and a small number of adjacent code-level
+architecture-generation studies retained for methodological context.
+Algorithm 1 LLM as Surrogate Model
+Require: X, Y, U, LLM, Opt
+Ensure: ˜Y
+1: ˜Y ←/0
+2: X,U ←Preprocessing(X,U)
+3: for u ∈U do
+4:
+prompt ←GeneratePrompt(X,Y,u,Opt)
+5:
+response ←Inference(LLM, prompt)
+6:
+y ←PostProcessing(response,Opt)
+7:
+˜Y ←˜Y ∪y
+8: end for
+Appendix A.3. Example Prompt for Regression-Based Surrogate Reasoning
+Figure A.7 provides an example of how historical evaluations and a new candidate can be formatted into
+a regression-style prompt for an LLM-based surrogate. It is kept in the appendix because it is useful for
+implementation understanding, but too detailed for the main review narrative.
+Appendix A.4. Illustrative Prompt Templates for LLM-Based Parameter Tuning
+Table A.11 lists representative prompt types used for LLM-guided parameter tuning of metaheuristics.
+These prompt templates are useful for understanding the interaction style between the optimizer and the LLM,
+31
+
+
+--- Page 32 ---
+Prompt for regression
+Procedure
+Historical examples
+New evaluation
+Prompt for LLM
+Your task is to predict the numerical value of each object based on its attributes. These attributes and their corresponding values are outcomes of a black box function’s
+operation within its decision space. The target value for each object is determined by a specific mapping from these attributes through the black box function.
+Your objective is to infer the underlying relationships and patterns within the black box function using the provided historical data. This task goes beyond simple
+statistical analyses, such as calculating means or variances, and requires understanding the complex interactions between the attributes.
+Please do not attempt to fit the function using code similar to Python; instead, directly learn and infer the numerical values.
+1. Analyze the historical data to uncover how attributes relate to the numerical values.
+2. Use these insights to predict the numerical value of new objects based on their attributes.
+3. Respond using JSON format, e.g. {‘Value’: ‘approximation result’}
+Features: <0.338,0.531,...,0.363>; Value: 0.41148
+Features: <0.207,0.598,...,0.285>; Value: 0.35745
+...
+Features: <0.629,0.029,...,0.279>; Value: 0.67179
+Features: <0.189,0.917,...,0.443>
+Note: Respond in JSON with the format {‘Value’: ‘approximation result’} only.
+Figure A.7: Example prompt and procedure for LLM-assisted regression-based surrogate modeling [14].
+but are too detailed for the main text.
+Table A.11: Illustrative prompt types used in Ref. [60] for LLM-guided tuning of metaheuristics.
+(i)
+Which metaheuristic algorithms would you use to solve a TSP?
+(ii)
+I want to solve TSP (defined on 15 cities) with GA. Its mealpy implementation takes the following param-
+eters: parameters. Advise on parameter values.
+(iii)
+For the TSP task with 15 cities, you previously suggested parameter values for Genetic Algorithm meta-
+heuristic. Parameters and values. I ran the GA algorithm 100 times and got the average global optimum
+of 0.375 with a standard deviation of 0.03. I also measured the variance of the population at the beginning
+and last epoch: 9.598 and 5.675, respectively, with std of 0.09 and 0.58. The solution at the last epoch had
+an average fitness of 0.45 with a standard deviation of 0.37. What changes to the parameters would you
+suggest to improve performance? Keep the epoch*pop size constant.
+Appendix A.5. Detailed Prompt Structure for LMEA
+Figure A.8 shows a detailed prompt template for LMEA. Since the main text now discusses LMEA at a
+conceptual level, the explicit prompt structure is moved here to avoid overloading the survey narrative with
+implementation detail.
+Appendix B. Background Note on Prompt Engineering
+This appendix note provides a brief background on prompt engineering concepts referenced in Section 2.
+It is intentionally concise, since the present article is a survey on the interaction between LLMs and EC rather
+than a tutorial on prompting.
+Appendix B.1. Hard and Soft Prompts
+In the context of LLMs, a prompt is the textual or embedded input sequence that conditions the model to
+perform a desired task. Prompts are commonly divided into two broad categories [23, 24, 93]: hard prompts,
+which are explicit human-readable instructions, and soft prompts, which are trainable continuous vectors in-
+serted into the model’s embedding space. Hard prompts are transparent and interpretable, whereas soft prompts
+offer more flexible and compact task adaptation at the representation level.
+This distinction is directly relevant to EC-based optimization. Hard prompts define a discrete textual search
+space, making them natural targets for token-level mutation and crossover. Soft prompts define a continuous
+embedding space, which is harder to interpret but opens the door to richer forms of adaptation and hybrid
+search.
+32
+
+
+--- Page 33 ---
+Initialization
+LLM
+Selection
+Crossover
+Mutation
+Termination
+Genetic Algorithm
+Prompt for LLM
+Description of problem and solution properties
+You are given a list of points with coordinates: {points}.
+Your task is to find a trace, with the shortest possible length, that traverses each point exactly once.
+In-context examples (population)
+Below are some previous traces and their lengths, ordered by their lengths:
+{trace 1} {Length of trace 1}
+{trace 2} {Length of trace 2}
+{trace 3} {Length of trace 3}
+...
+{trace N} {Length of trace N}
+Task instructions
+1. Select two traces from the above.
+2. Crossover the two traces from Step 1 and generate a new trace.
+3. Mutate the trace from Step 2 to generate a new trace.
+4. Repeat the process until {N} traces are generated.
+Provide traces in XML-like format using < selection > and < res > tags.
+Figure A.8: Detailed prompt structure used in LMEA for solving TSP-like problems through language-mediated evolutionary search
+[13].
+Prompt in LLMs
+Hard Prompt (Text-based)
+Instruction
+Defines task (e.g.,
+“Summarize this text”)
+Context/Examples
+Few-shot examples
+(input-output pairs)
+Input/Query
+User request or test case
+Soft Prompt (Embedding-based)
+Prompt Vectors
+Learned continuous embeddings
+Insertion Layer
+Injected into model
+embedding space
+Task Adaptation
+Guides model via in-
+ternal activations
+Figure B.9: Conceptual components of hard and soft prompting in LLMs.
+Appendix B.2. Prompting as an Optimization Target
+Prompt engineering has evolved from manual trial-and-error toward increasingly systematic optimization.
+Few-shot prompting, chain-of-thought prompting, zero-shot-CoT, and multi-step prompting strategies have
+shown that prompt structure can strongly affect downstream performance [94, 95, 96, 97]. These observations
+motivate the use of EC as an automated search mechanism over prompt representations.
+In the context of this survey, the importance of prompt engineering is therefore not purely linguistic. It also
+provides a concrete example of how evolutionary search can operate over structured, semantically meaningful
+33
+
+
+--- Page 34 ---
+design spaces, thereby illustrating one of the clearest interfaces between EC and LLMs.
+References
+[1] Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou, Yingqian Min, Beichen
+Zhang, Junjie Zhang, Zican Dong, et al. A survey of large language models. Frontiers of Computer
+Science, 20(2012627), 2026.
+[2] Shervin Minaee, Tomas Mikolov, Narjes Nikzad, Meysam Chenaghlu, Richard Socher, Xavier Amatriain,
+and Jianfeng Gao. Large language models: A survey. arXiv preprint arXiv:2402.06196, 2024.
+[3] Thomas Bartz-Beielstein, Jürgen Branke, Jörn Mehnen, and Olaf Mersmann. Evolutionary algorithms.
+Wiley Interdisciplinary Reviews: Data Mining and Knowledge Discovery, 4(3):178–195, 2014.
+[4] Adam Slowik and Halina Kwasnicka. Evolutionary algorithms and their applications to engineering
+problems. Neural Computing and Applications, 32:12363–12379, 2020.
+[5] Dikshit Chauhan, Shivani, and Ponnuthurai N. Suganthan. Learning strategies for particle swarm opti-
+mizer: A critical review and performance analysis. Swarm and Evolutionary Computation, 98:102048,
+2025.
+[6] Christian Blum and Andrea Roli. Metaheuristics in combinatorial optimization: Overview and concep-
+tual comparison. ACM Computing Survey, 35(3):268–308, September 2003.
+[7] Qingyan Guo, Rui Wang, Junliang Guo, Bei Li, Kaitao Song, Xu Tan, Guoqing Liu, Jiang Bian, and
+Yujiu Yang. Connecting large language models with evolutionary algorithms yields powerful prompt op-
+timizers. In International Conference on Learning Representations, volume 2024, pages 34133–34156,
+2024.
+[8] Takuya Akiba, Makoto Shing, Yujin Tang, Qi Sun, and David Ha. Evolutionary optimization of model
+merging recipes. Nature Machine Intelligence, 7(2):195–204, 2025.
+[9] Muhammad Umair Nasir, Sam Earle, Julian Togelius, Steven James, and Christopher Cleghorn. LLMatic:
+neural architecture search via large language models and quality diversity optimization. In Proceedings
+of the Genetic and Evolutionary Computation Conference, pages 1110–1118, 2024.
+[10] Yichun Yin, Cheng Chen, Lifeng Shang, Xin Jiang, Xiao Chen, and Qun Liu. AutoTinyBert: Auto-
+matic hyper-parameter optimization for efficient pre-trained language models. In Proceedings of the
+59th Annual Meeting of the Association for Computational Linguistics and the 11th International Joint
+Conference on Natural Language Processing (Volume 1: Long Papers), pages 5146–5157, 2021.
+[11] Michal Pluhacek, Jozef Kovac, Adam Viktorin, Peter Janku, Tomas Kadavy, and Roman Senkerik. Using
+LLM for automatic evolvement of metaheuristics from swarm algorithm SOMA. In Proceedings of the
+Genetic and Evolutionary Computation Conference Companion, pages 2018–2022, 2024.
+[12] Michal Pluhacek, Anezka Kazikova, Tomas Kadavy, Adam Viktorin, and Roman Senkerik. Leveraging
+large language models for the generation of novel metaheuristic optimization algorithms. In Proceedings
+of the Companion Conference on Genetic and Evolutionary Computation, pages 1812–1820, 2023.
+[13] Shengcai Liu, Caishun Chen, Xinghua Qu, Ke Tang, and Yew-Soon Ong. Large language models as
+evolutionary optimizers. In 2024 IEEE Congress on Evolutionary Computation (CEC), pages 1–8. IEEE,
+2024.
+34
+
+
+--- Page 35 ---
+[14] Hao Hao, Xiaoqun Zhang, and Aimin Zhou. Large language models as surrogate models in evolutionary
+algorithms: A preliminary study. Swarm and Evolutionary Computation, 91:101741, 2024.
+[15] Hanwei Xu, Yujun Chen, Yulun Du, Nan Shao, Wang Yanggang, Haiyu Li, and Zhilin Yang. Gps: Ge-
+netic prompt search for efficient few-shot learning. In Proceedings of the 2022 Conference on Empirical
+Methods in Natural Language Processing, pages 8162–8171, 2022.
+[16] Niki van Stein and Thomas Bäck. LLaMEA: A large language model evolutionary algorithm for auto-
+matically generating metaheuristics. IEEE Transactions on Evolutionary Computation, 29(2):331–345,
+2025.
+[17] Martina Saletta and Claudio Ferretti. Exploring the prompt space of large language models through
+evolutionary sampling. In Proceedings of the Genetic and Evolutionary Computation Conference, pages
+1345–1353, 2024.
+[18] He Yu and Jing Liu. Deep insights into automated optimization with large language models and evolu-
+tionary algorithms. arXiv preprint arXiv:2410.20848, 2024.
+[19] Xingyu Wu, Sheng-Hao Wu, Jibin Wu, Liang Feng, and Kay Chen Tan. Evolutionary computation in the
+era of large language model: Survey and roadmap. IEEE Transactions on Evolutionary Computation,
+29(2):534–554, 2025.
+[20] Chao Wang, Jiaxuan Zhao, Licheng Jiao, Lingling Li, Fang Liu, and Shuyuan Yang. When large language
+models meet evolutionary algorithms: Potential enhancements and challenges. Research, 8:0646, 2025.
+[21] Fei Liu, Yiming Yao, Ping Guo, Zhiyuan Yang, Xi Lin, Zhe Zhao, Xialiang Tong, Kun Mao, Zhichao
+Lu, Zhenkun Wang, et al. A systematic survey on large language models for algorithm design. ACM
+Computing Surveys, 58(8):1–32, 2026.
+[22] Yan Zheng, Lida Zhang, Kaiwen Li, Rui Wang, Wenhua Li, Tao Zhang, Qingfu Zhang, and Yaochu
+Jin. A survey on large language models driven meta-optimizers for automated intelligent optimization.
+Artificial Intelligence Review, 59(2):72, 2026.
+[23] Banghao Chen, Zhaofeng Zhang, Nicolas Langrené, and Shengxin Zhu. Unleashing the potential of
+prompt engineering for large language models. Patterns, 6(6), 2025.
+[24] Pranab Sahoo, Ayush Kumar Singh, Sriparna Saha, Vinija Jain, Samrat Mondal, and Aman Chadha. A
+systematic survey of prompt engineering in large language models: Techniques and applications. arXiv
+preprint arXiv:2402.07927, 1, 2024.
+[25] Robert Clarisó and Jordi Cabot. Model-driven prompt engineering. In 2023 ACM/IEEE 26th Inter-
+national Conference on Model Driven Engineering Languages and Systems (MODELS), pages 47–54.
+IEEE, 2023.
+[26] Zeeshan Memon, Muhammad Arham, Adnan Ul-Hasan, and Faisal Shafait. LLM-informed discrete
+prompt optimization. In ICML 2024 Workshop on LLMs and Cognition, 2024.
+[27] Archiki Prasad, Peter Hase, Xiang Zhou, and Mohit Bansal. Grips: Gradient-free, edit-based instruction
+search for prompting large language models. In Proceedings of the 17th Conference of the European
+Chapter of the Association for Computational Linguistics, pages 3845–3864, 2023.
+[28] Cho-Jui Hsieh, Si Si, Felix Yu, and Inderjit Dhillon. Automatic engineering of long prompts. In Lun-Wei
+Ku, Andre Martins, and Vivek Srikumar, editors, Findings of the Association for Computational Linguis-
+tics: ACL 2024, pages 10672–10685, Bangkok, Thailand, August 2024. Association for Computational
+Linguistics.
+35
+
+
+--- Page 36 ---
+[29] Chrisantha Fernando, Dylan Banarse, Henryk Michalewski, Simon Osindero, and Tim Rock-
+täschel.
+Promptbreeder:
+Self-referential self-improvement via prompt evolution.
+arXiv preprint
+arXiv:2309.16797, 2023.
+[30] Angelica Chen, David Dohan, and David So. Evoprompting: Language models for code-level neural
+architecture search. Advances in Neural Information Processing Systems, 36:7787–7817, 2023.
+[31] Wendi Cui, Jiaxin Zhang, Zhuohang Li, Hao Sun, Damien Lopez, Kamalika Das, Bradley Malin, and
+Sricharan Kumar. PhaseEvo: Towards unified in-context prompt optimization for large language models.
+arXiv preprint arXiv:2402.11347, 2024.
+[32] Yongchao Chen, Jacob Arkin, Yilun Hao, Yang Zhang, Nicholas Roy, and Chuchu Fan. Prompt op-
+timization in multi-step tasks (PROMST): Integrating human feedback and heuristic-based sampling.
+In Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing, pages
+3859–3920, 2024.
+[33] Jill Baumann and Oliver Kramer. Evolutionary multi-objective optimization of large language model
+prompts for balancing sentiments. In International conference on the applications of evolutionary com-
+putation (part of evoStar), pages 212–224. Springer, 2024.
+[34] Chengzhe Feng, Yanan Sun, Ke Li, Pan Zhou, Jiancheng Lv, and Aojun Lu. Genetic auto-prompt learning
+for pre-trained code intelligence language models. arXiv preprint arXiv:2403.13588, 2024.
+[35] Melvin Wong, Thiago Rios, Stefan Menzel, and Yew Soon Ong. Generative AI-based prompt evolution
+engineering design optimization with vision-language model. arXiv preprint arXiv:2406.09143, 2024.
+[36] Beier Zhu, Yulei Niu, Yucheng Han, Yue Wu, and Hanwang Zhang. Prompt-aligned gradient for prompt
+tuning. In Proceedings of the IEEE/CVF International Conference on Computer Vision, pages 15659–
+15669, 2023.
+[37] Tianjun Zhang, Xuezhi Wang, Denny Zhou, Dale Schuurmans, and Joseph E Gonzalez. Tempera: Test-
+time prompting via reinforcement learning. arXiv preprint arXiv:2211.11890, 2022.
+[38] Shuyang Wang, Somayeh Moazeni, and Diego Klabjan.
+A sequential optimal learning approach to
+automated prompt engineering in large language models. arXiv preprint arXiv:2501.03508, 2025.
+[39] Hao Hao, Xiaoqun Zhang, and Aimin Zhou. Model uncertainty in evolutionary optimization and bayesian
+optimization: A comparative analysis. In 2024 IEEE Congress on Evolutionary Computation (CEC),
+pages 1–9. IEEE, 2024.
+[40] Virginia Aglietti, Ira Ktena, Jessica Schrouff, Eleni Sgouritsa, Francisco JR Ruiz, Alan Malek, Alexis
+Bellot, and Silvia Chiappa. Funbo: Discovering acquisition functions for bayesian optimization with
+funsearch. arXiv preprint arXiv:2406.04824, 2024.
+[41] Dikshit Chauhan, Hisao Ishibuchi, Kalyanmoy Deb, Anupam Trivedi, and Dipti Srinivasan. A review on
+bilevel optimization using evolutionary algorithms and machine learning approaches. IEEE Transactions
+on Evolutionary Computation, pages 1–1, 2026.
+[42] Laurits Tani, Diana Rand, Christian Veelken, and Mario Kadastik. Evolutionary algorithms for hyperpa-
+rameter optimization in machine learning for application in high energy physics. The European Physical
+Journal C, 81:1–9, 2021.
+[43] Jiahui Gao, Hang Xu, Han Shi, Xiaozhe Ren, Philip LH Yu, Xiaodan Liang, Xin Jiang, and Zhenguo
+Li. AutoBert-Zero: Evolving BERT backbone from scratch. In Proceedings of the AAAI Conference on
+Artificial Intelligence, volume 36, pages 10663–10671, 2022.
+36
+
+
+--- Page 37 ---
+[44] Vinod Ganesan, Gowtham Ramesh, and Pratyush Kumar. Supershaper: Task-agnostic super pre-training
+of BERT models with variable hidden dimensions. arXiv preprint arXiv:2110.04711, 2021.
+[45] David R. So, Chen Liang, and Quoc V. Le. The evolved transformer. In International Conference on
+Machine Learning (ICML), volume 97 of PMLR, pages 5877–5886, 2019.
+[46] Mojan Javaheripi, Gustavo de Rosa, Subhabrata Mukherjee, Shital Shah, Tomasz Religa, Caio Cesar
+Teodoro Mendes, Sebastien Bubeck, Farinaz Koushanfar, and Debadeepta Dey. LiteTransformerSearch:
+Training-free neural architecture search for efficient language models. Advances in Neural Information
+Processing Systems, 35:24254–24267, 2022.
+[47] Andreas Paraskeva, Joao Pedro Reis, Suzan Verberne, and Jan N van Rijn. Resource-constrained neural
+architecture search on language models: A case study. In 2nd Workshop on Advancing Neural Network
+Training: Computational Efficiency, Scalability, and Resource Optimization (WANT@ ICML 2024).
+[48] Indu Bala, Wathsala Karunarathne, and Lewis Mitchell. Optimizing feature selection by enhancing par-
+ticle swarm optimization with orthogonal initialization and crossover operator. Computers, Materials &
+Continua, 84(1):727–744, 2025.
+[49] Yupeng Chang, Xu Wang, Jindong Wang, Yuan Wu, Linyi Yang, Kaijie Zhu, Hao Chen, Xiaoyuan Yi,
+Cunxiang Wang, Yidong Wang, et al. A survey on evaluation of large language models. ACM Transac-
+tions on Intelligent Systems and Technology, 15(3):1–45, 2024.
+[50] Michal Pluhacek, Anezka Kazikova, Adam Viktorin, Tomas Kadavy, and Roman Senkerik. Investigat-
+ing the potential of ai-driven innovations for enhancing differential evolution in optimization tasks. In
+2023 IEEE International Conference on Systems, Man, and Cybernetics (SMC), pages 1070–1075. IEEE,
+2023.
+[51] Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog, M Pawan
+Kumar, Emilien Dupont, Francisco JR Ruiz, Jordan S Ellenberg, Pengming Wang, Omar Fawzi, et al.
+Mathematical discoveries from program search with large language models. Nature, 625(7995):468–475,
+2024.
+[52] Fei Liu, Tong Xialiang, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao Lu, and Qingfu Zhang.
+Evolution of heuristics: Towards efficient automatic algorithm design using large language model. In
+Ruslan Salakhutdinov, Zico Kolter, Katherine Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett,
+and Felix Berkenkamp, editors, Proceedings of the 41st International Conference on Machine Learning,
+volume 235 of Proceedings of Machine Learning Research, pages 32201–32223. PMLR, 21–27 Jul 2024.
+[53] Shunyu Yao, Fei Liu, Xi Lin, Zhichao Lu, Zhenkun Wang, and Qingfu Zhang. Multi-objective evolution
+of heuristic using large language model. In Proceedings of the AAAI Conference on Artificial Intelligence,
+volume 39, pages 27144–27152, 2025.
+[54] Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and
+Guojie Song. ReEVO: Large language models as hyper-heuristics with reflective evolution. Advances in
+Neural Information Processing Systems, 37:43571–43608, 2024.
+[55] Carola Doerr, Hao Wang, Furong Ye, Sander Van Rijn, and Thomas Bäck. IOHprofiler: A benchmarking
+and profiling tool for iterative optimization heuristics. arXiv preprint arXiv:1810.05281, 2018.
+[56] Jacob de Nobel, Furong Ye, Diederick Vermetten, Hao Wang, Carola Doerr, and Thomas Bäck. IOHex-
+perimenter: Benchmarking platform for iterative optimization heuristics. Evolutionary Computation,
+32(3):205–210, 2024.
+37
+
+
+--- Page 38 ---
+[57] Hao Wang, Diederick Vermetten, Furong Ye, Carola Doerr, and Thomas Bäck. IOHanalyzer: Detailed
+performance analyses for iterative optimization heuristics. ACM Transactions on Evolutionary Learning
+and Optimization, 2(1):1–29, 2022.
+[58] Niki van Stein, Diederick Vermetten, and Thomas Bäck. In-the-loop hyper-parameter optimization for
+LLM-based automated design of heuristics. ACM Transactions on Evolutionary Learning and Optimiza-
+tion, April 2025.
+[59] Tennison Liu, Nicolás Astorga, Nabeel Seedat, and Mihaela van der Schaar. Large language models to
+enhance bayesian optimization. arXiv preprint arXiv:2402.03921, 2024.
+[60] Alicja Martinek, Szymon Lukasik, and Amir H Gandomi.
+Large language models as tuning agents
+of metaheuristics. In In Proceedings of the 32nd European Symposium on Artificial Neural Networks,
+Computational Intelligence and Machine Learning (ESANN 2024), 2024.
+[61] Camilo Chacón Sartori, Christian Blum, Filippo Bistaffa, and Guillem Rodríguez Corominas. Meta-
+heuristics and large language models join forces: Toward an integrated optimization approach. IEEE
+Access, 13:2058–2079, 2024.
+[62] Rui Zhong, Yuefeng Xu, Chao Zhang, and Jun Yu. Leveraging large language model to generate a novel
+metaheuristic algorithm with crispe framework. Cluster Computing, 27(10):13835–13869, 2024.
+[63] Fangfang Zhang, Yi Mei, Su Nguyen, Kay Chen Tan, and Mengjie Zhang.
+Multitask genetic
+programming-based generative hyperheuristics: A case study in dynamic scheduling. IEEE Transac-
+tions on Cybernetics, 52(10):10515–10528, 2021.
+[64] Fangfang Zhang, Yi Mei, Su Nguyen, and Mengjie Zhang. Multitask multiobjective genetic programming
+for automated scheduling heuristic learning in dynamic flexible job-shop scheduling. IEEE Transactions
+on Cybernetics, 53(7):4473–4486, 2022.
+[65] Maedeh Dashti, Taghi Javdani Gandomani, Dariush Hasanpoor Adeh, Hazura Zulzalil, and Abu
+Bakar Md Sultan. LEMABE: a novel framework to improve analogy-based software cost estimation
+using learnable evolution model. PeerJ Computer Science, 8:e800, 2022.
+[66] Clint Morris, Michael Jurado, and Jason Zutty. LLM guided evolution-the automation of models advanc-
+ing models. In Proceedings of the Genetic and Evolutionary Computation Conference, pages 377–384,
+2024.
+[67] Mitchell A. Potter and Kenneth A. De Jong. Cooperative coevolution: An architecture for evolving
+coadapted subcomponents. Evolutionary Computation, 8(1):1–29, 2000.
+[68] Agoston E Eiben and James E Smith. Introduction to evolutionary computing. Springer, 2015.
+[69] Qi Zhao, Bai Yan, Xianglong Chen, Taiwei Hu, Shi Cheng, and Yuhui Shi. Autoopt: A general framework
+for automatically designing metaheuristic optimization algorithms with diverse structures. arXiv preprint
+arXiv:2204.00998, 2022.
+[70] Rindranirina Ramamonjison, Timothy Yu, Raymond Li, Haley Li, Giuseppe Carenini, Bissan Ghaddar,
+Shiqi He, Mahdi Mostajabdaveh, Amin Banitalebi-Dehkordi, Zirui Zhou, et al. Nl4opt competition:
+Formulating optimization problems based on their natural language descriptions. In NeurIPS 2022 Com-
+petition Track, pages 189–203. PMLR, 2023.
+[71] Dimitris Bertsimas and Georgios Margaritis. Robust and adaptive optimization under a large language
+model lens. arXiv preprint arXiv:2501.00568, 2024.
+38
+
+
+--- Page 39 ---
+[72] Alejandro Barredo Arrieta, Natalia Díaz-Rodríguez, Javier Del Ser, Adrien Bennetot, Siham Tabik, Al-
+berto Barbado, Salvador García, Sergio Gil-López, Daniel Molina, Richard Benjamins, et al. Explainable
+artificial intelligence (xai): Concepts, taxonomies, opportunities and challenges toward responsible ai.
+Information fusion, 58:82–115, 2020.
+[73] Nitin Gupta, Indu Bala, Bapi Dutta, Luis Martínez, and Anupam Yadav. Enhancing explainability and re-
+liable decision-making in particle swarm optimization through communication topologies. arXiv preprint
+arXiv:2504.12803, 2025.
+[74] Haiyan Zhao, Hanjie Chen, Fan Yang, Ninghao Liu, Huiqi Deng, Hengyi Cai, Shuaiqiang Wang, Dawei
+Yin, and Mengnan Du. Explainability for large language models: A survey. ACM Transactions on
+Intelligent Systems and Technology, 15(2):1–38, 2024.
+[75] Tim Miller. Explanation in artificial intelligence: Insights from the social sciences. Artificial Intelligence,
+267:1–38, 2019.
+[76] Saleema Amershi, Dan Weld, Mihaela Vorvoreanu, Adam Fourney, Besmira Nushi, Penny Collisson,
+Jina Suh, Shamsi Iqbal, Paul N Bennett, Kori Inkpen, et al. Guidelines for human-ai interaction. In
+Proceedings of the 2019 CHI Conference on Human Factors in Computing Systems, pages 1–13, 2019.
+[77] Léonard Boussioux, Jacqueline N Lane, Miaomiao Zhang, Vladimir Jacimovic, and Karim R Lakhani.
+The crowdless future? generative ai and creative problem-solving. Organization Science, 35(5):1589–
+1607, 2024.
+[78] Haoran Gu, Handing Wang, Yi Mei, Mengjie Zhang, and Yaochu Jin.
+Overlooked safety vulnera-
+bility in llms: Malicious intelligent optimization algorithm request and its jailbreak.
+arXiv preprint
+arXiv:2601.00213, 2026.
+[79] Mathias K Nilsen, Tønnes F Nygaard, and Kai Olav Ellefsen. Reward tampering and evolutionary com-
+putation: a study of concrete ai-safety problems using evolutionary algorithms. Genetic Programming
+and Evolvable Machines, 24(2):12, 2023.
+[80] Kevin Sim, Quentin Renau, and Emma Hart. Beyond the hype: Benchmarking llm-evolved heuristics
+for bin packing. In International Conference on the Applications of Evolutionary Computation (Part of
+EvoStar), pages 386–402. Springer, 2025.
+[81] Sara Hajari and Marcus Gallagher. Searching for benchmark problem instances from data-driven opti-
+misation. In Proceedings of the Genetic and Evolutionary Computation Conference Companion, pages
+139–142, 2024.
+[82] Anne Auger, Peter AN Bosman, Pascal Kerschke, Darrell Whitley, and Lennart Schäpermeier. Chal-
+lenges in benchmarking optimization heuristics (dagstuhl seminar 23251). Dagstuhl Reports, 13(6):55–
+80, 2024.
+[83] Thomas Bartz-Beielstein, Carola Doerr, Daan van den Berg, Jakob Bossek, Sowmya Chandrasekaran,
+Tome Eftimov, Andreas Fischbach, Pascal Kerschke, William La Cava, Manuel Lopez-Ibanez, et al.
+Benchmarking in optimization: Best practice and open issues. arXiv preprint arXiv:2007.03488, 2020.
+[84] Yihong Dong, Xue Jiang, Huanyu Liu, Zhi Jin, Bin Gu, Mengfei Yang, and Ge Li. Generalization or
+memorization: Data contamination and trustworthy evaluation for large language models. arXiv preprint
+arXiv:2402.15938, 2024.
+[85] Sayash Kapoor, Benedikt Stroebl, Zachary S Siegel, Nitya Nadgir, and Arvind Narayanan. Ai agents that
+matter. arXiv preprint arXiv:2407.01502, 2024.
+39
+
+
+--- Page 40 ---
+[86] Atticus Geiger, Duligur Ibeling, Amir Zur, Maheep Chaudhary, Sonakshi Chauhan, Jing Huang, Arya-
+man Arora, Zhengxuan Wu, Noah Goodman, Christopher Potts, et al. Causal abstraction: A theoretical
+foundation for mechanistic interpretability. Journal of Machine Learning Research, 26(83):1–64, 2025.
+[87] Jundong Xu, Hao Fei, Liangming Pan, Qian Liu, Mong-Li Lee, and Wynne Hsu. Faithful logical rea-
+soning via symbolic chain-of-thought. In Proceedings of the 62nd Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers), pages 13326–13365, 2024.
+[88] Jannik Brinkmann, Abhay Sheshadri, Victor Levoso, Paul Swoboda, and Christian Bartelt. A mechanistic
+analysis of a transformer trained on a symbolic multi-step reasoning task. In Findings of the Association
+for Computational Linguistics: ACL 2024, pages 4082–4102, 2024.
+[89] Shriyank Somvanshi, Md Monzurul Islam, Amir Rafe, Anannya Ghosh Tusti, Arka Chakraborty, Anika
+Baitullah, Tausif Islam Chowdhury, Nawaf Alnawmasi, Anandi Dutta, and Subasish Das. Bridging the
+black box: a survey on mechanistic interpretability in ai. ACM Computing Surveys, 58(8):1–35, 2026.
+[90] Aaron Klein, Jacek Golebiowski, Xingchen Ma, Valerio Perrone, and Cedric Archambeau. Structural
+pruning of pre-trained language models via neural architecture search. arXiv preprint arXiv:2405.02267,
+2024.
+[91] Han Xiang Choong, Yew-Soon Ong, Abhishek Gupta, Caishun Chen, and Ray Lim. Jack and masters
+of all trades: one-pass learning sets of model sets from large pre-trained models. IEEE Computational
+Intelligence Magazine, 18(3):29–40, 2023.
+[92] Caiyang Yu, Xianggen Liu, Yifan Wang, Yun Liu, Wentao Feng, Xiong Deng, Chenwei Tang, and
+Jiancheng Lv. GPT-NAS: Evolutionary neural architecture search with the generative pre-trained model.
+arXiv preprint arXiv:2305.05351, 2023.
+[93] Jonas Oppenlaender, Rhema Linder, and Johanna Silvennoinen. Prompting ai art: An investigation into
+the creative skill of prompt engineering. International Journal of Human–Computer Interaction, pages
+1–23, 2024.
+[94] Qinyuan Ye, Mohamed Ahmed, Reid Pryzant, and Fereshte Khani. Prompt engineering a prompt engi-
+neer. In Findings of the Association for Computational Linguistics: ACL 2024, pages 355–385, 2024.
+[95] Bingsheng Yao, Guiming Chen, Ruishi Zou, Yuxuan Lu, Jiachen Li, Shao Zhang, Yisi Sang, Sijia Liu,
+James Hendler, and Dakuo Wang. More samples or more prompts? exploring effective in-context sam-
+pling for llm few-shot prompt engineering. arXiv preprint arXiv:2311.09782, 2023.
+[96] Shizhe Diao, Pengcheng Wang, Yong Lin, Rui Pan, Xiang Liu, and Tong Zhang. Active prompting
+with chain-of-thought for large language models. In Proceedings of the 62nd Annual Meeting of the
+Association for Computational Linguistics (Volume 1: Long Papers), pages 1330–1350, 2024.
+[97] Siyuan Wang, Jianming Zheng, Fei Cai, Chengyu Song, and Xueshan Luo. Msprompt: Multi-step prompt
+learning for debiasing few-shot event detection. Information Processing & Management, 60(6):103509,
+2023.
+40
