@@ -1,10 +1,29 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-09-03
+**Last Updated:** 2026-09-08
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-08 (2 papers)
+
+### [RideSkill: A Hierarchical Algorithm for Generalized Ride Sharing with LLM-Driven Automatic Evolution](https://arxiv.org/abs/2609.02250)
+
+**2026-09-02** | Huawei, The Hong Kong University of Science and Technology | M=8 P=8 I=9 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Hierarchical method with LLM-assisted automatic evolutionary algorithm for skill repository, combiner, and repositioner design | *LLM role:* evolutionary_search
+
+> This paper proposes RideSkill, a hierarchical ride-sharing dispatch algorithm where a skill repository, a skill combiner, and a vehicle repositioner are all generated offline via LLM-assisted evolutionary search. The results are backed by strong empirical evidence on large-scale NYC data (up to 1500 vehicles), outperforming MARL and prior LLM-based heuristics by 11-40% in reward while drastically reducing detour times. The key insight is the integration of a self-check audit loop where the LLM evaluates empirical rollout metrics against its intended design, alongside a zero-shot combiner that probes unknown objective functions at runtime to dynamically mix frozen skills. This is highly relevant for LLM evolutionary search and multi-agent optimization, as the self-auditing mechanism and multi-task fitness normalization directly address sample efficiency and search signal quality in automated algorithm design.
+
+### [CoSkill: Joint Reinforcement Learning of Reasoning and Meta-Skill Agents for Hierarchical Skill Evolution](https://arxiv.org/abs/2609.04865)
+
+**2026-09-04** | ByteDance, Institute of Automation Chinese Academy of Sciences, Renmin University of China | M=8 P=8 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Unified multi-agent RL with shared-parameter MSMDP and GiGPO for joint reasoning and meta-skill evolution | *LLM role:* Reasoning Agent, Meta-Skill Agent
+
+> CoSkill introduces a multi-agent reinforcement learning framework where a Reasoning Agent and a Meta-Skill Agent are jointly trained to co-evolve a hierarchical skill library alongside the reasoning policy. The results are rigorously backed by empirical data, achieving state-of-the-art success rates of 98.4% on ALFWorld and 90.6% on WebShop while demonstrating superior sample efficiency. The key insight is treating the skill editor (the Meta-Skill Agent) as a learnable policy rather than a frozen LLM prompt, updating it via RL using post-edit verification success as a delayed reward. This is highly relevant for LLM evolutionary search and multi-agent optimization, as it provides a concrete, RL-backed methodology for 'evolving the evolver' and maintaining a high-utility persistent memory of discovered procedures.
+
 
 #### 2026-09-03 (1 papers)
 

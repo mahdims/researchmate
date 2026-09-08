@@ -1,10 +1,29 @@
 # Living Review: Generative AI for OR
 
-**Last Updated:** 2026-09-03
+**Last Updated:** 2026-09-08
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-08 (2 papers)
+
+### [Ask Before You Optimize: Dynamic Pre-Formulation Clarification for Interactive Optimization](https://arxiv.org/abs/2609.05258)
+
+**2026-09-04** | Shanghai Jiao Tong University, Cardinal Operations | M=7 P=9 I=8 **MUST-READ** *discuss*
+
+*Method:* Interactive Optimization (InterOPT), a two-stage framework comprising Dynamic Gap Search (Stage 1) and Gap-Guided Action Search (Stage 2) | *LLM role:* decomposition_guide, heuristic_generator, evaluator
+
+> Ge et al. introduce OR-Clarify, a benchmark evaluating whether LLMs can identify missing formulation-critical information and ask clarifying questions before generating an optimization model. The authors also propose InterOPT, a two-stage framework that tracks unresolved formulation gaps to guide questioning, which improves exact requirement recovery by 16.9% over baselines in choice-based settings, though it struggles to dominate free-form interactions. The key insight is the benchmark construction pipeline: systematically withholding specific facts (e.g., objective direction, hard vs. soft constraints) from a complete OR specification to explicitly measure an agent's 'silent assumptions' and premature readiness. This is highly relevant for our work on ambiguity-grounded OR benchmarking, as the metrics for exact slot recovery and silent assumption tracking can be directly integrated into our evaluation pipelines.
+
+### [Reinforcement Learning Enhanced LLM Agents for Complex Vehicle Routing Problems](https://arxiv.org/abs/2609.00859)
+
+**2026-09-01** | National University of Singapore, Sun Yat-sen University | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Multi-agent framework (RLEA) with a neural Planner trained with Soft Q-learning, an LLM-based Executor, and an evolutionary memory module with retrieval-augmented generation | *LLM role:* code_writer, decomposition_guide, evaluator, evolutionary_search
+
+> This paper proposes RLEA, a multi-agent framework that uses a lightweight neural planner trained via Soft Q-learning to orchestrate LLM actions (refinement, RAG, and memory retrieval) for automatically generating solver-ready code for complex VRP variants. The results are backed by strong empirical evidence, achieving a 62.5% success rate on 48 VRP variants using OR-Tools, outperforming the state-of-the-art DRoC by 16.67% while reducing runtime errors. The key insight is that instead of using expensive LLM calls for step-by-step decision making, training a small language model with RL to act as a policy network for selecting agent actions significantly reduces latency and improves exploration. This is highly relevant for LLM evolutionary search and multi-agent optimization, as the architecture of an RL-trained planner combined with an evolving memory pool directly addresses sample efficiency and continuous learning in automated algorithm design.
+
 
 #### 2026-09-03 (2 papers)
 
