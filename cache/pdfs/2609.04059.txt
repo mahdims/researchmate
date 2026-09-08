@@ -1,0 +1,2143 @@
+--- Page 1 ---
+Batched Pandora’s Box
+Shaddin Dughmi ∗
+Yusuf Hakan Kalayci †
+Vasilis Livanos ‡
+Aditya Prasad §
+Abstract
+Motivated by numerous parallelizable stochastic search problems, most notable and timely
+among them being LLM inference-time scaling, we propose and study batched versions of the
+Pandora’s Box problem of Weitzman. In particular, boxes are opened in capacity-constrained
+batches, each batch has a setup cost, and all rewards in a batch are revealed together. We
+consider two different variants, motivated by different application environments: one where
+boxes are reusable (i.e., can provide multiple i.i.d. samples) and another where they are not.
+For both variants we rule out most “simple” natural heuristics, and also formally prove NP-
+hardness of approximation in the traditional sense. We then relax the problem to allow bi-criteria
+approximations, with respect to both rewards and setup costs, where we exhibit constant
+approximation algorithms for both the reusable and non-reusable settings. This is obtained
+through a linear-programming relaxation of Pandora’s Box problem, followed by randomized or
+Pipage rounding.
+1
+Introduction
+In several stochastic search problems, before we find a solution of sufficient quality we need to pay
+a search cost. In marketing, a platform tests different advertisements before committing to the
+best-performing one; in hyper-parameter tuning, a practitioner trains their model with a menu of
+settings before selecting a model; in inference-time reasoning, an inference system issues multiple
+LLM queries or decoding strategies before choosing the best response. The classical Pandora’s Box
+problem, originally studied by Weitzman [38], captures the sequential version of this tradeoff. Each
+option has an inspection cost and an unknown reward, and the decision maker adaptively decides
+which option to inspect next and when to stop.
+In many of these applications, however, inspections are naturally parallelized. Ad variants in A-B
+testing are exposed to users in cohorts, experiments are tested on a pool of machines, and queries to
+an LLM are submitted together to reduce latency. This parallelism creates a batched information
+structure, as the policy must commit to a set of inspections before seeing any of their outcomes.
+A batch may also have a setup cost, capturing the overhead of launching a new experimental
+framework, allocating computing resources, or coordinating a marketing campaign. Thus batching
+trades off the cost of latency with the savings provided by adaptivity.
+∗University of Southern California, Email: shaddin@usc.edu. Supported by the Air Force Office of Scientific
+Research under award number FA9550-24-1-0261. This work was done in part while the author was on sabbatical as
+the Carter and Tania Neild visiting professor at Northwestern University, as well as a visiting professor in the Data
+Science Institute at the University of Chicago.
+†University of Southern California, Email: kalayci@usc.edu. Supported by the Air Force Office of Scientific
+Research under award number FA9550-24-1-0261.
+‡University of Southern California, Email: vas.livanos@gmail.com.
+Supported by the Air Force Office of
+Scientific Research under award number FA9550-24-1-0261. This work was done in part while the author was visiting
+Northwestern University.
+§University of Chicago, Email: adityaprasad@uchicago.edu.
+1
+arXiv:2609.04059v1  [cs.DS]  3 Sep 2026
+
+
+--- Page 2 ---
+While batched feedback has been studied in bandit problems [31, 18, 23, 36], it has seen
+comparatively less study in the Pandora’s Box problem. We initiate this direction by studying a
+batched version of the Pandora’s Box problem. In the Batched Pandora’s Box model, we are given n
+boxes, each with a distribution of a hidden reward Vi, as well as an opening cost ci. A policy groups
+boxes to create the next batch to be opened, and a feasible batch contains at most k boxes for a
+given batch capacity k and costs a fixed setup cost T to open in addition to the individual opening
+costs. Once a batch is opened, all rewards in the batch are revealed simultaneously. One can then
+choose to stop and obtain the maximum reward observed over all opened batches or continue to
+open another batch.
+We introduce two variants of this model: The non-reusable setting where an opened box is
+consumed and cannot be opened again, and the reusable setting where each box can be opened
+multiple times and provides a fresh i.i.d. sample each time. The distinction matches the difference
+between one-time opportunities, such as allocating a consumer cohort to an ad variant, and repeatable
+experiments, such as running additional inference trials of the same LLM. Although this model
+is a direct analogue of the classical problem with delayed feedback, the resulting optimization
+problem differs significantly from classical Pandora’s Box, requiring us to examine which elements
+of Weitzman’s solution to the classical problem carry over to the batched model.
+1.1
+Our Contributions
+We organize our results around three questions raised by batched feedback.
+What survives of Weitzman’s index rule under batched feedback?
+The answer depends
+on reusability. For non-reusable boxes, adaptive batch formation is useful: a policy can choose
+later batches after seeing earlier outcomes and thereby outperform every fixed menu of disjoint
+batches. This advantage is bounded, however. We prove that every adaptive non-reusable policy
+has a fixed-menu counterpart with at least half its value, using a random root-to-leaf path of the
+adaptive decision tree in the spirit of stochastic probing [25, 10]. For reusable boxes, we can recover
+Weitzman’s index structure. Each feasible batch a has a reservation value σ(a), and an optimal
+policy repeatedly opens a maximum-reservation batch until its realized value exceeds that threshold.
+Is exact or ordinary approximation tractable?
+The answer is negative, in a strong sense.
+Specifically, exact optimization is NP-hard for the non-reusable problem for every fixed finite
+batch capacity k ≥3. Moreover, with variable batch capacity, and even with k = ∞, both the
+non-reusable and reusable models have a sign gap: it is NP-hard to distinguish OPT = 0 from
+OPT > 0. The reductions come from Subset Product [19], where the input consists of integers
+b1, . . . , bn and a target Q, and the question is whether some subset has product exactly Q. For each
+bi, we create a box with a two-point distribution that gives value M with probability 1 −1/bi and
+value 0 with probability 1/bi. Hence a batch corresponding to a subset S fails with probability
+1/ Q
+i∈S bi. By calibrating the setup and item costs, we make it so that a batch has positive surplus
+exactly when the product of the constituent boxes’ bi’s is the target Q. Therefore, finding any
+positive-value policy certifies a YES instance of Subset Product. This sign gap rules out ordinary
+multiplicative approximation under the original costs, since any positive approximation guarantee
+would distinguish zero-optimum instances from positive-optimum instances.
+Can a discounted-cost relaxation recover useful algorithmic guarantees?
+The sign gap
+motivates a bi-criteria benchmark: compare against the original-cost optimum, but evaluate the
+2
+
+
+--- Page 3 ---
+returned policy with discounted costs. For a policy π, with maximum observed value Mπ and total
+cost Cπ, let
+valλ(π) = E[Mπ] −λ E[Cπ].
+An (α, λ) discounted-cost bi-criteria guarantee means that, for every ε > 0, there is an algorithm
+returning an efficient policy bπ = bπ(ε) with
+valλ(bπ) ≥α OPT1 −ε,
+where OPT1 is the expected value of the optimal adaptive policy with the original (non-discounted)
+costs. For finite-support distributions, our algorithms for both variants are based on rounding a
+linear programming relaxation of the batched problem. In the non-reusable model, the LP records
+opening probabilities, expected batch count, and probabilities that each box is the maximum in a
+batch, and upper bounds every nonempty adaptive policy. In a solution of this LP, the batch count
+can be fractional, and so we need to round it first to an integral value. Then, we use dependent
+rounding to partition the boxes into legal batches. We incur a loss of 2(
+√
+2 −1) from the batch
+count rounding and of 1 −1/e from the correlation gap of the dependent rounding scheme, yielding
+in total
+valαNR(bπ) ≥αNR OPT1 −ε,
+where
+αNR = (1 −1/e)2(
+√
+2 −1).
+In the reusable model, we reduce the problem to finding a single batch, corresponding to a multi-set
+of boxes, to sample repeatedly until another sample no longer pays for its cost. We design a
+feasibility LP RLPτ based on a candidate reservation value of the desired batch that is feasible when
+there is a batch certifying a reservation value at least τ. Binary search finds the largest certified
+threshold up to a small additive error, and independent slot rounding turns the certificate into an
+integral batch. In total, we only incur a rounding loss of αR = 1 −1/e, giving a stronger bound of
+valαR(bπ) ≥OPT1 −ε.
+1.2
+Related Work
+Pandora’s Box and costly inspection.
+Weitzman’s seminal work [38] initiated study of the
+Pandora’s Box setting and showed that independent boxes with inspection costs admit an optimal
+reservation-value policy. Subsequent work extends this costly-search view in several directions,
+including generalized objectives [30], market-search coordination [28], nonobligatory inspection
+[7, 17, 6, 33], combinatorial or online feasibility constraints [34, 8, 5, 9, 13, 12], and correlated
+or sample-access variants [15, 14, 22]. Another recent line studies online and learning variants of
+Pandora’s Box under online-arrival, contextual, bandit, semi-bandit, and LLM-motivated feedback
+models [16, 21, 3, 20, 1, 29, 27, 4]. These works mainly change the distributional knowledge, feedback
+available across repeated rounds, contextual structure, or feasible selections. In contrast, our model
+is a known-distribution, single-instance Pandora’s Box problem with independent rewards. We keep
+the best-observed-value objective and instead change the feedback structure: inspections must be
+launched in capacity-limited batches with setup costs.
+Stochastic probing and rounding.
+Our structural and algorithmic tools also connect to
+stochastic probing and submodular rounding. Stochastic probing studies the value of adaptivity
+when random elements are probed subject to feasibility constraints, including constant adaptivity
+gaps for submodular and XOS objectives and near-optimal results for multi-value probing [25, 10].
+Our non-reusable adaptivity-gap proof uses the same random-path perspective, but with Pandora-
+specific accounting through reservation values, capped rewards, and fixed-menu Pandora policies.
+3
+
+
+--- Page 4 ---
+The LP algorithms use standard correlation-gap and dependent-rounding ideas, including pipage
+rounding and correlation-robust stochastic optimization [11, 2].
+Delayed feedback.
+Delayed feedback has been studied as a natural model in bandits and online
+learning. One line of work studies how late observations affect regret in stochastic, Bayesian, or
+adversarial bandits, including general delay reductions, delayed conversions, anonymous aggregated
+rewards, and unrestricted delays [24, 26, 37, 32, 35, 39]. Another line studies batched or parallel
+experimentation, where actions are chosen in groups before feedback from the group is available, for
+regret minimization, best-arm identification, or Bayesian optimization [31, 18, 23, 36].
+These works share the practical obstruction that decisions may have to be made before earlier
+outcomes are observed, but their objective is typically statistical: regret or sample complexity. Our
+model is a single-instance search problem. Here delayed feedback enters through capacity-constrained
+batches with setup costs, so the delay changes the economics and commitment structure of costly
+inspection rather than only the rate at which a learner receives information.
+2
+Preliminaries
+In the classical Pandora’s Box problem, there are n boxes numbered [n] = {1, . . . , n}. Box i has
+an independent non-negative reward Vi with finite mean and a deterministic opening cost ci ≥0.
+Opening box i costs ci and immediately reveals Vi. Weitzman’s rule assigns each box a reservation
+value
+τi = sup
+n
+τ ∈R : E
+(Vi −τ)+ ≥ci
+o
+,
+opens boxes in decreasing order of τi, and stops when the best observed reward is at least as large
+as the largest remaining reservation value [38].
+Model.
+We study a batched version of this problem. We group the boxes into batches where each
+batch contains at most k boxes and, to open a nonempty batch, we have to pay a setup cost T ≥0
+in addition to the individual opening costs. When a batch is opened, all rewards in it are revealed
+together. We consider two variants: a non-reusable model, as in the classical problem, where opened
+boxes are consumed and thus batches partition the boxes, and a reusable model, where each box
+can provide multiple i.i.d. samples and thus batches correspond to multisets of boxes.
+Definition 2.1 (Non-Reusable Batched Pandora’s Box, BP(T, k)). A feasible batch is a nonempty
+subset B of currently unopened boxes with |B| ≤k. Opening B costs
+K(B) = T +
+X
+i∈B
+ci,
+reveals (Vi)i∈B, and consumes all boxes in B. If k = ∞, the cardinality constraint is omitted.
+Since the batches partition the n boxes in the non-reusable model, BP(T, k) is identical to
+BP(T, n) whenever k ≥n.
+Definition 2.2 (Reusable Batched Pandora’s Box, RBP(T, k)). Each box type i ∈[n] has a strictly
+positive sampling cost ci > 0.1 A feasible reusable batch is a vector a ∈Zn
+≥0 of multiplicities with
+1 ≤∥a∥1 ≤k. Opening a costs
+K(a) = T +
+X
+i
+aici
+1This assumption is relevant only when k = ∞; it rules out degenerate instances in which arbitrarily many copies
+of a zero-cost type can be included without increasing the batch cost.
+4
+
+
+--- Page 5 ---
+and draws ai i.i.d. samples of type i. The reward observed in batch a is
+Xa = max
+i∈[n] max
+1≤r≤ai Vi,r,
+where Vi,r denotes the r-th sample of type i. Since boxes (and thus batches) are reusable, they
+remain available to be used in later rounds. If k = ∞, the cardinality constraint is omitted.
+For a policy π in any of these models, let Mπ be the maximum reward observed by the policy,
+with Mπ = 0 if no box is opened, and let Cπ be the total cost paid, including setup and individual
+opening costs. As in the classical problem, we evaluate the performance of a policy π by its expected
+maximum reward minus its expected total cost. We define the discounted-cost value
+valλ(π) = E[Mπ] −λ E[Cπ],
+where λ ∈[0, 1]. Thus, λ = 1 corresponds to the original-cost objective, while λ < 1 corresponds
+to evaluating the policy after discounting the costs. We refer to val1(π) as the utility of policy
+π. Similarly, the utility of a batch — also called its one-shot surplus — is its expected maximum
+reward minus its opening cost. We write OPT1 for the optimal original-cost value, taking the empty
+policy when the optimum is zero. The source of the main departure of our batched model from the
+classical Pandora’s Box is the setup cost.
+Observation 2.3. When T = 0, any chosen batch can be simulated by opening its boxes sequentially,
+ignoring intermediate observations until the batch is complete; the same applies to the fresh samples
+in a reusable batch. Since singleton batches (batches of size 1) are feasible, for every k ≥1, BP(0, k)
+has the classical singleton value (i.e. BP(0, k) = BP(0, 1)), and if ci > 0 for every i, then RBP(0, k)
+has the reusable singleton value (i.e. RBP(0, k) = RBP(0, 1)).
+Computational considerations.
+We represent each distribution by a finite list of value-
+probability pairs (viℓ, piℓ), where viℓ≥0, piℓ> 0, and P
+ℓpiℓ= 1. We use Li for the (non-zero)
+support of the distribution of box i, i.e. ℓ∈Li =⇒viℓ> 0. The hardness reductions use two-point
+distributions, while all approximation statements are stated for this finite-support input model.
+Submodular functions.
+For a set function f : 2[n] →R≥0, we say that f is normalized if
+f(∅) = 0, monotone if f(A) ≤f(B) for all A ⊆B, and submodular if, for all A ⊆B ⊆[n] and
+i /∈B,
+f(A ∪{i}) −f(A) ≥f(B ∪{i}) −f(B).
+The function F(x) = E[f(Sx)] is called the multilinear extension of f, where Sx includes each
+element i independently with probability xi.
+3
+Structural Observations
+We begin by examining how the index-based structure of Weitzman’s policy changes under batching.
+A natural first attempt greedily merges boxes in order of decreasing reservation values. We show
+that this type of sort-and-merge consecutive boxes policy fails badly: in our construction, the only
+positive utility batch combines a non-consecutive group of boxes. Here, the optimal policy’s batches
+can be made arbitrarily far apart. This rules out both greedy and dynamic programming approaches
+for partitioning the boxes into consecutive batches in the reservation-value order.
+5
+
+
+--- Page 6 ---
+Next, we examine the strength of adaptivity. In the non-reusable model, we present an example
+that establishes a gap between the value attained by adaptive policies and fixed-menu policies that
+commit to a partition of boxes into batches and run Weitzman’s policy on the fixed batches. Then,
+we show that this adaptivity gap between the two types of policies can be at most a factor of 2.
+Finally, we show that in the reusable setting, there is no gap between the optimal adaptive and
+non-adaptive policy. As a nice byproduct, we recover an index principle in the style of Weitzman:
+specifically, the optimal policy repeats the batch with the highest reservation value until the batch
+value exceeds the reservation threshold.
+3.1
+Failure of Simple Batching Rules
+A natural first attempt is to import Weitzman’s ordering rule into the batched problem. Compute
+each box’s reservation value as if it were opened alone, sort boxes in decreasing order of these
+values, and then form batches from consecutive blocks of this order. This preserves the intuition
+that high-index boxes should be inspected early and, in the batched setting, possibly inspected
+together. The next example shows that this rule misses a batched effect: setup costs can make two
+separated boxes valuable together even though every consecutive batch in the reservation-value
+order is unprofitable.
+Take T = 10 and k = 2.
+Let A have item cost cA = 1, with Pr[VA = 100] = 0.1 and
+Pr[VA = 0] = 0.9. Let B be deterministic with value 9, with item cost cB = 1. Individually, neither
+box pays for the setup cost. However, together they have expected maximum
+E[max{VA, VB}] = 0.1 · 100 + 0.9 · 9 = 18.1,
+so the batch {A, B} has positive utility. We will design the instance so that the target boxes A and
+B will be arbitrarily far apart under Weitzman’s reservation-value ordering.
+Now consider a deterministic decoy box D. Let D have value 100 and item cost cD = 91. Its
+reservation value is worse than A’s but better than B’s, so the sorted order is A ≻D ≻B. At the
+same time, D never contributes a useful net value: it duplicates the high outcome of A, but its item
+cost is almost as large as its value. One can verify that every feasible consecutive batch has negative
+utility, while {A, B} has positive utility. Therefore, no consecutive batching algorithm, whether
+greedy or based on dynamic programming over intervals, can obtain positive utility on this example.
+The exact calculations are given in Section A.1, which also proves a stronger bi-criteria lower bound:
+for every batch capacity k ≥2 and every α > 1/2, no algorithm restricted to consecutive batches in
+the reservation-value order can guarantee an (α, α)-bi-criteria approximation.
+3.2
+Non-Reusable Model: Adaptivity Gap
+A fixed-menu policy first commits to a disjoint family F of feasible batches. It then treats each
+batch B ∈F as one box in a finite classical Pandora instance, with reward XB = maxi∈B Vi and cost
+K(B), and applies Weitzman’s rule. Let OPTfix(T, k) denote the best value of any such fixed-menu
+policy. This benchmark preserves the Pandora stopping rule while removing the branching structure
+of adaptive batch choice.
+The natural question is whether the best fixed menu can match the value of the best adaptive
+policy. For k = 1 the answer is yes, by the classical Pandora rule. For larger batches, fixed menus
+lose the ability to branch on an early observation before deciding which later batch to open. The
+following example shows that this restriction can reduce value.
+Example 3.1 (Adaptive branching can help). Consider three boxes with setup cost T = 1/5 and
+batch capacity k = 2. Box 1 is deterministic with value 1/2. Box 2 is 0 with probability 2/5, 1/2
+6
+
+
+--- Page 7 ---
+with probability 2/5, and 9 with probability 1/5. Box 3 is 10 with probability 1/5, and 0 otherwise.
+The item costs are c1 = c2 = 1
+5 and c3 = 1.
+The adaptive policy first opens box 2. If box 2 realizes as 9, the policy stops. If box 2 realizes
+as 1/2, it opens box 3 alone. If box 2 realizes as 0, it opens the batch {1, 3}. The point is that box
+1 is useful only if box 3 realizes as 0, i.e. when we don’t already have a guarantee from box 2.
+A fixed menu cannot make this branch-dependent choice. It must decide in advance whether box
+1 is grouped with box 3, separated from box 3, or grouped with box 2. For this instance, the adaptive
+policy has value 57/25 = 2.28, whereas the best fixed-menu policy has value 279/125 = 2.232. Thus
+adaptive branching strictly improves over every fixed menu. Appendix A.2 gives a tuned version of
+the same signal/fallback/risky-box template, with all parameters rounded to two decimal places; in
+that instance, the adaptive policy attains about 1.193 times the value of the best fixed-menu policy.
+Nevertheless, the value of adaptive batch formation is bounded: every adaptive policy is within
+a constant factor of the best fixed-menu policy.
+Theorem 3.2 (Non-Reusable Adaptivity Gap). For every T and k,
+OPTBP(T,k)
+1
+≤2 · OPTfix(T, k).
+The proof is existential and is given in Section A. It utilizes a random-path rounding argument
+in the style of stochastic probing [25, 10]: one samples a root-to-leaf path of the adaptive decision
+tree on an independent “ghost” instance and then plays that fixed path on the real instance. For
+this style of argument, we must ensure that along any realization of box values, the batches consist
+of disjoint sets of boxes. Then, we use Weitzman’s capped-value analysis to turn this path into a
+fixed-menu policy losing at most a factor two.
+3.3
+Reusable boxes: one repeated batch
+We turn our attention to the reusable setting. Since opening a reusable batch does not consume
+future access to it, each reusable batch can be viewed as a box with infinitely many independent
+copies. The dynamic problem therefore reduces to identifying the batch with the largest reservation
+value. For a reusable batch a, recall that Xa is the best reward among the fresh copies drawn by
+opening a, and K(a) is its setup-plus-sampling cost. If 0 < K(a) ≤E[Xa], define its reservation
+value σ(a) by K(a) = E
+(Xa −σ(a))+. Batches with K(a) > E[Xa] are overpriced. Let
+σ⋆= max
+
+{0} ∪{σ(a) : a is feasible and not overpriced}
+
+.
+Theorem 3.3 (Reusable Reservation Index). Assume values lie in [0, Vmax] and every non-empty
+feasible batch has positive opening cost. For k = ∞, also assume every ci > 0. If σ⋆= 0, opening
+nothing is optimal. If σ⋆> 0, then for any feasible batch a⋆with σ(a⋆) = σ∗, the policy that
+repeatedly opens a⋆until it observes a reward exceeding σ⋆is optimal.
+The theorem is the reusable analogue of Weitzman’s index rule. A copy of the best reservation
+batch remains available after every failed attempt, so the index policy continues to choose it. The
+boundedness and positive-cost assumptions ensure that the relevant batches that are not overpriced
+are finite in number; the formal details are in Section A.
+The repeated-batch value equals the reservation value. If batch a has reservation value σ(a) and
+p = Pr[Xa > σ(a)], then repeatedly opening it until the first success gives
+E[Xa | Xa > σ(a)] −K(a)
+p
+= E[Xa1{Xa > σ(a)}]
+p
+−K(a)
+p
+= σ(a) + E[(Xa −σ(a))+] −K(a)
+p
+= σ(a).
+7
+
+
+--- Page 8 ---
+The last equality uses E[(Xa −σ(a))+] = K(a), by the definition of σ(a).
+4
+Hardness Results
+In this section, we show that the various settings of Batched Pandora’s Box are NP-hard. Broadly,
+our reductions construct instances of Batched Pandora’s Box in which even building a batch with
+positive utility encodes NP-hard search problems.
+Product gadget.
+Our reductions use a common product gadget. Each box has the same positive
+prize M, and the box corresponding to label bi fails with probability 1/bi. A batch whose labels
+multiply to weight w = Q
+i∈B bi then fails with probability 1/w. We set the item costs and the
+batching cost carefully as a function of the weights of the boxes, ensuring a batch offers positive
+opening utility if and only if its labels multiply to a prescribed target value Q. Consequently, finding
+a batch with positive opening utility encodes an NP-hard search problem, yielding hardness for
+Batched Pandora’s Box. For clarity, we initially present the proof using exact logarithms, and
+then show that rational approximations to the logarithms (of polynomial length) still preserve this
+property. The formal proofs are presented in Section 6.
+Non-reusable boxes.
+We first investigate the non-reusable problem. Exact optimization is
+already intractable for every fixed finite batch capacity at least three.
+Theorem 4.1 (Fixed Finite-Batch-Capacity Exact Hardness). For every fixed k ≥3, exact
+optimization of BP(T, k) is NP-hard, even when T > 0 and all boxes have support {0, M} for a
+shared M. Equivalently, deciding whether OPT1 ≥Θ for a rational threshold Θ is NP-hard.
+We reduce from the strongly NP-hard Numerical 3-Dimensional Matching problem. The instance
+consists of three classes of items X, Y, Z and a size function s(e), e ∈X ∪Y ∪Z, and the goal is to
+partition the items into triples (x, y, z) satisfying s(x) + s(y) + s(z) = B.
+For batch size k = 3, we encode each item e as a box whose label contains the factor 2s(e). To
+encode the class constraint, we assign a distinct identifying prime to each of X, Y, Z, and include
+the corresponding prime in the label of every item from that class. We then set the target product
+to be the product of the three class primes times 2B. By unique factorization, a batch has the target
+product if and only if it contains one item from each class whose sizes sum to B. For k > 3, we add
+dummy zero-size classes to fill the remaining positions in each batch.
+The product gadget makes precisely the target tuples profitable. Since all target tuples have the
+same success probability and the same cost, the optimal value is a strictly increasing function of the
+maximum number of disjoint target tuples, and exact optimization distinguishes whether a perfect
+numerical matching exists.
+The next question is whether one can at least obtain an ordinary constant-factor approxima-
+tion. When batch capacity is part of the input, the product gadget gives a stronger obstruction:
+distinguishing zero value from positive value is already NP-hard.
+Theorem 4.2 (Non-Reusable Sign-Gap Decision Hardness). For BP(T, k) with k part of the input,
+and for BP(T, ∞), the promise problem of distinguishing
+OPT1 = 0
+from
+OPT1 > 0
+is NP-hard, even on common-prize two-point instances with T > 0.
+8
+
+
+--- Page 9 ---
+Here the reduction is from Subset Product: given labels a1, . . . , an and target Q, decide
+whether some subset has product Q. The batch capacity is set to the number of source items. If
+a target subset exists, opening the corresponding batch once gives positive value; otherwise every
+nonempty batch has negative one-shot surplus. Because all boxes have a common prize, adaptive
+stopping cannot turn these negative-surplus attempts into positive value: before the first success the
+policy observes only zeros, and the expected reward from any sequence of attempts is dominated by
+its expected cost.
+Reusable boxes.
+For reusable boxes, the same product idea applies, but we must prevent a
+target batch from using multiple copies of the same source item. Broadly, for each source item i,
+we introduce a private prime pi and create two boxes whose labels correspond to pi and piai. We
+set the target product to Q Q
+i pi. Since pi appears in no other label and has exponent one in the
+target, any multi-set whose labels multiply to the target must contain exactly one of pi and piai for
+each i. Choosing pi corresponds to excluding ai from the subset, while choosing piai corresponds to
+including it. After canceling the private primes, the remaining condition enforces that the product
+of the selected ai’s equals Q. Finally, the product gadget then gives the reusable sign gap.
+Theorem 4.3 (Reusable Sign-Gap Decision Hardness). For RBP(T, k) with finite k as part of the
+input, and for RBP(T, ∞), the promise problem of distinguishing
+OPT1 = 0
+from
+OPT1 > 0
+is NP-hard, even on common-prize two-point instances with T > 0.
+For unbounded batch capacity, item costs make all sufficiently large multisets automatically
+overpriced, so the reduction only has to protect a finite range of multiplicities by the product
+separation.
+5
+Bi-criteria Approximation Results
+The hardness results of the previous section preclude standard positive-factor approximation
+guarantees under the original costs. We therefore turn to discounted-cost bicriteria guarantees.
+Recall that valλ(π) = E[Mπ] −λ E[Cπ], and that an algorithm has an (α, λ) guarantee if, for every
+requested ε > 0, it returns a feasible policy bπ = bπ(ε) with valλ(bπ) ≥α OPT1 −ε. Thus, the
+algorithm is compared with the original-cost optimum, while its returned policy is evaluated after
+discounting costs.
+5.1
+Non-Reusable Boxes
+Consider first the non-reusable model. Although an adaptive policy may have a possibly exponential
+decision tree, before any values are realized, it induces only ex-ante statistics: the probability xi that
+each box is ever opened and the expected number z of batches it opens. These statistics determine
+the expected cost. The relaxation therefore only needs to upper-bound the final reward that can be
+attributed to the opened boxes. For each box i, we omit the zero atom and, for ℓ∈Li, write
+Pr[Vi = viℓ] = piℓ,
+where
+viℓ> 0.
+When box i is the final selected value and realizes as the point viℓin its support, we assign the
+probability mass of this event to a variable yiℓ. This “winner” event can occur only if box i is
+9
+
+
+--- Page 10 ---
+Algorithm 1 Non-reusable LP rounding
+Input: Opening marginals x, fractional batch count z ≥1, and capacity k
+Set θ = z −⌊z⌋
+Draw ¯z = ⌊z⌋with probability 1 −θ, and ¯z = ⌈z⌉with probability θ
+Set qi = min{1, (¯z/z)xi} for every box i
+Apply pipage rounding over the rank-(k¯z) uniform matroid to obtain a set S with |S| ≤k¯z
+Partition S arbitrarily into at most ¯z groups of size at most k each, open all nonempty groups,
+and stop
+opened and realizes as viℓ, and at most one positive value is selected overall. These two observations
+give the following relaxation:
+max
+X
+i
+X
+ℓ∈Li
+viℓyiℓ−Tz −
+X
+i
+cixi
+s.t.
+1 ≤z ≤n,
+X
+i
+xi ≤kz,
+0 ≤yiℓ≤piℓxi
+∀i, ℓ∈Li,
+0 ≤xi ≤1
+∀i,
+X
+i
+X
+ℓ∈Li
+yiℓ≤1
+(LP)
+The constraint P
+i xi ≤kz is the ex-ante version of batch capacity: if a policy opens z batches in
+expectation, it cannot open more than kz boxes in expectation.
+At first glance, one could think that we could write n different versions of this LP, one per
+candidate value of z, since any policy always opens an integer number of batches, and take the
+maximum of these n LPs. This, in principle, would save us the extra loss we incur from rounding z.
+Unfortunately, such an approach does not constitute a valid upper bound to the optimal adaptive
+policy, since the latter could open a different number of batches depending on the history of observed
+values and thus, in expectation, a fractional number of batches overall. For this reason, allowing z
+to be fractional is crucial so that the LP can capture the value of the optimal adaptive algorithm.
+Also, the LP is a relaxation for the optimal adaptive algorithm, because the atom masses are allowed
+to be arranged fractionally into a final winning value. After fixing the opening marginals x, this
+upper bound on the expected reward has the equivalent threshold form
+B(x) =
+Z ∞
+0
+min
+(
+1,
+X
+i
+xi Pr[Vi > t]
+)
+dt.
+Sampling which boxes to open independently with probabilities given by the xi’s guarantees a
+(1−1/e)-fraction of this envelope at every threshold. Afterwards, pipage rounding algorithm converts
+the opening marginals x into an actual set of opened boxes, while respecting the batch budget
+certified by z, without decreasing the expected monotone submodular reward.
+We also round z to one of its two neighboring integers and scale the opening marginals accordingly.
+Once the number of batches is integral, a selected set of at most k¯z boxes can be partitioned arbitrarily
+into ¯z legal batches. Consequently, the rounding incurs only the batch-count factor 2(
+√
+2 −1) from
+rounding the batch count and no additional contention loss inside individual batches.
+10
+
+
+--- Page 11 ---
+Theorem 5.1 (Finite-Support Non-Reusable Guarantee). For every finite-support non-reusable
+instance and every ε > 0, there is a randomized polynomial-time algorithm that returns a policy
+bπ = bπ(ε) satisfying
+valαNR(bπ) ≥αNR OPT1 −ε,
+αNR =
+
+1 −1
+e
+
+2(
+√
+2 −1).
+The algorithm solves (LP), returns the empty policy if its optimum is non-positive, and otherwise
+applies Algorithm 1 to an optimal solution.
+The proof follows this outline. The details are in Section 7.1.
+5.2
+Reusable Boxes
+The reusable case starts from a different structural fact. By Theorem 3.3, an optimal original-cost
+policy repeats one maximum-reservation batch. Thus, it suffices to find one certifying multiset of at
+most k fresh i.i.d. samples. The case T = 0 is handled exactly by Observation 2.3, so assume T > 0
+below and let Vmax be the largest support value.
+For a threshold τ, write fτ(a) = E[(Xa −τ)+]. If one batch pays for its discounted cost using
+the expected excess above τ, then repeatedly opening it guarantees discounted value at least τ.
+Lemma 5.2 (Threshold Certificate). Fix λ ∈(0, 1]. If a nonempty reusable batch a satisfies
+fτ(a) ≥λK(a),
+then repeatedly opening a until the first realization Xa > τ has λ-discounted value at least τ.
+This observation reduces the reusable algorithm to a threshold search. For a candidate τ, the
+task is to determine whether some batch can certify it, i.e. whether there is a batch with reservation
+value at least τ. The fractional relaxation is similar to the non-reusable LP, except that it is turned
+into a feasibility LP and xi is now a fractional number of copies of type i in a single reusable batch:
+find
+x, y
+s.t.
+X
+i
+xi ≤k,
+0 ≤yiℓ≤piℓxi
+∀i, ℓ∈Li,
+0 ≤xi
+∀i,
+X
+i
+X
+ℓ∈Li
+yiℓ≤1
+X
+i
+X
+ℓ∈Li
+(viℓ−τ)+yiℓ≥T +
+X
+i
+cixi
+(RLPτ)
+We say that τ is LP-certified if RLPτ is feasible. The y-variables form a fractional one-winner
+certificate: the constraints yiℓ≤piℓxi encode the marginal availability of atom viℓ, while P
+i,ℓyiℓ≤1
+encodes that one batch contributes only one maximum value. Thus feasibility of RLPτ certifies that
+the fractional excess above τ can pay for the batch cost. Lowering τ only increases the coefficients
+(viℓ−τ)+ and makes the certificate constraint easier to satisfy. Therefore, certification is monotone
+and binary search can find the largest certified threshold up to an additive error.
+When a threshold is certified fractionally, we round by filling the k batch slots independently
+according to the copy counts xi. At level t ≥τ, one slot exceeds t with probability P
+i xi Pr[Vi > t]/k,
+so the rounded batch achieves an αR = 1 −1/e fraction of the fractional excess envelope. The
+method of conditional expectations derandomizes the slot choices without losing the certificate.
+11
+
+
+--- Page 12 ---
+Algorithm 2 Reusable threshold search
+Input: A finite-support reusable RBP(T, k) instance and accuracy ε > 0
+Set ℓ= 0, u = Vmax, bτ = 0, and ba = 0
+for ⌈log2(Vmax/ε)⌉iterations do
+Set τ = (ℓ+ u)/2 and solve RLPτ
+if τ is LP-certified then
+Round feasible LP solution into a certifying batch aτ using the method of conditional
+expectation
+Set ℓ= τ, bτ = τ, and ba = aτ
+else
+Set u = τ
+end if
+end for
+if ba = 0 then
+return the empty policy
+end if
+Repeatedly open ba until its value exceeds bτ
+Theorem 5.3 (Finite-Support Reusable Guarantee). For every finite-support reusable instance
+with finite batch capacity k and every ε > 0, Algorithm 2 runs in polynomial time and returns a
+policy bπ = bπ(ε) satisfying
+valαR(bπ) ≥OPT1 −ε,
+αR = 1 −1
+e.
+Equivalently, the algorithm provides a (1, αR) discounted-cost bicriteria guarantee.
+The comparison with the optimum follows from the reusable reservation-index theorem. If a⋆
+is an optimal original-cost batch with reservation value OPT1, then it certifies every threshold
+τ ≤OPT1 in the feasibility LP. Binary search therefore reaches a threshold within ε of the optimum,
+and the rounded certifying batch is converted into a repeated policy by Lemma 5.2. The formal
+proof appears in Section 7.2.
+6
+Proofs of Hardness Results
+We will repeatedly use two numerical primitives. First, define
+D(z) = ln z + 1
+z −1.
+This function is minimized at z = 1. Moreover, when w and Q are positive integers with w̸ = Q,
+the value D(w/Q) is bounded away from zero by an inverse polynomial in Q.
+Lemma 6.1 (Analytic Product Separation). For every integer Q ≥8 and every positive integer
+w̸ = Q,
+D(w/Q) ≥
+1
+16 · Q2 .
+Proof. We have
+D(1) = D′(1) = 0,
+D′(z) = z −1
+z2 ,
+D′′(z) = 2 −z
+z3 .
+12
+
+
+--- Page 13 ---
+Thus D decreases on (0, 1) and increases on (1, ∞). On [1/2, 3/2], D′′(z) ≥4/27, so Taylor’s theorem
+around 1 gives
+D(z) ≥2
+27 · (z −1)2.
+If w/Q ∈[1/2, 3/2], then w̸ = Q and integrality imply |w/Q −1| ≥1/Q, hence
+D(w/Q) ≥
+2
+27 · Q2 >
+1
+16 · Q2 .
+Outside this interval, monotonicity gives
+D(w/Q) ≥min{D(1/2), D(3/2)} >
+1
+100 ≥
+1
+16 · Q2 ,
+where the last inequality uses Q ≥8.
+Second, we will use rational approximations to logarithms so that all constructed costs are
+rational and polynomially representable.
+Lemma 6.2 (Rational Log Approximation). Let m1, . . . , mr be positive integers and let η > 0 be
+rational. In time polynomial in the input bit length and log(1/η), one can compute rational numbers
+ℓ1, . . . , ℓr such that
+|ℓi −ln mi| ≤η
+for all i.
+Proof. The approximation claim is the standard bit-complexity computation of elementary functions:
+after range reduction, logarithms can be approximated to b bits by classical polynomial-time series
+or binary-splitting algorithms.
+6.1
+Proof of Theorem 4.1: Fixed finite-capacity non-reusable boxes
+Proof of Theorem 4.1. We first describe the reduction using exact logarithmic costs and ignore
+representation-size issues; the final paragraph replaces the logarithms by rational approximations
+and checks that the constructed instance has polynomial encoding length. We reduce from strongly
+NP-complete Numerical 3-Dimensional Matching [19]. An instance consists of three classes X, Y, Z,
+each of size m, positive integer sizes s(e), and a target B. The question is whether the elements can
+be partitioned into m triples (x, y, z) satisfying
+s(x) + s(y) + s(z) = B.
+Since Numerical 3DM is strongly NP-complete, we may restrict to instances in which B and all sizes
+s(e) are bounded by a polynomial in m. We also assume m ≥2, since the case m = 1 is decidable
+directly.
+Fix k ≥3. For k = 3, use the three original classes. For k > 3, add k −3 dummy classes, each
+containing m dummy elements of size zero. Choose k distinct odd primes p1, . . . , pk, one per class,
+and use 2 as a separate encoding prime. For an element e in class j, define
+be = pj · 2s(e).
+For dummy elements, s(e) = 0. Set
+Q =
+
+
+k
+Y
+j=1
+pj
+
+· 2B.
+13
+
+
+--- Page 14 ---
+Call a batch target if its label product is Q. By unique factorization, target batches are exactly
+the feasible k-tuples with one element from every class and original sizes summing to B. For k > 3,
+the dummy classes preserve the perfect-matching question: any collection of disjoint valid original
+triples can be extended using distinct dummy elements, and any disjoint family of target k-tuples
+projects to disjoint valid original triples.
+Set
+H = 1,
+S = 100 · H · Q2,
+M = S · Q.
+For each element e, create an independent high-or-zero box equal to M with probability 1 −1/be
+and zero otherwise. Give an element e in class j cost
+ce = S · ln be = S · (ln pj + s(e) ln 2),
+and set the setup cost to
+T = S · (Q −1 −ln Q) −H = S ·
+
+Q −1 −
+k
+X
+j=1
+ln pj −B ln 2
+
+−H.
+For a nonempty batch A, write
+w(A) =
+Y
+e∈A
+be,
+K(A) = T +
+X
+e∈A
+ce.
+The batch fails with probability 1/w(A), and its one-shot surplus is
+M ·
+
+1 −
+1
+w(A)
+
+−K(A) = SQ ·
+
+1 −
+1
+w(A)
+
+−
+ 
+S(Q −1 −ln Q) −H +
+X
+e∈A
+S ln be
+!
+= SQ −SQ
+w(A) −S(Q −1 −ln Q) + H −S
+X
+e∈A
+ln be
+= H + S
+
+1 + ln Q −ln w(A) −
+Q
+w(A)
+
+= H −S ·
+
+ln w(A)
+Q
++
+Q
+w(A) −1
+
+= H −S · D(w(A)/Q).
+Thus every target batch has surplus H. If A is non-target, then Lemma 6.1 gives
+H −S · D(w(A)/Q) ≤H −
+S
+16Q2 = −21
+4 · H,
+so every non-target batch is overpriced.
+Every target batch has the same item-cost sum
+S ·
+
+
+k
+X
+j=1
+ln pj + B ln 2
+
+,
+and therefore the same total cost
+K = S · (Q −1) −H,
+14
+
+
+--- Page 15 ---
+the same failure probability q = 1/Q, and the same positive one-shot surplus
+∆= M · (1 −q) −K = H.
+Let ν be the maximum number of pairwise-disjoint target batches. By Lemma A.2, an optimal
+policy opens only target batches. Until the first success, every observed value is zero, so the all-failure
+path of any deterministic policy is a sequence of disjoint target batches and has length at most ν.
+Conversely, any packing of r target batches can be opened in any order until the first success. Its
+expected utility is
+M · (1 −qr) −K · (1 + q + · · · + qr−1) =
+ M · (1 −q) −K
+ · (1 + q + · · · + qr−1)
+= ∆· (1 + q + · · · + qr−1).
+This expression is strictly increasing in r. Randomization and stopping before exhausting a packing
+cannot improve it, since every additional available target batch has the same positive conditional
+surplus. Hence
+OPT1 = ∆· (1 + q + · · · + qν−1),
+with the geometric sum interpreted as zero when ν = 0.
+A YES instance has ν = m, while a NO instance has ν ≤m −1. Define
+Θ = 1
+2 ·
+h
+∆· (1 + q + · · · + qm−1) + ∆· (1 + q + · · · + qm−2)
+i
+.
+Then OPT1 ≥Θ exactly in YES instances.
+Representation. The construction above used exact logarithms. To make the input rational, let
+smax = maxe s(e) and
+D0 = 2 · k + k · smax + B.
+By Lemma 6.2, choose rationals ℓ1, . . . , ℓk, ℓbin such that
+|ℓj −ln pj| ≤δ,
+|ℓbin −ln 2| ≤δ,
+δ =
+H
+100 · S · D0
+.
+Replace the real costs by
+ce = S · (ℓj + s(e) · ℓbin)
+for an element e in class j, and set
+T = S ·
+
+Q −1 −
+k
+X
+j=1
+ℓj −B · ℓbin
+
+−H.
+For any batch of at most k elements, the change in its surplus is at most
+S · (2 · k + k · smax + B) · δ = H/100.
+Target batches still have total cost exactly K = S(Q −1) −H and surplus exactly H, while every
+non-target batch remains overpriced. The setup cost remains positive because the real setup cost
+S(Q −1 −ln Q) −H > 0 for Q ≥8 and the perturbation is at most H/100; the item costs are
+nonnegative by the same choice of precision.
+Finally, the reduction has polynomial size. Since B and all sizes s(e) are bounded by a polynomial
+in m, and k is fixed, the integers 2B and Q = (Q
+j pj)2B may be large as values but have polynomial
+binary encoding length. Hence the labels be also have polynomial binary encoding length. The
+probabilities 1 −1/be, the scale parameters S, M, the rational logarithmic approximations, and the
+rational costs all have polynomial encoding length. Also Qm−1 has bit length O(m log Q) = O(mB),
+so the threshold Θ is polynomially representable. Thus the rational instance and threshold are
+produced in polynomial time.
+15
+
+
+--- Page 16 ---
+6.2
+Proof of Theorem 4.2: Sign-gap hardness for non-reusable boxes
+Before proving the non-reusable sign-gap theorem, we isolate the batch-level hardness used in the
+reduction. For a feasible batch B, let XB be the best value observed inside the batch and let K(B)
+be its opening cost. Its one-shot surplus is
+∆(B) = E[XB] −K(B).
+If ∆(B) < 0, equivalently K(B) > E[XB], the batch is overpriced.
+The construction makes the probability of no success equal to the reciprocal of a product. Costs
+are logarithmic in the same labels. Thus the reward term contributes a reciprocal-product term,
+the cost term contributes a logarithmic term, and after calibration the surplus contains D(w/Q),
+which is uniquely minimized at the target product w = Q.
+Definition 6.3 (Restricted Subset Product). The input consists of integers a1, . . . , an ≥2 and
+an integer target Q ≥8. The question is whether there is a subset S ⊆[n] such that
+Y
+i∈S
+ai = Q.
+The usual Subset Product problem has no restrictions on ai or Q. The restricted version
+above remains NP-hard.
+Lemma 6.4 (Restricted Subset Product Remains NP-Hard). Restricted Subset Product is
+NP-hard.
+Proof. Reduce from the standard Subset Product problem. Given an instance (a1, . . . , an, Q),
+delete all labels equal to 1, since they do not affect feasibility, and write
+A =
+Y
+i
+ai
+for the product of the remaining labels, with A = 1 if none remain. Add one new label
+P = 8 · A
+and set the new target to
+Q′ = P · Q.
+All labels in the new instance are at least 2, and Q′ ≥8.
+If the original instance has a subset of product Q, then adding the new label P gives a subset of
+product Q′. Conversely, any subset of the new instance with product Q′ must contain P: without
+it, the product is at most A < Q′. After removing P, the remaining selected labels have product Q.
+Thus the two instances are equivalent, and the transformation has polynomial bit length because
+log A is at most the total input length.
+Lemma 6.5. For every rational H > 0, deciding whether a common-prize high-or-zero non-reusable
+instance contains a nonempty positive-surplus feasible batch is NP-hard, even when the batch capacity
+is part of the input and also when k = ∞, and even with T > 0.
+Proof. We first describe the reduction using exact logarithmic costs and ignore representation-size
+issues; the final paragraph replaces the logarithms by rational approximations and checks that the
+16
+
+
+--- Page 17 ---
+constructed instance has polynomial encoding length. We reduce from restricted Subset Product.
+Let the source instance be (b1, . . . , bN, Q). Set
+Λ = 100 · H · Q2,
+M = Λ · Q.
+For label bj, create a high-or-zero box equal to M with probability 1 −1/bj and zero otherwise. A
+set A has failure probability
+Y
+j∈A
+b−1
+j
+=
+1
+w(A),
+w(A) =
+Y
+j∈A
+bj.
+Give label bj opening cost
+cj = Λ · ln bj,
+T = Λ · (Q −1 −ln Q) −H.
+The one-shot surplus of A is
+M ·
+
+1 −
+1
+w(A)
+
+−T −
+X
+j∈A
+cj = ΛQ ·
+
+1 −
+1
+w(A)
+
+−
+
+Λ(Q −1 −ln Q) −H + Λ
+X
+j∈A
+ln bj
+
+
+= H + Λ
+
+1 + ln Q −ln w(A) −
+Q
+w(A)
+
+= H −Λ ·
+
+ln w(A)
+Q
++
+Q
+w(A) −1
+
+= H −Λ · D(w(A)/Q).
+It equals H when w(A) = Q. If w(A)̸ = Q, then Lemma 6.1 gives
+H −Λ · D(w(A)/Q) ≤H −
+Λ
+16 · Q2 = −21
+4 · H.
+Representation. The construction above used exact logarithms. To make the input rational,
+apply Lemma 6.2 and choose rational numbers ℓj, ℓQ satisfying
+|ℓj −ln bj| ≤δ,
+|ℓQ −ln Q| ≤δ,
+δ =
+H
+100 · Λ · (N + 1).
+Replace the exact logarithmic costs by
+cj = Λ · ℓj,
+T = Λ · (Q −1 −ℓQ) −H.
+For every nonempty set A, rationalization changes its surplus by at most
+Λ ·
+
+|ℓQ −ln Q| +
+X
+j∈A
+|ℓj −ln bj|
+
+≤Λ · (N + 1) · δ = H/100.
+Therefore a target batch has surplus in [99 · H/100, 101 · H/100], while every off-target batch has
+surplus at most −21H/4+H/100 < −5H. Thus the constructed instance contains a positive-surplus
+batch if and only if the restricted Subset Product instance is YES. The precision also keeps every
+ℓj positive, since bj ≥2. Since Q ≥8, the quantity Q −1 −ln Q is bounded away from zero, and the
+approximation error is less than H/100, so T > 0. The required precision has polynomial encoding
+length, so Lemma 6.2 makes the whole construction polynomial time. Set the batch capacity to
+k = N; since there are only N boxes, the same instance also proves the claim for k = ∞.
+17
+
+
+--- Page 18 ---
+Proof of Theorem 4.2. Use the instances constructed in Lemma 6.5 with H = 1. In a YES instance,
+there is a batch with positive one-shot surplus, so opening it once gives OPT1 > 0. In a NO instance,
+every nonempty feasible batch is overpriced. By Lemma A.2, there is an optimal non-reusable policy
+that never opens an overpriced batch. Hence the empty policy is optimal and OPT1 = 0. Thus a
+polynomial-time solver for the promise problem would decide the NP-hard batch-existence problem
+from Lemma 6.5.
+6.3
+Proof of Theorem 4.3: Sign-gap hardness for reusable boxes
+Lemma 6.6. For every rational H > 0, deciding whether a common-prize high-or-zero reusable
+instance contains a nonempty positive-surplus feasible batch is NP-hard when finite k is part of the
+input, and also for k = ∞, even with T > 0.
+Proof. We first describe the reduction using exact logarithmic costs and ignore representation-size
+issues; the final paragraph replaces the logarithms by rational approximations and checks that the
+constructed instance has polynomial encoding length. We reduce from restricted Subset Product.
+Let the source instance be (a1, . . . , an, Q). The only additional difficulty in the reusable model is
+that a batch may contain repeated copies. We first encode each original item as a forced binary
+choice, so that any product hitting the target uses each source item at most once.
+Encoding the subset choice. Choose pairwise distinct private primes p1, . . . , pn that divide neither
+Q nor any input number aj.
+For each source item i, create two labels
+bi,0 = pi,
+bi,1 = pi · ai,
+and set
+Q′ = Q ·
+Y
+i
+pi.
+The label bi,0 means “skip item i,” while bi,1 means “take item i.” Both labels contain the private
+prime pi, and no other label or source factor contains pi.
+For a reusable multiplicity vector u, define
+w(u) =
+Y
+i
+bui,0
+i,0 · bui,1
+i,1 .
+The private-prime encoding gives the following equivalence:
+w(u) = Q′
+⇐⇒
+ui,0 + ui,1 = 1 ∀i
+and
+Y
+i:ui,1=1
+ai = Q.
+Indeed, comparing the exponent of each private prime pi forces ui,0 + ui,1 = 1, and after canceling
+all private primes the remaining condition is exactly the source subset-product equation.
+Creating the reusable sign gap. Let L = n for the finite-batch-capacity instance, where we set
+k = n. For the unbounded-batch-capacity instance, set L = L0 = 4Q′ + 1.
+Apply the product construction to the 2n labels bi,0, bi,1 with target Q′ and multiplicity bound
+L. Set
+Λ = 100 · H · (Q′)2,
+M = ΛQ′.
+For each label bj, create a reusable high-or-zero type equal to M with probability 1 −1/bj and zero
+otherwise. Give label bj opening cost
+cj = Λ ln bj,
+T = Λ(Q′ −1 −ln Q′) −H.
+18
+
+
+--- Page 19 ---
+For a multiplicity vector u with ∥u∥1 ≤L, the all-zero probability is 1/w(u), and its one-shot surplus
+is
+M ·
+
+1 −
+1
+w(u)
+
+−T −
+X
+j
+ujcj = ΛQ′ ·
+
+1 −
+1
+w(u)
+
+−
+
+Λ(Q′ −1 −ln Q′) −H + Λ
+X
+j
+uj ln bj
+
+
+= H −Λ ·
+
+ln w(u)
+Q′
++
+Q′
+w(u) −1
+
+= H −ΛD(w(u)/Q′).
+Thus vectors with w(u) = Q′ have surplus H, while those with w(u)̸ = Q′ have surplus at most
+−21H/4 by Lemma 6.1.
+Since every label is at least 2, every item cost is at least Λ/4. In the finite-batch-capacity
+instance every feasible batch has ∥u∥1 ≤n = L. In the unbounded-batch-capacity instance, every
+batch with ∥u∥1 > L0 has cost greater than
+L0 · Λ
+4 = M + Λ
+4 ,
+so its surplus is at most −Λ/4 < −5H because its expected reward is at most M.
+Representation. The construction above used exact logarithms. To make the input rational,
+apply Lemma 6.2 to the labels and to Q′, and choose rational approximations with
+δ = min
+
+H
+100 · Λ · (L + 1), 1
+4
+
+.
+Replace each ln bj and ln Q′ in the costs and setup cost by its rational approximation. Rationalizing
+the logarithms changes the surplus of every vector ∥u∥1 ≤L by at most H/100. Hence target
+vectors have surplus in [99 · H/100, 101 · H/100], and every non-target vector of size at most L has
+surplus at most −21H/4 + H/100 < −5H. Since bj ≥2 and δ ≤1/4, every item cost remains at
+least Λ/4. Therefore, in the unbounded-batch-capacity instance, every batch with ∥u∥1 > L0 still
+has surplus at most −Λ/4 < −5H.
+Combining this with the private-prime equivalence, the constructed rational reusable instance
+has a positive-surplus feasible batch if and only if the source Subset Product instance is YES.
+The private primes can be found in polynomial time: if Lin is the total source bit length, then
+Q · Q
+j aj has at most Lin distinct prime divisors, so among the first n + Lin primes at least n
+are available. Thus the primes, labels, and target Q′ have polynomial binary encoding length. In
+the unbounded-batch-capacity case, L0 = 4Q′ + 1 may be numerically large, but its bit length is
+polynomial. The required precision has polynomial encoding length. The exact setup cost is positive
+for Q′ ≥8, and replacing ln Q′ by its rational approximation changes it by at most Λδ ≤H/100, so
+the setup cost remains positive. Hence the rational instance is produced in polynomial time.
+Proof of Theorem 4.3. Use the instances constructed in Lemma 6.6 with H = 1. In a YES instance,
+there is a reusable batch with positive one-shot surplus. For a common-prize reusable batch with
+success probability s, cost K, and prize M, positive surplus means K < sM, so its reservation value
+is M −K/s > 0. By Theorem 3.3, this gives OPT1 > 0. In a NO instance, every nonempty reusable
+batch is overpriced. Then σ⋆= 0, and Theorem 3.3 says opening nothing is optimal, so OPT1 = 0.
+Thus a polynomial-time solver for the promise problem would decide the NP-hard batch-existence
+problem from Lemma 6.6.
+19
+
+
+--- Page 20 ---
+7
+Proofs of Bicriteria Approximation Results
+7.1
+Proof of Theorem 5.1: Non-reusable boxes
+The proof follows the outline from Section 5.1. We first identify the finite-support reward envelope,
+then verify that every adaptive policy induces a feasible LP point, and finally analyze the rounding
+of the opening marginals and the fractional batch count.
+For fixed opening marginals x ∈[0, 1]n, define the atomized one-winner envelope
+B(x) = max
+
+
+
+X
+i
+X
+ℓ∈Li
+viℓyiℓ: 0 ≤yiℓ≤piℓxi ∀i, ℓ,
+X
+i
+X
+ℓ∈Li
+yiℓ≤1
+
+
+.
+The useful form of this envelope is its threshold representation. As in the high-or-zero case, the
+identity is the same fractional-knapsack structure for a single winner; the only difference is that
+each box has been split into its positive atoms.
+Proposition 7.1 (Threshold Form of the Atomized Envelope). For every x ∈[0, 1]n,
+B(x) =
+Z ∞
+0
+min
+(
+1,
+X
+i
+xi Pr[Vi > t]
+)
+dt.
+Proof. For each positive atom a = (i, ℓ), write wa = viℓand µa = piℓxi. Then
+B(x) = max
+(X
+a
+waya : 0 ≤ya ≤µa ∀a,
+X
+a
+ya ≤1
+)
+.
+For any feasible y,
+X
+a
+waya =
+Z ∞
+0
+X
+a:wa>t
+ya dt ≤
+Z ∞
+0
+min
+(
+1,
+X
+a:wa>t
+µa
+)
+dt.
+Since P
+a:wa>t µa = P
+i xi Pr[Vi > t], this gives the upper bound.
+For the reverse inequality, order the atoms in nonincreasing value and greedily fill one unit of
+winner mass:
+ya = min
+
+
+µa,
+
+1 −
+X
+b<a
+yb
+
+
++
+
+.
+For every threshold t that is not an atom value, the atoms with wa > t form a prefix of this order
+after grouping equal values, and the greedy construction attains
+X
+a:wa>t
+ya = min
+(
+1,
+X
+a:wa>t
+µa
+)
+.
+The two sides can differ only at finitely many atom values, which do not affect the integral.
+With this envelope in place, the next step is to check that the LP is indeed a relaxation of
+adaptive policies. This is where the nonanticipatory nature of a policy is used: the decision to open
+box i is made before the realization of Vi is observed.
+When upper-bounding a positive-utility policy, it is without loss of generality to assume that
+the policy opens its first batch with probability one. Indeed, if a policy stops immediately with
+probability 1 −q and otherwise follows a nonempty policy π′, then
+val1(π) = q val1(π′).
+Thus, whenever val1(π) > 0, conditioning on the nonempty branch weakly increases utility.
+20
+
+
+--- Page 21 ---
+Lemma 7.2 (General LP Upper Bound). Every adaptive non-reusable policy π that opens its first
+batch with probability one induces a feasible LP solution with objective value E[Mπ] −E[Cπ].
+Proof. Let xi be the probability that box i is opened, and let z be the expected number of opened
+batches. Since π opens a first batch, uses nonempty batches, and consumes every opened box,
+1 ≤z ≤n,
+X
+i
+xi ≤kz.
+Moreover,
+E[Cπ] = Tz +
+X
+i
+cixi.
+Break ties deterministically among boxes attaining the final maximum. For each positive atom, let
+yiℓbe the probability that box i is the selected positive winner and realizes value viℓ. The event
+that i is opened is determined before Vi is revealed and is independent of Vi, so
+yiℓ≤Pr[i is opened and Vi = viℓ] = xipiℓ.
+At most one positive atom is selected, so P
+i,ℓyiℓ≤1, and
+E[Mπ] =
+X
+i
+X
+ℓ∈Li
+viℓyiℓ.
+Thus the induced point is feasible and has the claimed objective.
+The upper bound above is fractional in the winner variables. To round it, we compare the
+envelope with the reward of an actual random set of opened boxes. For a set S ⊆[n], let
+R(S) = E
+
+max
+i∈S Vi
+
+,
+R(∅) = 0,
+and let F be its multilinear extension. The function R is normalized, monotone, and submodular.
+The next lemma is the rank-one correlation-gap comparison between independent sampling with
+marginals x and the one-winner envelope B(x).
+Lemma 7.3 (Correlation Gap for the Winner Envelope). For every x ∈[0, 1]n,
+F(x) ≥
+
+1 −1
+e
+
+B(x).
+Proof. If each box i is independently sampled with probability xi, then
+F(x) =
+Z ∞
+0
+ 
+1 −
+Y
+i
+(1 −xi Pr[Vi > t])
+!
+dt.
+For a threshold t, put st = P
+i xi Pr[Vi > t]. Then
+1 −
+Y
+i
+(1 −xi Pr[Vi > t]) ≥1 −e−st ≥
+
+1 −1
+e
+
+min{1, st}.
+Integrating and applying Proposition 7.1 proves the claim.
+The correlation-gap lemma assumes that the marginals x can be used directly. The algorithm
+must also convert the fractional batch count z into an integer number of batches. The following
+lemma isolates exactly the loss from that two-point rounding.
+21
+
+
+--- Page 22 ---
+Lemma 7.4 (Random Batch-Count Rounding). Fix x ∈[0, 1]n and z ≥1. Let ¯z be obtained by
+rounding z to ⌊z⌋or ⌈z⌉as in Algorithm 1, and let qi = min{1, (¯z/z)xi}. Then
+E¯z[F(q)] ≥
+
+1 −1
+e
+
+h(z)B(x),
+h(z) = ⌊z⌋+ (z −⌊z⌋)2
+z
+.
+Moreover, h(z) ≥2(
+√
+2 −1) for all z ≥1.
+Proof. Write r = ⌊z⌋and θ = z −r. If ¯z = r, then q = (r/z)x. Since R is monotone submodular, F
+is concave along nonnegative rays, so F(q) ≥(r/z)F(x). If ¯z = r + 1, then q ≥x coordinatewise,
+and monotonicity gives F(q) ≥F(x). Therefore
+E¯z[F(q)] ≥
+
+(1 −θ)
+r
+r + θ + θ
+
+F(x) = h(z)F(x).
+Combining with Lemma 7.3 gives the first claim.
+For the batch-count factor, keep r ≥1 fixed and vary θ ∈[0, 1]:
+h(z) = r + θ2
+r + θ .
+Its minimum on this interval is attained at θ⋆=
+√
+r2 + r −r and equals
+2
+p
+r2 + r −r
+
+=
+2
+p
+1 + 1/r + 1.
+This expression increases with r, so the global minimum is the case r = 1, equal to 2(
+√
+2 −1).
+After the number of batches is integral, the remaining requirement is the ex-post capacity bound.
+Since capacity is uniform and batches can be formed after the set is chosen, pipage rounding supplies
+the final conversion from fractional marginals to a feasible set.
+Lemma 7.5 (Uniform-Capacity Pipage Rounding). Let f : 2[n] →R≥0 be normalized, monotone,
+and submodular, with multilinear extension F. If q ∈[0, 1]n and P
+i qi ≤K, then randomized pipage
+rounding returns S with |S| ≤K, Pr[i ∈S] = qi, and
+E[f(S)] ≥F(q).
+This is the standard pipage-rounding guarantee for monotone submodular functions under a
+uniform matroid constraint [11].
+We now combine the ingredients: the LP upper bound for the benchmark, the correlation-gap
+comparison for reward, the batch-count rounding loss, pipage rounding for hard capacity, and the
+cost accounting.
+Theorem 5.1 (Finite-Support Non-Reusable Guarantee). For every finite-support non-reusable
+instance and every ε > 0, there is a randomized polynomial-time algorithm that returns a policy
+bπ = bπ(ε) satisfying
+valαNR(bπ) ≥αNR OPT1 −ε,
+αNR =
+
+1 −1
+e
+
+2(
+√
+2 −1).
+The algorithm solves (LP), returns the empty policy if its optimum is non-positive, and otherwise
+applies Algorithm 1 to an optimal solution.
+22
+
+
+--- Page 23 ---
+Proof. Let Φ be the optimum value of the LP. By Lemma 7.2, Φ upper-bounds every nonempty
+adaptive policy at original costs.
+If Φ ≤0, every nonempty policy has nonpositive original-cost value, and the empty policy is
+optimal. Assume Φ > 0, and let (x, z, y) be an optimal solution. For this fixed (x, z), replacing y by
+an optimizer in the definition of B(x) can only increase the objective, so we may write
+Φ = B(x) −Tz −
+X
+i
+cixi.
+Apply Algorithm 1. For each realized ¯z,
+X
+i
+qi ≤¯z
+z
+X
+i
+xi ≤k¯z,
+so Lemma 7.5 applies with the rank-k¯z uniform matroid. Together with Lemma 7.4, the expected
+reward is at least
+αNRB(x),
+αNR =
+
+1 −1
+e
+
+2(
+√
+2 −1).
+The expected setup cost is at most TE[¯z] = Tz. For every item,
+Pr[i ∈S] = (1 −θ)⌊z⌋
+z xi + θ min
+
+1, ⌊z⌋+ 1
+z
+xi
+
+≤xi,
+so the expected item cost is at most P
+i cixi. Hence
+valαNR(bπ) ≥αNR
+ 
+B(x) −Tz −
+X
+i
+cixi
+!
+= αNRΦ.
+Since Φ ≥OPT1 when the optimum is nonempty, and the empty optimum has value zero, the
+theorem follows. Solving the LP only to additive accuracy ε loses the corresponding additive amount.
+The LP has polynomially many variables and constraints in the finite-support input representation.
+Moreover, the multilinear extension can be evaluated in polynomial time by summing over the finitely
+many support thresholds. Hence the pipage-rounding procedure is implementable in polynomial
+time.
+7.2
+Proof of Theorem 5.3: Reusable boxes
+The reusable proof follows the same order as the overview in Section 5.2. First, a threshold certificate
+is converted into an actual repeated policy. Then we show that the feasibility LP contains every
+integral batch certificate, and finally that a fractional certificate can be rounded to an integral batch
+while losing only the discounted-cost factor.
+Proof of Lemma 5.2. Let p = Pr[Xa > τ]. The certificate implies p > 0. Repeating a until the first
+threshold crossing uses a geometric number of openings, so its λ-discounted value is
+E[Xa | Xa > τ] −λK(a)
+p
+= τ + fτ(a) −λK(a)
+p
+≥τ.
+The threshold certificate is useful only if the relaxation certifies every integral batch that could
+serve as the optimal repeated batch. The next lemma checks this by assigning the selected excess
+above threshold to the atom that realizes it.
+23
+
+
+--- Page 24 ---
+Lemma 7.6 (RLPτ Relaxes Integral Batches). Let a be a feasible reusable batch with reservation
+value σ(a). Then, for every τ ≤σ(a), there exist variables yiℓsuch that xi = ai and (x, y) is feasible
+for RLPτ.
+Proof. Set xi = ai. After one opening of a, break ties deterministically among copies whose value is
+the batch maximum and exceeds τ. If the maximum is at most τ, select no atom. Otherwise, let
+the selected winning copy have type i and atom viℓ, and define yiℓas the probability of this event.
+Then P
+i,ℓyiℓ≤1, and
+X
+i
+X
+ℓ∈Li
+(viℓ−τ)+yiℓ= fτ(a).
+The event counted by yiℓimplies that at least one of the ai fresh copies of type i realizes atom viℓ,
+so the union bound gives
+yiℓ≤aipiℓ= piℓxi.
+Moreover, since τ ≤σ(a),
+fτ(a) ≥fσ(a)(a) = K(a).
+Therefore the certificate constraint of RLPτ is satisfied, and (x, y), with xi = ai, is feasible for
+RLPτ.
+Conversely, a certified fractional solution must be implemented as a true batch. We fill the k
+slots independently according to the fractional copy counts and compare the resulting threshold
+tails with the LP winner envelope.
+Lemma 7.7 (Reusable Slot Rounding). Let (x, y) be feasible for RLPτ. Fill k independent slots by
+choosing type i with probability xi/k and a dummy type otherwise. Let A be the resulting random
+multiplicity vector. Then
+E[fτ(A)] ≥αR
+X
+i
+X
+ℓ∈Li
+(viℓ−τ)+yiℓ,
+E
+"X
+i
+ciAi
+#
+=
+X
+i
+cixi.
+Proof. For t ≥τ, set
+qx(t) =
+X
+i
+xi Pr[Vi > t].
+Since P
+i xi ≤k, we have 0 ≤qx(t) ≤k. One rounded slot exceeds t with probability qx(t)/k, so
+Pr[XA > t] = 1 −
+
+1 −qx(t)
+k
+k
+≥αR min{1, qx(t)},
+αR = 1 −1
+e.
+The LP winner mass above the same level is bounded by the same envelope:
+X
+i,ℓ:viℓ>t
+yiℓ≤min
+(
+1,
+X
+i
+xi Pr[Vi > t]
+)
+.
+Therefore, for every t ≥τ,
+Pr[XA > t] ≥αR
+X
+i,ℓ:viℓ>t
+yiℓ.
+Integrating over thresholds gives the excess-reward bound. The cost identity is linear because each
+slot chooses type i with probability xi/k.
+24
+
+
+--- Page 25 ---
+It remains to combine threshold monotonicity, slot rounding, and the structural characterization
+of optimal reusable policies by a single reservation-index batch.
+Theorem 5.3 (Finite-Support Reusable Guarantee). For every finite-support reusable instance
+with finite batch capacity k and every ε > 0, Algorithm 2 runs in polynomial time and returns a
+policy bπ = bπ(ε) satisfying
+valαR(bπ) ≥OPT1 −ε,
+αR = 1 −1
+e.
+Equivalently, the algorithm provides a (1, αR) discounted-cost bicriteria guarantee.
+Proof. The case T = 0 is handled exactly by Observation 2.3, so assume T > 0. Certification is
+monotone: if τ is LP-certified, then every τ ′ ≤τ is also LP-certified, because lowering the threshold
+increases the coefficients (viℓ−τ)+ and makes the certificate constraint easier to satisfy.
+Suppose RLPτ has a feasible solution (x, y). By Lemma 7.7,
+E
+"
+fτ(A) −αR
+ 
+T +
+X
+i
+ciAi
+!#
+≥αR
+
+X
+i
+X
+ℓ∈Li
+(viℓ−τ)+yiℓ−T −
+X
+i
+cixi
+
+≥0.
+Since the input distributions have finite support, the conditional expectation of the displayed
+certificate can be computed exactly after any partial assignment of slots. The method of conditional
+expectations returns a realization a satisfying
+fτ(a) ≥αRK(a).
+Because T > 0, the all-dummy realization has negative certificate value, so the returned batch is
+nonempty. By Lemma 5.2, the repeated policy for this batch has αR-discounted value at least τ.
+If OPT1 = 0, the algorithm either returns the empty policy or a certified repeated batch, both
+of which have nonnegative αR-discounted value. Suppose OPT1 > 0. By Theorem 3.3, there is an
+optimal reusable batch a⋆with reservation value σ⋆= OPT1. For every τ ≤σ⋆,
+fτ(a⋆) ≥fσ⋆(a⋆) = K(a⋆).
+Lemma 7.6 therefore implies that every τ ≤OPT1 is LP-certified. Monotonicity of certification lets
+binary search return a certified threshold bτ ≥OPT1 −ε. The policy returned for bτ satisfies
+valαR(bπ) ≥bτ ≥OPT1 −ε.
+AI Disclosure.
+OpenAI’s ChatGPT (GPT-5.5) was used to support the writing and mathematical
+development of the paper, including editing, improving the exposition, and formalizing parts of
+the analysis. In particular, it was used to develop illustrative examples and to extend results
+from high-or-zero distributions to general finite-support distributions. The authors made all final
+decisions regarding the mathematical statements and proofs, and independently re-derived, verified,
+and revised all AI-assisted mathematical content. The authors assume responsibility for all content.
+References
+[1] Arpit Agarwal, Rohan Ghuge, and Viswanath Nagarajan. Semi-bandit learning for monotone
+stochastic optimization*. In 2024 IEEE 65th Annual Symposium on Foundations of Computer
+Science (FOCS), pages 1260–1274, 2024.
+25
+
+
+--- Page 26 ---
+[2] Shipra Agrawal, Yichuan Ding, Amin Saberi, and Yinyu Ye. Correlation robust stochastic
+optimization. In Proceedings of the Twenty-First Annual ACM-SIAM Symposium on Discrete
+Algorithms, SODA. SIAM, 2010.
+[3] Alexia Atsidakou, Constantine Caramanis, Evangelia Gergatsouli, Orestis Papadigenopoulos,
+and Christos Tzamos. Contextual pandora’s box. In Proceedings of the Thirty-Eighth AAAI
+Conference on Artificial Intelligence and Thirty-Sixth Conference on Innovative Applications
+of Artificial Intelligence and Fourteenth Symposium on Educational Advances in Artificial
+Intelligence, AAAI’24/IAAI’24/EAAI’24. AAAI Press, 2024.
+[4] Alexandre Belloni, Yan Chen, and Yehua Wei.
+Online pandora’s box for contextual llm
+cascading, 2026.
+[5] Ben Berger, Tomer Ezra, Michal Feldman, and Federico Fusco. Pandora’s problem with
+combinatorial cost. In Proceedings of the 24th ACM Conference on Economics and Computation,
+EC, 2023.
+[6] Hedyeh Beyhaghi and Linda Cai. Pandora’s problem with nonobligatory inspection: Optimal
+structure and a ptas. In Proceedings of the 55th Annual ACM Symposium on Theory of
+Computing, STOC 2023, page 803–816, New York, NY, USA, 2023. Association for Computing
+Machinery.
+[7] Hedyeh Beyhaghi and Robert Kleinberg. Pandora’s problem with nonobligatory inspection.
+In Proceedings of the 2019 ACM Conference on Economics and Computation, EC ’19, page
+131–132, New York, NY, USA, 2019. Association for Computing Machinery.
+[8] Shant Boodaghians, Federico Fusco, Philip Lazos, and Stefano Leonardi. Pandora’s Box problem
+with order constraints. Mathematics of Operations Research, 48(1):498–519, 2024.
+[9] Robin Bowers and Bo Waggoner. Matching with nested and bundled pandora boxes. In Marios
+Mavronicolas, Qi Qi, and Grant Schoenebeck, editors, Web and Internet Economics, pages
+61–83, Cham, 2026. Springer Nature Switzerland.
+[10] Domagoj Bradač, Sahil Singla, and Goran Žužić. (Near) Optimal Adaptivity Gaps for Stochastic
+Multi-Value Probing. In Approximation, Randomization, and Combinatorial Optimization.
+Algorithms and Techniques, APPROX/RANDOM, pages 49:1–49:21, 2019.
+[11] Gruia Calinescu, Chandra Chekuri, Martin Pál, and Jan Vondrák. Maximizing a monotone
+submodular function subject to a Matroid constraint. SIAM Journal on Computing, 40(6):1740–
+1766, 2011.
+[12] Shuchi Chawla, Dimitris Christou, and Trung Dang. Commitment gap via correlation gap,
+2025. arXiv:2508.20246.
+[13] Shuchi Chawla, Dimitris Christou, Amit Harlev, and Ziv Scully. Combinatorial selection with
+costly information, 2024. arXiv:2412.03860.
+[14] Shuchi Chawla, Evangelia Gergatsouli, Jeremy McMahan, and Christos Tzamos. Approxi-
+mating Pandora’s Box with Correlations. In Nicole Megow and Adam Smith, editors, Ap-
+proximation, Randomization, and Combinatorial Optimization. Algorithms and Techniques
+(APPROX/RANDOM 2023), volume 275 of Leibniz International Proceedings in Informatics
+(LIPIcs), pages 26:1–26:24, Dagstuhl, Germany, 2023. Schloss Dagstuhl – Leibniz-Zentrum für
+Informatik.
+26
+
+
+--- Page 27 ---
+[15] Shuchi Chawla, Evangelia Gergatsouli, Yifeng Teng, Christos Tzamos, and Ruimin Zhang.
+Pandora’s box with correlations: Learning and approximation. In 2020 IEEE 61st Annual
+Symposium on Foundations of Computer Science (FOCS), pages 1214–1225, 2020.
+[16] Hossein Esfandiari, Mohammad Taghi Haji Aghayi, Brendan Lucier, and Michael Mitzenmacher.
+Online pandora’s boxes and bandits. In Proceedings of the Thirty-Third AAAI Conference
+on Artificial Intelligence and Thirty-First Innovative Applications of Artificial Intelligence
+Conference and Ninth AAAI Symposium on Educational Advances in Artificial Intelligence,
+AAAI’19/IAAI’19/EAAI’19. AAAI Press, 2019.
+[17] Hu Fu, Jiawei Li, and Daogao Liu. Pandora box problem with nonobligatory inspection:
+Hardness and approximation scheme. In Proceedings of the 55th Annual ACM Symposium on
+Theory of Computing, STOC 2023, page 789–802, New York, NY, USA, 2023. Association for
+Computing Machinery.
+[18] Zijun Gao, Yanjun Han, Zhimei Ren, and Zhengqing Zhou. Batched multi-armed bandits
+problem. In H. Wallach, H. Larochelle, A. Beygelzimer, F. d'Alché-Buc, E. Fox, and R. Garnett,
+editors, Advances in Neural Information Processing Systems, volume 32. Curran Associates,
+Inc., 2019.
+[19] Michael R. Garey and David S. Johnson. Computers and Intractability: A Guide to the Theory
+of NP-Completeness. W. H. Freeman, 1979.
+[20] Khashayar Gatmiry, Thomas Kesselheim, Sahil Singla, and Yifan Wang. Bandit algorithms
+for prophet inequality and pandora’s box. In Proceedings of the 2024 Annual ACM-SIAM
+Symposium on Discrete Algorithms (SODA), pages 462–500, 2024.
+[21] Evangelia Gergatsouli and Christos Tzamos.
+Online learning for min sum set cover and
+pandora’s box. In Kamalika Chaudhuri, Stefanie Jegelka, Le Song, Csaba Szepesvari, Gang
+Niu, and Sivan Sabato, editors, Proceedings of the 39th International Conference on Machine
+Learning, volume 162 of Proceedings of Machine Learning Research, pages 7382–7403. PMLR,
+17–23 Jul 2022.
+[22] Evangelia Gergatsouli and Christos Tzamos. Weitzman’s rule for pandora’s box with correlations.
+In Proceedings of the 37th International Conference on Neural Information Processing Systems,
+NIPS ’23, Red Hook, NY, USA, 2023. Curran Associates Inc.
+[23] Aditya Grover, Todor Markov, Peter Attia, Norman Jin, Nicolas Perkins, Bryan Cheong,
+Michael Chen, Zi Yang, Stephen Harris, William Chueh, and Stefano Ermon.
+Best arm
+identification in multi-armed bandits with delayed feedback. In Amos Storkey and Fernando
+Perez-Cruz, editors, Proceedings of the Twenty-First International Conference on Artificial
+Intelligence and Statistics, volume 84 of Proceedings of Machine Learning Research, pages
+833–842. PMLR, 09–11 Apr 2018.
+[24] Sudipto Guha, Kamesh Munagala, and Martin Pal. Multiarmed bandit problems with delayed
+feedback, 2010. arXiv:1011.1161.
+[25] Anupam Gupta, Viswanath Nagarajan, and Sahil Singla. Adaptivity gaps for stochastic probing:
+Submodular and XOS functions. In Proceedings of the Twenty-Eighth Annual ACM-SIAM
+Symposium on Discrete Algorithms, SODA, pages 1688–1702. SIAM, 2017.
+27
+
+
+--- Page 28 ---
+[26] Pooria Joulani, András György, and Csaba Szepesvári. Online learning under delayed feedback.
+In Proceedings of the 30th International Conference on Machine Learning, volume 28 of
+Proceedings of Machine Learning Research. PMLR, 2013.
+[27] Yusuf Kalayci, Vinod Raman, and Shaddin Dughmi. Optimal stopping vs best-of-n for inference
+time optimization, 2025.
+[28] Robert Kleinberg, Bo Waggoner, and E. Glen Weyl. Descending price optimally coordinates
+search. In Proceedings of the 2016 ACM Conference on Economics and Computation, EC ’16,
+page 23–24, New York, NY, USA, 2016. Association for Computing Machinery.
+[29] Junyan Liu, Ziyun Chen, Kun Wang, Haipeng Luo, and Lillian J. Ratliff. Improved regret
+and contextual linear extension for pandora’s box and prophet inequality. In The Thirty-ninth
+Annual Conference on Neural Information Processing Systems, 2025.
+[30] Wojciech Olszewski and Richard Weber. A more general pandora rule? Journal of Economic
+Theory, 160(C):429–437, 2015.
+[31] Vianney Perchet, Philippe Rigollet, Sylvain Chassang, and Erik Snowberg. Batched bandit
+problems. In Peter Grünwald, Elad Hazan, and Satyen Kale, editors, Proceedings of The 28th
+Conference on Learning Theory, volume 40 of Proceedings of Machine Learning Research, pages
+1456–1456, Paris, France, 03–06 Jul 2015. PMLR.
+[32] Ciara Pike-Burke, Shipra Agrawal, Csaba Szepesvari, and Steffen Grunewalder.
+Bandits
+with delayed, aggregated anonymous feedback. In Jennifer Dy and Andreas Krause, editors,
+Proceedings of the 35th International Conference on Machine Learning, volume 80 of Proceedings
+of Machine Learning Research, pages 4105–4113. PMLR, 10–15 Jul 2018.
+[33] Ziv Scully and Laura Doval. Local hedging approximately solves Pandora’s Box problems with
+nonobligatory inspection, 2024. arXiv:2410.19011.
+[34] Sahil Singla. The price of information in combinatorial optimization. In Proceedings of the
+Twenty-Ninth Annual ACM-SIAM Symposium on Discrete Algorithms, SODA. SIAM, 2018.
+[35] Tobias Sommer Thune, Nicolò Cesa-Bianchi, and Yevgeny Seldin. Nonstochastic multiarmed
+bandits with unrestricted delays. Curran Associates Inc., Red Hook, NY, USA, 2019.
+[36] Arun Verma, Zhongxiang Dai, and Bryan Kian Hsiang Low. Bayesian optimization under
+stochastic delayed feedback. In Kamalika Chaudhuri, Stefanie Jegelka, Le Song, Csaba Szepes-
+vari, Gang Niu, and Sivan Sabato, editors, Proceedings of the 39th International Conference on
+Machine Learning, volume 162 of Proceedings of Machine Learning Research, pages 22145–22167.
+PMLR, 17–23 Jul 2022.
+[37] Claire Vernade, Olivier Cappé, and Vianney Perchet. Stochastic Bandit Models for Delayed
+Conversions. In Conference on Uncertainty in Artificial Intelligence, Sydney, Australia, August
+2017.
+[38] Martin L. Weitzman. Optimal search for the best alternative. Econometrica, 47(3):641–654,
+1979.
+[39] Han Wu and Stefan Wager. Thompson sampling with unrestricted delays. In Proceedings of
+the 23rd ACM Conference on Economics and Computation, EC ’22, page 937–955, New York,
+NY, USA, 2022. Association for Computing Machinery.
+28
+
+
+--- Page 29 ---
+A
+Additional Structural Details
+A.1
+A lower bound for consecutive batching
+We sort boxes by their individual reservation values computed with respect to item costs only: σi is
+defined by
+E[(Vi −σi)+] = ci.
+Fix an ordering of the boxes. A consecutive-batch policy is a policy that only opens intervals in the
+current remaining order.
+We first give the full calculation for the example from the main text. The setup cost is T = 10,
+the batch capacity is k = 2, and the boxes are ordered as A, D, B. Box A has item cost cA = 1,
+with Pr[VA = 100] = 0.1 and Pr[VA = 0] = 0.9. Box B is deterministic with value 9 and item cost
+cB = 1. Box D is deterministic with value 100 and item cost cD = 91.
+The reservation values are
+σA = 100 −1
+0.1 = 90,
+σD = 100 −91 = 9,
+σB = 9 −1 = 8.
+Thus the reservation-value order is A ≻D ≻B. The utilities of the consecutive feasible batches are
+S
+{A}
+{D}
+{B}
+{A, D}
+{D, B}
+u(S)
+−1
+−1
+−2
+−2
+−2.
+Indeed, u({A}) = 10 −10 −1 = −1, u({D}) = 100 −10 −91 = −1, u({B}) = 9 −10 −1 = −2, and
+both pairs containing D have maximum value 100 and total cost 102. On the other hand,
+u({A, B}) = E[max{VA, VB}] −10 −1 −1 =
+ 0.1 · 100 + 0.9 · 9
+ −10 −1 −1 = 6.1 > 0.
+So the non-consecutive batch {A, B} is profitable, while every consecutive batch is unprofitable.
+Moreover, every consecutive-batch policy has value at most zero. If such a policy ever opens D,
+then its final reward is at most 100, while opening D alone already costs T + cD = 101. Thus any
+policy opening D has negative value. If the policy never opens D, then it can only open A and B as
+singleton batches. The expected marginal reward from opening A is at most 10 < T + cA = 11, and
+the expected marginal reward from opening B is at most 9 < T + cB = 11. Hence opening either
+singleton cannot increase expected value, and the empty policy is optimal among consecutive-batch
+policies.
+We now prove the bicriteria lower bound.
+Theorem A.1. Fix k ≥2 and α ∈(1/2, 1]. There is a finite-support non-reusable instance with
+setup cost T = 1 and batch capacity k such that the reservation-value order is
+A ≻D1 ⪰· · · ⪰Dk ≻B,
+where D1, . . . , Dk are identical decoy boxes, and every consecutive-batch policy π satisfies
+valα(π) ≤0,
+while OPT1 > 0. Consequently, no algorithm restricted to consecutive batches in this order can
+guarantee an (α, α)-bicriteria approximation for any α > 1/2.
+29
+
+
+--- Page 30 ---
+Proof. The construction has two useful boxes and a block of decoy boxes. The useful boxes A and
+B are profitable only when opened together: A is a rare large prize, B is a moderate sure prize, and
+their maximum pays for one setup cost. The decoy boxes only serve to separate A from B in the
+reservation value order. They are chosen to have reservation values between those of A and B, but
+their total expected reward is arbitrarily small.
+Choose β with 1/2 < β < α. This will be the expected value of each useful box. Then choose
+d > 0 such that β + d < α; d will upper-bound the total expected value of all decoys. Since β > 1/2,
+choose p ∈(0, 1) small enough that
+(2 −p)β > 1.
+Finally choose ε > 0 small enough that
+(2 −p)β −1 −2ε > 0
+and
+ε < β.
+Next, we create the boxes. Box A has item cost cA = ε and
+Pr[VA = β/p] = p,
+Pr[VA = 0] = 1 −p.
+Box B has item cost cB = ε and deterministic value VB = β. Thus
+E[VA] = E[VB] = β.
+Their reservation values are
+σA = β −ε
+p
+,
+σB = β −ε,
+so σA > σB.
+It remains to insert k boxes between A and B without giving a consecutive policy useful value.
+Choose any target reservation value σD with σA > σD > σB. Each decoy is a rare high value: choose
+G > max{σD, d/k}, let
+Pr[VD = G] = d
+kG,
+Pr[VD = 0] = 1 −d
+kG,
+and set
+cD = d
+kG(G −σD).
+Thus, each decoy box has expected value d/k. At the same time, its reservation value is exactly the
+prescribed value σD, since
+E[(VD −σD)+] = d
+kG(G −σD) = cD.
+We create independent copies D1, . . . , Dk of the same box type D.
+Therefore the decreasing
+reservation value order is
+A ≻D1 ⪰· · · ⪰Dk ≻B.
+Now consider any consecutive-batch policy π. The key point is that every nonempty batch pays
+one setup cost, while a consecutive policy can extract at most one useful box, plus negligible decoy
+box value, per opened batch. Let N be the number of nonempty batches opened, let IA, IB indicate
+whether A, B are opened, and let IDj indicate whether the j-th decoy box is opened. If both A and
+B are opened, then at least two batches must be opened: in the initial order, any interval containing
+both useful boxes also contains all k decoys and therefore has size k + 2. Hence, pathwise,
+IA + IB ≤N.
+30
+
+
+--- Page 31 ---
+Also, if N = 0, no decoy box is opened, while if N ≥1, the total expected value of all opened decoy
+boxes is at most the total expected value d of all decoys. Therefore, pathwise,
+d
+k
+k
+X
+j=1
+IDj ≤dN.
+Let Mπ be the maximum reward observed by π. We upper-bound this maximum by the sum of
+all opened rewards. Since rewards are nonnegative,
+Mπ ≤IAVA + IBVB +
+k
+X
+j=1
+IDjVDj.
+The event that a box is opened is determined before that box’s value is observed, and values are
+independent. Therefore,
+E[Mπ] ≤β E[IA + IB] + d
+k
+k
+X
+j=1
+E[IDj]
+≤(β + d)E[N].
+The setup cost alone is N, and item costs are nonnegative, so Cπ ≥N. Thus
+valα(π) = E[Mπ] −αE[Cπ] ≤(β + d −α)E[N] ≤0.
+On the other hand, the unrestricted policy can open the non-consecutive batch {A, B}, which is
+feasible because k ≥2. Since β/p > β,
+E[max{VA, VB}] = p · β
+p + (1 −p)β = (2 −p)β.
+Therefore the original-cost value of opening {A, B} is
+(2 −p)β −1 −2ε > 0.
+Hence OPT1 > 0, while every consecutive-batch policy has α-discounted value at most zero. This
+proves the theorem.
+A.2
+Numerical details for the strict adaptivity-gap example
+We tuned parameters of the instance used in Example 3.1 with at most two decimal places. The setup
+cost is T = 0.44, the batch capacity is k = 2, and the boxes are as follows. Box 1 is deterministic
+and has value V1 = 0.83 and cost c1 = 0.40. Box 2 has distribution
+Pr[V2 = 0] = 0.48,
+Pr[V2 = 0.83] = 0.43,
+Pr[V2 = 100] = 0.09,
+and cost c2 = 8.50. Box 3 has distribution
+Pr[V3 = 100] = 0.05,
+Pr[V3 = 0] = 0.95,
+and cost c3 = 4.16.
+Consider the adaptive policy that first opens box 2. If V2 = 0, it opens {1, 3}. If V2 = 0.83, it
+opens {3}. If V2 = 100, it stops. On the low and medium branches, the expected final reward after
+opening the second batch is
+0.05 · 100 + 0.95 · 0.83 = 5.7885.
+31
+
+
+--- Page 32 ---
+Therefore the expected reward of the adaptive policy is
+E[M] = (0.48 + 0.43) · 5.7885 + 0.09 · 100 = 14.267535.
+The relevant batch costs are
+K({2}) = 0.44 + 8.50 = 8.94,
+K({1, 3}) = 0.44 + 0.40 + 4.16 = 5.00,
+and
+K({3}) = 0.44 + 4.16 = 4.60.
+Hence
+E[C] = 8.94 + 0.48 · 5.00 + 0.43 · 4.60 = 13.318.
+Thus the adaptive policy has value
+E[M] −E[C] = 0.949535.
+We now compute the best fixed-menu value. Since a fixed-menu policy can ignore available
+batches, it suffices to enumerate maximal disjoint menus. For each fixed menu F, we treat every
+batch B ∈F as a Pandora box with reward XB = maxi∈B Vi and cost K(B), run Weitzman’s rule,
+and record the resulting fixed-menu utility val1(F).
+For k = 2, the maximal disjoint menus and their values are
+F
+val1(F)
+{{1}, {2}, {3}}
+0.796055
+{{1, 2}, {3}}
+0.794535
+{{1, 3}, {2}}
+0.795380
+{{2, 3}, {1}}
+0.789055.
+Therefore
+OPTfix(T, 2) = 0.796055.
+Since
+0.949535
+0.796055 > 1.1928,
+this gives a strict adaptivity gap of about 1.193.
+For k ≥3, the only additional maximal menu is the single batch {{1, 2, 3}}. Its one-shot value is
+E[max{V1, V2, V3}] −K({1, 2, 3}) = 14.267535 −13.50 = 0.767535,
+which is still below 0.796055. Hence the same rounded instance gives a strict adaptive-versus-fixed-
+menu gap for every k ≥2.
+A.3
+Capped-value reduction for non-reusable policies
+For a feasible batch B, let XB = maxi∈B Vi. If K(B) = 0, define
+κB = XB,
+βB = 0.
+If 0 < K(B) ≤E[XB], let σB solve
+K(B) = E
+(XB −σB)+.
+For such positive-cost batches, define
+κB = min{XB, σB},
+βB = (XB −σB)+.
+A positive-cost batch with K(B) > E[XB] is called overpriced.
+32
+
+
+--- Page 33 ---
+Lemma A.2 (Overpriced Batches Can Be Skipped). In every finite non-reusable instance, there is
+an optimal policy that never opens an overpriced batch.
+Proof. Let W(U, m) be the optimal expected continuation payoff when the unopened boxes are U
+and the current best observed value is m. Increasing the incumbent cannot hurt, and increasing it by
+d can improve the final selected value by at most d. Thus W(U, ·) is nondecreasing and 1-Lipschitz.
+Suppose a policy is about to open an overpriced batch B ⊆U. Its continuation payoff is at most
+−K(B) + EW(U \ B, max{m, XB}) ≤W(U \ B, m) −K(B) + E
+(XB −m)+
+≤W(U \ B, m) −K(B) + E[XB]
+< W(U \ B, m).
+Discarding B without opening it and then following the same continuation is therefore strictly
+better than opening B.
+Lemma A.3 (Capped-Value Upper Bound for Adaptive Policies). Let Oπ be the random family of
+batches opened by a finite non-reusable policy π that uses no overpriced positive-cost batches. Then
+val1(π) ≤E
+max
+ {0} ∪{κB : B ∈Oπ}
+ .
+Proof. Index the possible rounds by t. Let Ht be the history immediately before round t, let It
+indicate that the round is reached, and let Bt be the batch selected at that history. Both It and Bt
+are Ht-measurable. Since Bt contains only unopened boxes, its primitive values are independent of
+Ht. Therefore, on every reached history,
+E[βBt | Ht] = E
+(XBt −σBt)+ | Ht
+ = K(Bt),
+and hence E[It · βBt] = E[It · K(Bt)].
+Let At indicate, with deterministic tie-breaking, that round t supplies the final maximum. Then
+At ≤It, and
+E[Mπ] −E[Cπ] = E
+X
+t
+At · (κBt + βBt) −E
+X
+t
+It · K(Bt)
+≤E
+X
+t
+At · κBt
+≤E
+max
+ {0} ∪{κB : B ∈Oπ}
+ .
+All sums are finite because each primitive box can be opened at most once.
+Proposition A.4 (Fixed Menus Are Classical Pandora Instances). Fix a finite disjoint family F
+of feasible batches, each of which is either zero-cost or non-overpriced. Treat each batch B ∈F as
+one box in a finite classical Pandora instance, with value distribution XB and opening cost K(B).
+These induced boxes are independent, so Weitzman’s rule is optimal, and its value is
+E
+max
+ {0} ∪{κB : B ∈F}
+ .
+Proof. Disjointness makes the induced box prizes (XB)B∈F independent. The claim is Weitzman’s
+theorem applied to these boxes [38].
+33
+
+
+--- Page 34 ---
+A.4
+Proof of the non-reusable adaptivity gap
+Lemma A.5 (Random-Path Rounding). Let Y1, . . . , YN be independent latent variables. Each
+action e has a support S(e) ⊆[N], reveals a measurable observation of (Yi)i∈S(e), and carries a
+nonnegative integrable mark determined by that observation. Assume every feasible action sequence
+has pairwise-disjoint supports. For every finite-depth adaptive decision tree, there is a deterministic
+feasible path whose expected maximum mark is at least half the adaptive expected maximum mark.
+Proof. It suffices to prove the claim for the randomized path obtained by running the tree on
+an independent ghost instance and then probing the resulting path on a fresh real instance; one
+deterministic path attains at least the average.
+Fix a threshold τ ≥0. Let aτ(T ) be the probability that the adaptive tree T observes a mark at
+least τ, and let rτ(T ) be the same probability for the ghost-path policy. We prove rτ(T ) ≥aτ(T )/2
+by induction on the tree depth.
+Let the root action be e, with mark Xe, observation Oe, and continuation tree To after observation
+o. Put p = P[Xe ≥τ]. Then
+aτ(T ) = p + E
+h
+1{Xe<τ}aτ(TOe)
+i
+.
+For the ghost-path policy, the real root mark is independent of the ghost observation eOe. Moreover,
+every feasible continuation has support disjoint from the root support. The induction hypothesis
+gives
+rτ(T ) ≥p + 1 −p
+2
+· E
+h
+aτ(Te
+Oe)
+i
+.
+Since eOe and Oe have the same marginal distribution,
+E
+h
+aτ(Te
+Oe)
+i
+≥E
+h
+1{Xe<τ}aτ(TOe)
+i
+=: B.
+Therefore
+rτ(T ) −1
+2 · aτ(T ) ≥p
+2 · (1 −B) ≥0.
+Integrating over thresholds using E[Z] =
+R ∞
+0 P[Z ≥τ] dτ proves the expected maximum bound.
+Proof of Theorem 3.2. The definitions above already handle zero-cost batches through κB = XB
+and βB = 0. By Lemma A.2, take an optimal non-reusable policy that never opens an overpriced
+positive-cost batch. Lemma A.3 upper-bounds its net value by the expected maximum capped value
+among the batches it opens.
+Apply Lemma A.5 to the adaptive decision tree whose actions are feasible batches, whose
+supports are the primitive boxes in the batch, and whose mark is the capped value κB. Along
+every realized non-reusable path these supports are disjoint. Hence some fixed disjoint family has
+expected maximum capped value at least half the adaptive capped value. Proposition A.4 identifies
+this quantity with the value of the corresponding fixed-menu Pandora instance. Thus
+OPTBP(T,k)
+1
+≤2 · OPTfix(T, k).
+34
+
+
+--- Page 35 ---
+A.5
+Proof of Theorem 3.3: Reusable reservation index
+Proof of Theorem 3.3. For finite k, there are only
+ n+k
+k
+ −1 feasible reusable batches. For k = ∞,
+every non-overpriced batch a satisfies
+T +
+X
+i
+ai · ci = K(a) ≤E[Xa] ≤Vmax.
+Since every ci > 0, this implies ai ≤(Vmax −T)+/ci for each i, so only finitely many non-overpriced
+batches remain. Hence σ⋆is attained whenever it is positive.
+For every feasible reusable batch a and every s ≥σ⋆,
+E
+(Xa −s)+ ≤K(a).
+For a non-overpriced batch this follows because the excess function decreases in s and s ≥σ(a). For
+an overpriced batch it follows from E[(Xa −s)+] ≤E[Xa] < K(a).
+Set W(m) = max{m, σ⋆}. If m < σ⋆, opening any batch a and then continuing according to W
+gives at most
+−K(a) + EW(max{m, Xa}) = σ⋆−K(a) + E
+(Xa −σ⋆)+ ≤σ⋆= W(m).
+If m ≥σ⋆, the corresponding bound is
+−K(a) + E max{m, Xa} = m −K(a) + E
+(Xa −m)+ ≤m = W(m).
+Backward induction bounds every finite-horizon policy by W(m). For an admissible infinite-horizon
+policy, truncate after h openings. Bounded convergence applies to the terminal reward and monotone
+convergence applies to the accumulated cost, so the same upper bound survives as h →∞.
+If σ⋆> 0, let a⋆attain it and put p = P[Xa⋆> σ⋆]. Positive opening cost implies p > 0.
+Repeating a⋆until the first threshold crossing uses a geometric number of openings and has value
+E[Xa⋆| Xa⋆> σ⋆] −K(a⋆)
+p
+= σ⋆,
+by the reservation equation. This attains W(m) whenever m < σ⋆; for m ≥σ⋆, stopping attains
+W(m).
+35
