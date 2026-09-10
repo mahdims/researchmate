@@ -1,10 +1,21 @@
 # Living Review: Generative AI for OR
 
-**Last Updated:** 2026-09-08
+**Last Updated:** 2026-09-10
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-10 (1 papers)
+
+### [Ask Before You Optimize: Dynamic Pre-Formulation Clarification for Interactive Optimization](https://arxiv.org/abs/2609.05258)
+
+**2026-09-04** | Shanghai Jiao Tong University, Cardinal Operations | M=7 P=9 I=8 **MUST-READ** *discuss*
+
+*Method:* Interactive Optimization (InterOPT), a two-stage framework comprising Dynamic Gap Search (Stage 1) and Gap-Guided Action Search (Stage 2) | *LLM role:* decomposition_guide, heuristic_generator, evaluator
+
+> Ge et al. introduce OR-Clarify, a benchmark evaluating whether LLMs can identify missing formulation-critical information and ask clarifying questions before generating an optimization model. The authors also propose InterOPT, a two-stage framework that tracks unresolved formulation gaps to guide questioning, which improves exact requirement recovery by 16.9% over baselines in choice-based settings, though it struggles to dominate free-form interactions. The key insight is the benchmark construction pipeline: systematically withholding specific facts (e.g., objective direction, hard vs. soft constraints) from a complete OR specification to explicitly measure an agent's 'silent assumptions' and premature readiness. This is highly relevant for our work on ambiguity-grounded OR benchmarking, as the metrics for exact slot recovery and silent assumption tracking can be directly integrated into our evaluation pipelines.
+
 
 #### 2026-09-08 (2 papers)
 

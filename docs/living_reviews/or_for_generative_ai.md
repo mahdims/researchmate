@@ -1,10 +1,29 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-09-08
+**Last Updated:** 2026-09-10
 
 ---
 
 ## Recent Papers
+
+#### 2026-09-10 (2 papers)
+
+### [Latency-Aware Orchestration for Multi-Agent LLM Workflows on Heterogeneous GPUs](https://arxiv.org/abs/2609.03335)
+
+**2026-09-03** | Beihang University, University of Leeds | M=8 P=9 I=8 **MUST-READ** *discuss*
+
+*Method:* Prediction-guided runtime with a three-stage process: Predictor (estimates device-specific costs), Constructor (builds fusion and model-lifecycle alternatives), and Scheduler (jointly optimizes selection, placement, and execution order using an event-driven heuristic with lexicographic ranking). | *LLM role:* orchestrates_llm_workflows
+
+> Wang et al. propose a prediction-guided runtime that optimizes the physical execution graph of multi-agent LLM workflows on heterogeneous GPUs by jointly scheduling model lifecycles, placement, and execution order. Backed by strong empirical numbers, the system reduces end-to-end makespan by up to 36.8 percent and saves roughly 24 GPU-seconds per session compared to state-of-the-art schedulers like Parrot and Kairos. The key insight is the separation of logical workflow semantics from physical execution, allowing the scheduler to fuse consecutive same-deployment activations and share model-loading actions across isolated workflows to minimize idle residency and repeated admission overhead. This is highly relevant to our research in OR methods for AI infrastructure and LLM serving scheduling, providing concrete system-level optimizations that we should attempt to capture in our mathematical scheduling formulations.
+
+### [Atlas: Optimizing Deployment of Compound AI Workflows on Heterogeneous Clusters](https://arxiv.org/abs/2609.04513)
+
+**2026-09-03** | TU Wien | M=7 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Markovian Accuracy Predictor (MAP) for accuracy estimation and Mixed-Integer Linear Program (MILP) for plan selection | *LLM role:* component_of_problem
+
+> Atlas optimizes the deployment of compound AI workflows (e.g., RAG, routing, loops) on heterogeneous clusters by using a Mixed-Integer Linear Program (MILP) to select model variants and hardware placements under latency and cost SLOs. The results are backed by strong empirical evidence, showing that their Markovian Accuracy Predictor (MAP) achieves up to 0.947 Spearman correlation with oracle accuracy while reducing profiling costs by 2.6x, allowing the MILP to find plans within 0.03 of oracle accuracy. The key insight is the MAP formulation itself, which models intermediate output quality as a discrete Markov chain between adjacent stages, enabling accurate end-to-end pipeline evaluation without combinatorial exhaustive profiling. This is highly relevant for research in OR formulations for LLM serving scheduling, providing a concrete mathematical framework for optimizing multi-stage LLM systems that could also be adapted for multi-agent coordination pipelines.
+
 
 #### 2026-09-08 (3 papers)
 
