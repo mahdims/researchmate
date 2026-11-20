@@ -2,7 +2,7 @@
 layout: default
 ---
 
-## Updated on 2026.11.18
+## Updated on 2026.11.20
 <details>
   <summary>Table of Contents</summary>
   <ol>
