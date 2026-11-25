@@ -1,12 +1,37 @@
 """
 Unified LLM Client - Abstracts different LLM providers
 
-Supports: Gemini, Anthropic Claude, OpenAI
+Supports: Gemini, Anthropic Claude, OpenAI, DeepSeek
 """
 
 import json
 from typing import Optional, Dict, Any
 from config import ModelConfig, get_api_key
+
+# DeepSeek exposes an OpenAI-compatible API (https://api-docs.deepseek.com/).
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+# When max_tokens is omitted DeepSeek caps non-thinking output at 8K, which can truncate
+# long Layer 1 JSON. Billing is per generated token, so a higher cap costs nothing extra.
+DEEPSEEK_DEFAULT_MAX_TOKENS = 32768
+# DeepSeek's JSON mode can occasionally return blank content; retry before giving up.
+DEEPSEEK_JSON_ATTEMPTS = 2
+
+
+def _schema_dict(output_schema) -> dict:
+    """JSON schema dict for a Pydantic model (v2 or v1)."""
+    if hasattr(output_schema, 'model_json_schema'):
+        return output_schema.model_json_schema()
+    return output_schema.schema()
+
+
+def _json_instruction(output_schema) -> str:
+    """Prompt suffix for providers without native schema-constrained output."""
+    return (
+        "\n\nRespond with a single valid JSON object that conforms to the JSON schema below. "
+        "Do not include any markdown formatting or code blocks, just the raw JSON.\n\n"
+        f"JSON schema:\n{json.dumps(_schema_dict(output_schema))}"
+    )
+
 
 class LLMClient:
     """Unified interface for different LLM providers."""
@@ -22,6 +47,8 @@ class LLMClient:
             self._init_anthropic()
         elif self.provider == "openai":
             self._init_openai()
+        elif self.provider == "deepseek":
+            self._init_deepseek()
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
 
@@ -80,6 +107,16 @@ class LLMClient:
 
         self.client = OpenAI(api_key=api_key)
 
+    def _init_deepseek(self):
+        """Initialize DeepSeek client (OpenAI-compatible endpoint)."""
+        from openai import OpenAI
+
+        api_key = get_api_key("deepseek")
+        if not api_key:
+            raise ValueError("DEEPSEEK_API_KEY environment variable not set")
+
+        self.client = OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         """
         Generate text using the configured model.
@@ -97,6 +134,8 @@ class LLMClient:
             return self._generate_anthropic(system_prompt, user_prompt)
         elif self.provider == "openai":
             return self._generate_openai(system_prompt, user_prompt)
+        elif self.provider == "deepseek":
+            return self._generate_deepseek(system_prompt, user_prompt)
 
     def _generate_gemini(self, system_prompt: str, user_prompt: str) -> str:
         """Generate using Gemini."""
@@ -123,13 +162,7 @@ class LLMClient:
         # Gemini combines system and user prompts
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
-        # Convert Pydantic schema to JSON schema dict
-        if hasattr(output_schema, 'model_json_schema'):
-            # Pydantic v2
-            schema_dict = output_schema.model_json_schema()
-        else:
-            # Pydantic v1
-            schema_dict = output_schema.schema()
+        schema_dict = _schema_dict(output_schema)
 
         if hasattr(self, 'use_new_genai') and self.use_new_genai:
             config = {
@@ -177,16 +210,54 @@ class LLMClient:
 
     def _generate_openai(self, system_prompt: str, user_prompt: str) -> str:
         """Generate using OpenAI."""
+        kwargs = {}
+        if self.config.max_tokens > 0:  # 0 = no limit (the API rejects max_tokens=0)
+            kwargs["max_tokens"] = self.config.max_tokens
         response = self.client.chat.completions.create(
             model=self.config.model_name,
-            max_tokens=self.config.max_tokens,
             temperature=self.config.temperature,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ]
+            ],
+            **kwargs,
         )
         return response.choices[0].message.content
+
+    def _generate_deepseek(self, system_prompt: str, user_prompt: str,
+                           json_mode: bool = False) -> str:
+        """Generate using DeepSeek's OpenAI-compatible chat completions API."""
+        kwargs = {
+            "model": self.config.model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": self.config.max_tokens or DEEPSEEK_DEFAULT_MAX_TOKENS,
+            # Thinking mode is on by default at DeepSeek; make it explicit per model config.
+            "extra_body": {"thinking": {"type": "enabled" if self.config.thinking else "disabled"}},
+        }
+        if not self.config.thinking:
+            kwargs["temperature"] = self.config.temperature  # ignored in thinking mode
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = self.client.chat.completions.create(**kwargs)
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            print(f"[WARNING] DeepSeek output hit max_tokens ({kwargs['max_tokens']}); response is truncated")
+        return choice.message.content or ""
+
+    def _generate_deepseek_json(self, system_prompt: str, user_prompt: str, output_schema) -> str:
+        """DeepSeek JSON mode, retrying when the API returns blank content."""
+        system = system_prompt + _json_instruction(output_schema)
+        text = ""
+        for attempt in range(1, DEEPSEEK_JSON_ATTEMPTS + 1):
+            text = self._generate_deepseek(system, user_prompt, json_mode=True)
+            if text.strip():
+                return text
+            print(f"[WARNING] DeepSeek returned blank JSON content (attempt {attempt}/{DEEPSEEK_JSON_ATTEMPTS})")
+        return text
 
     def generate_json(self, system_prompt: str, user_prompt: str,
                      output_schema: Any) -> Dict:
@@ -208,11 +279,12 @@ class LLMClient:
                 user_prompt,
                 output_schema
             )
+        elif self.provider == "deepseek":
+            response_text = self._generate_deepseek_json(system_prompt, user_prompt, output_schema)
         else:
-            # For other providers, add JSON instruction and parse manually
-            json_instruction = "\n\nRespond with a valid JSON object matching the schema. Do not include any markdown formatting or code blocks, just the raw JSON."
+            # For other providers, put the schema in the prompt and parse manually
             response_text = self.generate(
-                system_prompt + json_instruction,
+                system_prompt + _json_instruction(output_schema),
                 user_prompt
             )
 
@@ -292,7 +364,7 @@ def test_client():
     """Test the LLM client with a simple prompt."""
     from config import AGENT_MODELS
 
-    print("Testing Gemini client...")
+    print(f"Testing {AGENT_MODELS.reader.provider} client ({AGENT_MODELS.reader.model_name})...")
 
     client = LLMClient(AGENT_MODELS.reader)
 

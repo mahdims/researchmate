@@ -13,10 +13,11 @@ from typing import Optional
 @dataclass
 class ModelConfig:
     """Configuration for a specific agent's model."""
-    provider: str  # "gemini" | "anthropic" | "openai"
+    provider: str  # "gemini" | "anthropic" | "openai" | "deepseek"
     model_name: str
     temperature: float = 0.0
     max_tokens: int = 4096
+    thinking: bool = False  # DeepSeek only: reasoning mode (DeepSeek's API default is ON)
 
 @dataclass
 class AgentModels:
@@ -99,19 +100,31 @@ DEFAULT_AGENT_MODELS = AgentModels(
 # API KEY MANAGEMENT
 # ============================================================================
 
+API_KEY_ENV_VARS = {
+    "gemini": "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
+
+
 def get_api_key(provider: str) -> Optional[str]:
     """Get API key for a specific provider from environment."""
-    key_map = {
-        "gemini": "GEMINI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai": "OPENAI_API_KEY"
-    }
-
-    env_var = key_map.get(provider)
+    env_var = API_KEY_ENV_VARS.get(provider)
     if not env_var:
         raise ValueError(f"Unknown provider: {provider}")
 
     return os.getenv(env_var)
+
+
+def missing_api_keys(*agent_names: str) -> list:
+    """Return the env var names of unset API keys for the given agents' configured providers."""
+    missing = []
+    for name in agent_names:
+        env_var = API_KEY_ENV_VARS[getattr(AGENT_MODELS, name).provider]
+        if not os.getenv(env_var) and env_var not in missing:
+            missing.append(env_var)
+    return missing
 
 # ============================================================================
 # COST ESTIMATES (loaded from research_config/model_config.yaml)
@@ -153,7 +166,8 @@ def _load_model_config_from_yaml():
                 provider=layer_config.get('provider', 'gemini'),
                 model_name=layer_config.get('model_name', 'gemini-2.5-flash'),
                 temperature=layer_config.get('temperature', 0.0),
-                max_tokens=layer_config.get('max_tokens', 0)
+                max_tokens=layer_config.get('max_tokens', 0),
+                thinking=layer_config.get('thinking', False)
             )
 
         # Parse Layer 1 configs

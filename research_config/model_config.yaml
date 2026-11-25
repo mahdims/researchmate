@@ -1,13 +1,19 @@
 # LLM Model Configuration
 # This file defines which LLM models to use for each processing stage.
 # Each model can be configured with provider, model_name, temperature, and max_tokens.
+# Providers: "deepseek", "gemini", "openai", "anthropic" (key env vars: DEEPSEEK_API_KEY,
+# GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY).
+# DeepSeek only: `thinking: true` enables reasoning mode (off unless set; temperature is ignored when on).
 
 # Layer 0: Fetch and score
 # Used for relevance scoring of papers (0-10 scale) with researcher context
 layer0:
   relevance_scorer:
-    provider: "gemini"  # Options: "openai", "gemini", "anthropic"
-    model_name: "gemini-2.5-flash"
+    provider: "deepseek"  # Options: "deepseek", "gemini", "openai", "anthropic"
+    model_name: "deepseek-flash"
+    # Thinking on: in a 2026-11-24 eval on 80 papers it raised agreement with a
+    # deepseek-v4-pro+thinking judge from 89% to 95% (precision 73% -> 100%), ~$0.0007/paper.
+    thinking: true
     temperature: 0.0
     max_tokens: 0  # Short structured output (just a score)
     structured_output: true  # Use structured output for reliable JSON parsing
@@ -16,20 +22,23 @@ layer0:
 # Multi-agent pipeline for extracting detailed understanding from PDFs
 layer1:
   reader:
-    provider: "gemini"
-    model_name: "gemini-2.5-flash"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.0
     max_tokens: 0  # 0 = no limit, let model decide
 
   methods_extractor:
-    provider: "gemini"
-    model_name: "gemini-2.5-flash"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.0
     max_tokens: 0
 
   positioning:
-    provider: "gemini"
-    model_name: "gemini-3.1-pro-preview"
+    provider: "deepseek"
+    # Hardest judgment step -> stronger model with reasoning. deepseek-v4-pro was
+    # unreliable with thinking off in testing (2026-11-24), so keep thinking on.
+    model_name: "deepseek-v4-pro"
+    thinking: true
     temperature: 0.0
     max_tokens: 0
 
@@ -37,8 +46,8 @@ layer1:
 # Used for summarizing research fronts detected through citation analysis
 layer2:
   front_summarizer:
-    provider: "gemini"
-    model_name: "gemini-2.5-flash"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.3  # Slightly creative for trend descriptions
     max_tokens: 0
 
@@ -54,32 +63,41 @@ layer2:
 # Used for maintaining living literature reviews with daily/weekly/monthly cycles
 layer3:
   daily_updater:
-    provider: "gemini"
-    model_name: "gemini-3-flash-preview"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.3
     max_tokens: 8000
 
   weekly_revisor:
-    provider: "gemini"
-    model_name: "gemini-3-flash-preview"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.3
     max_tokens: 8000
 
   monthly_rewriter:
-    provider: "gemini"
-    model_name: "gemini-3-flash-preview"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.5  # More creative for major restructuring
     max_tokens: 8000
 
   email_generator:
-    provider: "gemini"
-    model_name: "gemini-2.5-flash"
+    provider: "deepseek"
+    model_name: "deepseek-flash"
     temperature: 0.5
     max_tokens: 0
 
 # Cost estimates (per 1M tokens, as of 2026-02)
 # Used for budgeting and cost tracking
 cost_per_million_tokens:
+  # DeepSeek: peak cache-miss input / output, from api-docs.deepseek.com/quick_start/pricing (2026-11-24).
+  # Off-peak is half price (peak = 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri).
+  "deepseek-flash":
+    input: 0.30
+    output: 1.20
+  "deepseek-v4-pro":
+    input: 1.32
+    output: 3.96
+
   # Gemini
   "gemini-3-flash-preview":
     input: 0.5

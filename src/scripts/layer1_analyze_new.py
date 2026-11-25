@@ -87,12 +87,12 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Show what would be analyzed without running')
     args = parser.parse_args()
 
-    # Check API key (Gemini is now default)
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    if not GEMINI_API_KEY:
-        print("ERROR: GEMINI_API_KEY environment variable not set")
-        print("Set it with: export GEMINI_API_KEY=your_key_here")
-        print("\nAlternatively, you can configure different models in src/config.py")
+    # Check API keys for the providers configured in research_config/model_config.yaml
+    from config import missing_api_keys
+    missing = missing_api_keys('reader', 'methods_extractor', 'positioning')
+    if missing:
+        print(f"ERROR: environment variable(s) not set: {', '.join(missing)}")
+        print("Models are configured in research_config/model_config.yaml")
         return 1
 
     print(f"{'='*70}")

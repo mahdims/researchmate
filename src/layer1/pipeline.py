@@ -291,10 +291,10 @@ def test_pipeline():
     """Quick test of pipeline with a dummy paper."""
     import os
 
-    # Check for Gemini API key
-    if not os.getenv("GEMINI_API_KEY"):
-        print("ERROR: GEMINI_API_KEY not set")
-        print("Set it with: export GEMINI_API_KEY=your_key_here")
+    from config import missing_api_keys
+    missing = missing_api_keys('reader', 'methods_extractor', 'positioning')
+    if missing:
+        print(f"ERROR: {', '.join(missing)} not set")
         return
 
     pipeline = PaperAnalysisPipeline()

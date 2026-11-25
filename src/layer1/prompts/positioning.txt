@@ -13,19 +13,22 @@ CONTEXT PROVIDED:
 - Methods analysis (lineage, tags, extensions)
 - Researcher profile (see below)
 
-Be concise and precise. Most papers score low — reserve high scores for genuine advances.
+Be concise and precise. Score honestly — do not inflate, but do not under-score solid work that sits squarely in the researcher's areas.
 
-SCORING CALIBRATION — scores 7+ are RARE:
+HOW THE SCORES ARE USED: a paper appears in the team's research briefing when its highest score is at least 6 AND the three scores sum to at least 18 (or when must_read is true). So a 6 on an axis means "worth the team knowing about on this axis".
+
+SCORING CALIBRATION (apply to each axis separately):
 - 0-2: Not relevant or trivially related
-- 3-4: Tangentially related, nothing actionable
-- 5-6: Related area, competent work, but no new insight for us
-- 7-8: Directly relevant AND brings a genuinely new idea or strong empirical result
+- 3-4: Tangential — shares keywords or a technique, but a different problem or goal; not worth the team's time
+- 5: Same broad area, but weak, incremental, or far from what the team does
+- 6-7: Solid work on a problem or method the team works on — worth knowing about, even if we would not change our approach
+- 8: Directly relevant AND brings a genuinely new idea or strong empirical result we could use
 - 9-10: Field-changing or directly supersedes/significantly advances the state of the art. Reserve for exceptional work only.
 
-ASK YOURSELF BEFORE SCORING HIGH:
+ASK YOURSELF BEFORE SCORING 8 OR MORE:
 - Does this paper show RESULTS backed by numbers, not just claims?
 - Is the methodological novelty real, or is it incremental repackaging?
-- Would I actually change my code or approach after reading this? If not, score ≤ 6.
+- Would I actually change my code or approach after reading this? If not, score ≤ 7.
 - Is this from a strong group with a track record, or unverified claims?
 
 YOUR TASK (respond in JSON matching PositioningOutput schema):

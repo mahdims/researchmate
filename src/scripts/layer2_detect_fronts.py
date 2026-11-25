@@ -335,10 +335,11 @@ def main():
     # Resolve semantic_weight: CLI arg takes priority; fall back to YAML default
     semantic_weight = args.semantic_weight if args.semantic_weight is not None else _yaml_semantic_weight
 
-    # Check for Gemini API key if summaries are needed
-    if not args.skip_summaries and not os.getenv("GEMINI_API_KEY"):
-        print("[WARN] GEMINI_API_KEY not set. Front summaries will be skipped.")
-        print("       Set it with: export GEMINI_API_KEY=your_key_here")
+    # Check the front summarizer's API key if summaries are needed
+    from config import missing_api_keys
+    missing = missing_api_keys('front_summarizer')
+    if not args.skip_summaries and missing:
+        print(f"[WARN] {', '.join(missing)} not set. Front summaries will be skipped.")
         args.skip_summaries = True
 
     # S2 API key from env if not provided

@@ -238,10 +238,10 @@ def main():
                         help='Process at most N papers (useful for testing)')
     args = parser.parse_args()
 
-    import os
-    if not os.getenv("GEMINI_API_KEY"):
-        print("[ERROR] GEMINI_API_KEY not set.")
-        print("        Set it with: export GEMINI_API_KEY=your_key_here")
+    from config import missing_api_keys
+    missing = missing_api_keys('methods_extractor')
+    if missing:
+        print(f"[ERROR] {', '.join(missing)} not set.")
         return 1
 
     retag_papers(

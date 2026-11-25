@@ -390,9 +390,10 @@ def main():
 
     # Optionally run LLM enrichment first
     if args.enrich:
-        import os
-        if not os.getenv("GEMINI_API_KEY"):
-            print("[ERROR] --enrich requires GEMINI_API_KEY to be set.")
+        from config import missing_api_keys
+        missing = missing_api_keys('front_summarizer')
+        if missing:
+            print(f"[ERROR] --enrich requires {', '.join(missing)} to be set.")
             return 1
         print("\n[ENRICH] Generating name + summary + future directions via LLM...")
         fronts = summarize_all_fronts(fronts, update_db=True)

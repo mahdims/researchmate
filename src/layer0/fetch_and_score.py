@@ -135,7 +135,8 @@ def _load_relevance_scorer_config():
                     'provider': scorer_config.get('provider', default_config['provider']),
                     'model_name': scorer_config.get('model_name', default_config['model_name']),
                     'temperature': scorer_config.get('temperature', default_config['temperature']),
-                    'max_tokens': scorer_config.get('max_tokens', default_config['max_tokens'])
+                    'max_tokens': scorer_config.get('max_tokens', default_config['max_tokens']),
+                    'thinking': scorer_config.get('thinking', False)
                 }
 
                 logging.info(f"Loaded relevance scorer config: {result['provider']}/{result['model_name']}")
@@ -752,11 +753,13 @@ Category description: {desc}
 Researcher's active work and interests in this category:
 {researcher_context if researcher_context else "No specific researcher context available."}
 
+First decide whether the paper meets the category description (including any "must"/"exclude" criteria in it). The score answers: should this paper appear in this category's research briefing? Papers scoring 6 or more are included.
+
 Scoring guide:
-- 8-10: Directly addresses the researcher's active projects, methods, or stated priorities
-- 5-7: Related to the category and potentially useful to the researcher's work
-- 2-4: Tangentially related, different focus or methods
-- 0-1: Completely unrelated
+- 8-10: Meets the category description AND directly addresses the researcher's active projects, methods, or stated priorities
+- 6-7: Clearly meets the category description, even if it is not tied to the researcher's own projects
+- 3-5: Adjacent: shares a topic or technique with the category but does not meet its description (e.g. fails a "must" criterion, or the category topic is only a side element)
+- 0-2: Unrelated to the category
 
 Title: {title}
 Abstract: {abstract}"""
@@ -1521,7 +1524,8 @@ def demo(**config):
                 provider=RELEVANCE_SCORER_CONFIG['provider'],
                 model_name=RELEVANCE_SCORER_CONFIG['model_name'],
                 temperature=RELEVANCE_SCORER_CONFIG['temperature'],
-                max_tokens=RELEVANCE_SCORER_CONFIG['max_tokens']
+                max_tokens=RELEVANCE_SCORER_CONFIG['max_tokens'],
+                thinking=RELEVANCE_SCORER_CONFIG.get('thinking', False)
             )
 
             # Check if API key is available for the configured provider
@@ -1772,7 +1776,8 @@ def redo_category(category_name, **config):
                 provider=RELEVANCE_SCORER_CONFIG['provider'],
                 model_name=RELEVANCE_SCORER_CONFIG['model_name'],
                 temperature=RELEVANCE_SCORER_CONFIG['temperature'],
-                max_tokens=RELEVANCE_SCORER_CONFIG['max_tokens']
+                max_tokens=RELEVANCE_SCORER_CONFIG['max_tokens'],
+                thinking=RELEVANCE_SCORER_CONFIG.get('thinking', False)
             )
 
             api_key = get_api_key(RELEVANCE_SCORER_CONFIG['provider'])
