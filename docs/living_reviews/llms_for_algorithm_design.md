@@ -1,10 +1,29 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-11-24
+**Last Updated:** 2026-11-25
 
 ---
 
 ## Recent Papers
+
+#### 2026-11-25 (2 papers)
+
+### [MetaShare: Failure-Aware Collective Self-Improvement for Open-Ended Agents](https://arxiv.org/abs/2610.21887)
+
+**2026-11-19** | PwC | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Archive-based evolutionary self-modification (DGM-H style) augmented with a bounded pool of signed mechanism-level meta-strategy records, asymmetric success/failure retrieval (DiverseTopK positives, BottomK worst failures), type-diverse retrieval, embedding de-ranking, task-blind LLM auditor injecting MUST-TRY categories, and K parallel meta-agents at heterogeneous temperatures behind a deterministic admissibility gate | *LLM role:* evolutionary_search
+
+> MetaShare extends DGM-H-style open-ended self-improvement by persisting evaluated scaffold changes as signed mechanism-level records and retrieving successes and failures through separate channels; a task-blind auditor injects absent mechanism classes and parallel meta-agents propose at heterogeneous temperatures behind a deterministic gate. Across paper review, coding, math grading, robotics, and financial audit-risk, median final scores match or exceed DGM-H and reach the best agent 1.7–2.9× faster; compute-matched ablations show the memory and auditor—not extra proposals—drive the gains. The key takeaway is to store distilled, signed (helped/hurt) mechanism descriptions with performance deltas in a bounded cross-lineage pool, and use an avoid-channel plus coverage auditor to prevent redundant dead ends. The effect sizes should be read cautiously because some baseline numbers are inherited and CIs overlap, but the memory design is immediately implementable and relevant to LLM evolutionary search.
+
+### [SimpleEvol: An Agent-Loop Framework for LLM-Driven Automated Heuristic Design with Minimal Human Priors](https://arxiv.org/abs/2609.37172)
+
+**2026-11-23** | Singapore Management University, National University of Singapore, Nanjing University of Information Science and Technology | M=7 P=7 I=7 *discuss*
+
+*Method:* Minimal single-trajectory LLM agent loop: iterative code generation of heuristics conditioned on task description, elite heuristic, meta-information feedback (fitness, runtime, errors), and periodically compressed history summaries | *LLM role:* heuristic_generator
+
+> The paper proposes AHI (handcraftedness) and ICE (intelligence conversion efficiency) metrics and introduces SimpleEvol, a minimal single-trajectory agent loop for automated heuristic design that uses periodic history compression, meta-information feedback, and an elite best-so-far heuristic. Across 10 LLMs on TSP, CVRP, and FSSP, SimpleEvol achieves the highest ICE (e.g., 2.19 vs 1.82/1.51/0.82 on TSP and 6.21 vs 5.44/3.66/2.08 on CVRP against FunSearch/EoH/ReEvo) and generally lowest gaps, with leave-one-out and Bayesian-bootstrap robustness checks. The key insight is that less human-designed scaffolding may convert stronger LLM intelligence into heuristic quality more efficiently, suggesting evaluation should focus on scaling with model capability rather than final performance on fixed backbones. The ablation showing best-so-far retention and summarization are essential is worth extracting for lightweight LLM evolutionary search designs. This matters for LLM evolutionary search as it provides a competitive minimal baseline and a metric-based lens for framework complexity.
+
 
 #### 2026-11-24 — backfill of papers missed 2026-08-30 to 2026-11-10 (36 papers)
 

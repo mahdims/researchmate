@@ -1,10 +1,37 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-11-24
+**Last Updated:** 2026-11-25
 
 ---
 
 ## Recent Papers
+
+#### 2026-11-25 (3 papers)
+
+### [Scalable Placement for Disaggregated LLM Serving on Heterogeneous Edge Fleets](https://arxiv.org/abs/2611.32881)
+
+**2026-11-24** | University of Oslo, UiT The Arctic University of Norway | M=7 P=8 I=7 *discuss*
+
+*Method:* Type-count candidate enumeration with dominance pruning, closed-form water-filling layer partitioning, and bounded multidimensional knapsack DP (or MILP fallback) over Pareto frontier of (PS, DS) throughputs minimizing fluid tandem-queue congestion W=CP+CD | *LLM role:* none
+
+> SPADE tackles placement of disaggregated prefill/decode LLM serving on heterogeneous edge fleets, using a congestion-aware fluid tandem queue objective, type-count candidate enumeration with dominance pruning, and closed-form water-filling layer partitioning solved via multidimensional knapsack DP/MILP. On 30-device synthetic fleets it finds verified optimum in 441 ms while GA+DP takes 6855s with 19.7% higher congestion, and pruning eliminates 99.6% of candidates without observed loss. The key insight is that device-type symmetry plus dominance can make exact replica selection tractable, and the water-filling closed form replaces expensive layer DP—worth adopting in LLM serving placement optimization. It matters because it turns previously heuristic search into exact, fast optimization for heterogeneous serving.
+
+### [Optimal Scheduling of Multi-Site AI Data Centers in Day-Ahead Markets](https://arxiv.org/abs/2611.26572)
+
+**2026-11-19** | National Laboratory of the Rockies | M=6 P=7 I=6 
+
+*Method:* Linear program (Pyomo/HiGHS) over GPU power-cap levels, job placement/timing, and inference routing minimizing DA energy cost plus lateness/leftover/routing penalties | *LLM role:* none
+
+> Zhou and Cavraro present an LP that schedules GPU power caps, deferrable jobs, and online inference across three data-center sites to minimize day-ahead electricity cost, using 2025 CAISO prices and 210k GPUs. The 6.3% cost saving is decomposed into 3.8% price-independent efficiency, 2.3% temporal price response, and 0.2% spatial routing, backed by year-long simulation. The key transferable idea is the nested operating-mode decomposition, which prevents over-crediting power-cap efficiency as price-responsive flexibility—useful for any energy-aware scheduling evaluation. The piecewise-linear GPU throughput–power model is also a component worth incorporating into GPU scheduling formulations. It matters for energy-aware AI infrastructure scheduling, though it does not advance LLM evolutionary search.
+
+### [eFAIR: Fair LLM Serving under Hourly Electricity Commitments](https://arxiv.org/abs/2611.24119)
+
+**2026-11-18** | HKUST | M=6 P=7 I=6 *discuss*
+
+*Method:* Online scheduling heuristic coordinating request dispatcher, electricity budget allocator, and GPU frequency selector via common normalized-throughput target | *LLM role:* none
+
+> eFAIR is an online LLM serving scheduler that coordinates request dispatching, electricity budget allocation, and GPU frequency selection to maximize leximin-fair normalized request throughput under an hourly electricity commitment. Results on H20 and H200 configurations with 32 replicas show 28.0%-31.0% higher tenth-percentile normalized throughput than the best budget-feasible baseline, with absolute commitment deviation below 0.26%. The key insight is using a common normalized-throughput target to align request priority, future electricity reservations, and frequency choices, with surplus electricity used to accelerate higher-entitlement requests. This matters for energy-constrained LLM serving and GPU resource-allocation research, though it has little relevance to LLM evolutionary search.
+
 
 #### 2026-11-24 — backfill of papers missed 2026-09-09 to 2026-11-13 (15 papers)
 
