@@ -1,0 +1,758 @@
+--- Page 1 ---
+FrontierOR Challenge White Paper 2026
+Version 1.0, 20 November 2026
+The FrontierOR Challenge: Agentic Algorithm Design for
+Operations Research
+Organizers
+Hai Wang, Bretislav Hajek, Chonghe Jiang, Minwei Kong,
+Ao Qu, Huatian Gong, Bo Dong
+Cynthia Barnhart, Jinhua Zhao
+frontieror.competition@gmail.com
+Abstract
+Operations research (OR) relies on algorithms that experts tailor to each problem: a new
+routing, scheduling or network design problem can take weeks of specialist work before it
+is solved well at scale. Large language model (LLM) agents now write, test and improve
+code, but whether they can design algorithms that scale to realistic instances is open: in
+the FrontierOR benchmark’s one-shot evaluation, the strongest model matches Gurobi,
+with an objective within 1% of Gurobi’s and no slower, on only 39% of the large instances.
+The FrontierOR Challenge asks teams to build agentic workflows that design, test, and
+improve algorithms for many optimization problems at once. Stage 1 releases 60 of the
+benchmark’s 180 audited problems, spanning six application categories and five formulation
+types, in weekly rounds of 15; Stage 2 introduces new problems outside the benchmark,
+with unseen instances. Two tracks are ranked separately: in the Main track we run the
+submitted algorithms in a network-isolated sandbox with open-source dependencies only; in
+the Self-hosted track teams solve the instances on their own machines, with any software,
+within a timed window. Every solution is checked for feasibility, and a feasible solution
+scores the ratio of its objective to a frozen known reference, averaged over hidden instances.
+Keywords: Operations research, combinatorial optimization, LLM agents, automated
+algorithm design, competition
+1. Introduction
+The FrontierOR Challenge1 asks teams to build agentic workflows that design, test, and
+improve algorithms for optimization problems, instead of hand-tuning a single algorithm.
+The main scientific question is the following: “Can an LLM agent design algorithms that are
+feasible, good and fast on instances it has never seen, across many optimization problems
+and under a fixed compute budget?”
+Optimization problems span many categories, such as routing, scheduling and network
+design. For each of them, the OR literature studies specialized algorithms: decompositions,
+branch-and-price, problem-specific heuristics. General-purpose solvers help, but a correct
+formulation often still requires a deep understanding of the domain. Within a one-hour time
+limit, Gurobi does not reach optimality on 46% of the large FrontierOR instances (Kong et al.,
+2026a). LLM-driven program search has started to change this. FunSearch (Romera-Paredes
+et al., 2024) and AlphaEvolve (Novikov et al., 2025) found new constructions by evolving
+1. https://frontieror-challenge.com
+© 2026 H. Wang et al.
+arXiv:2611.26171v1  [cs.AI]  19 Nov 2026
+
+
+--- Page 2 ---
+Wang et al.
+programs, and EoH (Liu et al., 2024) and ReEvo (Ye et al., 2024) evolve heuristics for
+combinatorial problems. In optimization modeling, AlphaOPT builds and refines a library of
+reusable insights based on solver feedback to guide LLMs in formulating new problems (Kong
+et al., 2026b). Benchmarks measure the gap that remains: CO-Bench (Sun et al., 2026),
+HeuriGym (Chen et al., 2026), ALE-Bench (Imajuku et al., 2025) and FrontierOR (Kong
+et al., 2026a) all find that agents trail expert algorithms and commercial solvers, and that
+consistency across problems is the weakest point. In FrontierOR’s one-shot setting, a model
+writes one program per problem from its statement, with a few self-debugging rounds on
+execution errors. In the latest evaluation, the strongest model, Claude Fable 5, returns a
+feasible solution within 1% of or better than Gurobi’s reference objective, in no more than
+Gurobi’s wall-clock time, on 39% of the large instances across all 180 problems. Results in
+this competition may differ, since the Main track allows only open-source libraries, whereas
+in FrontierOR the generated algorithms could call Gurobi.
+The competition captures a practical scenario: a practitioner faces a new decision problem
+with a written statement, a data format, and a deadline, and needs an algorithm that works
+on unseen instances. Each team receives the problem definitions, builds a pipeline that turns
+each one into an algorithm, and is scored on hidden instances. The competition runs in two
+stages: a qualification on 60 problems from the FrontierOR benchmark, released 15 per week,
+and a final on new problems, and in two tracks: the Main track, where we run the submitted
+algorithms under fixed compute with open-source dependencies, and the Self-hosted track,
+where teams solve the instances on their own infrastructure with any software, including
+commercial solvers.
+We expect the competition to contribute (1) a public comparison of agentic algorithm
+design methods under one protocol, with independent checkers and hidden instances; (2) ev-
+idence for practitioners on whether an agent can replace weeks of expert work on a new
+problem; (3) new problems and instances for the OR community, through a call for contri-
+butions; and (4) released problems, checkers and descriptions of the top teams’ methods
+after the competition.
+2. Related Competitions
+Earlier competitions at the intersection of machine learning and OR focused on one part
+of the pipeline.
+NL4Opt (Ramamonjison et al., 2022) asked for formulations of small
+linear programs from text. ML4CO (Gasse et al., 2022) replaced heuristic components
+inside a MIP solver on three datasets. The DIMACS Implementation Challenges2 and the
+ROADEF/EURO Challenge3 pose one problem per edition to human algorithm designers,
+as do the AtCoder Heuristic Contests,4 which ALE-Bench (Imajuku et al., 2025) later used
+to evaluate AI systems.
+To our knowledge, no earlier competition combines four features: one workflow must
+cover many problems at once, so that generality is rewarded over tuning for a single problem;
+on the Main track, the scored submission is algorithm code that the organizers run on
+hidden instances under fixed compute, rather than a formulation or a set of solutions; every
+2. http://dimacs.rutgers.edu/programs/challenge/
+3. https://www.roadef.org/challenge/
+4. https://atcoder.jp/
+2
+
+
+--- Page 3 ---
+FrontierOR Challenge
+solution passes an independent checker that recomputes the objective; and the final stage
+tests transfer to problems outside the published benchmark. The Self-hosted track scores
+uploaded solutions instead.
+3. Competition Format
+Teams
+Participants enter through the competition portal as teams of one or more people.
+Each person holds only one account and belong to only one team at a time. A team chooses
+the Main or Self-hosted track when it is created. Registration and team formation close
+at 23:59 EST (UTC-5) on 27 December 2026. Teams may change their track before this
+deadline; afterward, their track is fixed for the competition.
+Stage 1: Qualification
+Stage 1 runs from 00:00 EST (UTC-5) on 4 January 2027 until
+23:59 EST on 31 January 2027. Sixty problems are released in four weekly rounds of 15.
+The rounds open at 00:00 EST on 4, 11, 18 and 25 January, respectively, and each remains
+open for exactly seven days. A submission covers only the currently open round. Main-track
+submissions must be accepted by the portal before the round closes; their evaluation may
+finish afterward. Self-hosted uploads must meet the applicable instance, submission-window,
+and round deadlines. Teams follow a public leaderboard that accumulates results across
+rounds.
+Main Track: Algorithm Design
+Teams submit algorithm code, the scored submission,
+which we run in a sandbox with no network, 2 vCPU and 4 GB of memory. Only open-source
+dependencies are allowed. The overall champion comes from this track.
+Self-hosted Track: Tool-Augmented Solving
+Teams solve the instances on their own
+machines, by any means, including commercial solvers, and upload solutions within a timed
+window. The uploaded solutions are scored; we verify the solutions, not the process.
+Qualification for Stage 2
+Finalists are selected separately within each track using the
+final Stage 1 ranking across all 60 problems, after eligible submissions have been evaluated
+and eligibility checks have been completed. Teams are ranked by score S, highest first, and
+then by normalized time U, lowest first (Section 5). The number of finalist places in each
+track is TBA and will be announced when Stage 1 ends. If teams remain tied on both S and
+U at the qualification cutoff, all such tied teams advance, even if this increases the number
+of finalists.
+Stage 2: Final
+Stage 2 takes place on 8–14 February 2027 and introduces new problems
+outside the published benchmark, with unseen instances. Main-track finalists submit both
+their algorithm code and the source code of the agentic framework used to produce it.
+Self-hosted finalists submit solution files only. Final rankings are determined on a private
+final dataset. Detailed Stage 2 rules will be published on 1 February 2027, when Stage 1
+ends, and will specify the exact development and submission deadlines, submission formats,
+and verification requirements.
+Leaderboards
+Each stage has one leaderboard per track; the two tracks are never
+compared. Each problem category and each formulation is also ranked on its own (Section 4).
+Baselines run by the organizers appear as unranked reference bands (Section 7).
+3
+
+
+--- Page 4 ---
+Wang et al.
+4. Datasets
+Source
+The problems come from the FrontierOR benchmark (Kong et al., 2026a): 180
+problems derived from methodologically diverse papers in leading OR venues. Its audited
+release (FrontierOR Team, 2026) covers all 180, with 1,080 instance/reference pairs, each
+reference accepted by the problem’s checker. Every problem comes with a natural-language
+statement, instance and solution schemas, a feasibility checker, instances with 102 to 107
+variables and constraints, and reference solutions computed with Gurobi. Each problem has
+a slug named after its source paper, such as barnhart2000.
+Stage 1 Problems
+The organizers select 60 of the 180 problems for Stage 1, none of
+them from the testing stage, chosen to cover diverse problem classes, formulations, objective
+directions and algorithm runtimes. Each problem has two labels (Table 1): a category, the
+application domain it comes from, and a formulation, the mathematical form of the model
+behind it. A round’s problems stay hidden until the round opens.
+Table 1: Problem categories and formulations. Every problem has one of each. The examples
+are illustrative.
+Category
+Example problems
+Routing
+vehicle routing variants, dial-a-ride, orienteering
+Production & Inventory
+lot sizing, production planning
+Scheduling
+crew scheduling, machine scheduling
+Packing & Partitioning
+bin packing, cutting, set partitioning
+Graph & Quadratic Optimization
+graph partitioning, quadratic assignment
+Network Design & Location
+multicommodity flow, facility location
+Formulation
+Model
+Combinatorial
+discrete choices of routes, sequences, sets or assignments
+Mixed-integer
+linear models with integer and continuous variables
+Quadratic
+quadratic objective or constraints
+Stochastic
+uncertain data given by scenarios or distributions
+Robust & bilevel
+worst case over an uncertainty set, or a leader and a follower
+Instance Sets
+Each problem has three disjoint sets of instances. Public instances are
+published for development and accessible to registered teams; they are never scored. Private
+Main instances score the Main-track submissions and are never published. Private Self-hosted
+instances score the Self-hosted track; Self-hosted teams receive them during a submission, so
+they are kept apart from the Main set. Instances are generated iteratively: random instances
+are generated for each problem, their difficulty is evaluated with Gurobi, and generation
+continues until the set has the desired difficulty.
+Reference Objectives
+Each private instance has a reference objective z∗: a good checker-
+accepted objective. Reference solutions are computed with long-running Gurobi solves or
+specialized algorithms for the given problem.
+4
+
+
+--- Page 5 ---
+FrontierOR Challenge
+Example
+Appendix A gives a complete problem from the testing stage, barnhart2000:
+its statement, instance schema and solution schema.
+Contributions
+Anyone registered may propose a new problem, or new instances for an
+existing problem. Each contribution should include a description, related work and files.
+Each contribution is reviewed individually and used to extend the benchmark. Accepted
+contributions are credited to the contributors.
+5. Evaluation Metrics
+Each solution is checked, scored by its ratio to its instance’s reference, and the instance
+scores are averaged into a submission score. Only private instances count.
+Feasibility
+The checker verifies every constraint and recomputes the objective from the
+decisions. A reported objective value that disagrees with the recomputed one beyond the
+objective tolerance is rejected; otherwise, the recomputed value z is the one scored. In the
+testing stage and Stage 1, each problem’s checker is published with it, as the evaluation runs
+it, so teams can check feasibility themselves; Stage 2 checkers are not published. Teams see
+the verdict for each instance.
+Instance Score
+A feasible solution with objective z is scored against the reference objective
+z∗. A solution is better than the reference when z < z∗for minimization and z > z∗for
+maximization. The score is
+s =
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+min(z∗/z, 2)
+if minimizing and z, z∗> 0, or maximizing and z, z∗< 0,
+min(z/z∗, 2)
+if maximizing and z, z∗> 0, or minimizing and z, z∗< 0,
+2
+if zz∗≤0 and z is better than z∗,
+1
+if z = z∗= 0,
+0
+if zz∗≤0 and z is worse than z∗.
+(1)
+For positive objectives, minimization scores z∗/z and maximization scores z/z∗; for negative
+objectives the two ratios swap. Either way, matching the reference scores 1, a worse solution
+less and a better one more, up to the cap of 2. When z and z∗have opposite signs, or either
+is 0, a ratio has no meaningful scale: a better solution scores 2, an equal one 1 and a worse
+one 0. An instance scores 0 when there is no feasible solution: the algorithm exceeded the
+time limit or the memory limit, crashed, wrote no readable solution, or the checker rejected
+it.
+Tolerances
+Each problem’s checker sets its own tolerances. Constraints, including integral-
+ity, must hold within an absolute tolerance, typically 10−5. The reported objective value
+must agree with the recomputed objective within a relative tolerance, usually 0.5%, depend-
+ing on the problem. The score adds no tolerance of its own: z = z∗only when the two values
+are identical, and only an objective of exactly 0 counts as zero.
+Time Limits
+The score rewards quality only, so speed is enforced through the time
+limits instead. Each problem falls into one of three time classes, with a limit of 10 seconds,
+60 seconds or 5 minutes per instance. The classification is based on problem difficulty and
+application domain. The testing stage uses 60 seconds for every problem.
+5
+
+
+--- Page 6 ---
+Wang et al.
+Submission Score
+A submission covers the problems Pr of one round r. Let Ip be
+the private instances of problem p in the team’s track; every one of them is scored. The
+submission’s problem scores and its round score are
+Sp =
+1
+|Ip|
+X
+i∈Ip
+si,
+Rr =
+1
+|Pr|
+X
+p∈Pr
+Sp.
+(2)
+Every problem weighs the same, however many instances it has. The denominator is always
+the whole round: a partial submission scores 0 on every instance of a problem it has no
+algorithm for (Self-hosted: on every instance without an uploaded solution).
+Stage Score
+In each round, exactly one submission counts: the team’s completed sub-
+mission with the highest Rr. All the round’s problem scores come from that submission;
+a round’s result is never assembled from the best problem scores of different submissions.
+Among submissions with equal Rr, the one with the lower time Ur (below) counts, then the
+earliest. The stage score is the mean over the problems P of all rounds opened so far,
+S =
+1
+|P|
+X
+p∈P
+Sp =
+X
+r
+|Pr|
+|P| Rr,
+(3)
+each Sp taken from the counted submission of its round. A round without a completed
+submission, including the open round before the team submits to it, has Rr = 0 and its
+problems stay in P. Since S grows with each Rr, the counted submissions are also those
+that maximize S.
+Ranking
+Teams are ranked by S, highest first. Scores are compared without rounding,
+and rounded to four decimal places for leaderboard display. Equal scores are ranked by the
+time U, lowest first, and teams equal on both share a rank. U is averaged like S, over the
+same instances and problems, from the time each instance used as a share of the most it
+could use:
+ui =
+(
+min(ti/Tp, 1)
+if the solution to i is feasible,
+1
+otherwise,
+(4)
+Up =
+1
+|Ip|
+X
+i∈Ip
+ui,
+U =
+1
+|P|
+X
+p∈P
+Up,
+and Ur is the mean of Up over Pr. Here ti is the algorithm’s wall time on the Main track
+and the time from download to upload on the Self-hosted track, and Tp is the problem’s
+time limit, plus the 60-second upload grace on the Self-hosted track. An instance without a
+feasible solution counts the full time whatever the reason: a time-out, a crash, an infeasible
+or rejected solution, a skipped instance, a problem without an algorithm or a missing upload.
+Every problem of a round without a submission has Up = 1. Leaving work undone therefore
+never lowers U, and a fast failure ties with a slow one. A category or a formulation is ranked
+the same way, by the mean of Sp and then of Up over its released problems.
+6
+
+
+--- Page 7 ---
+FrontierOR Challenge
+Discussion
+The ratio is simple to explain and normalizes each instance by its own reference,
+so problems with objectives of very different magnitude can be averaged. It has known
+limits, which we accept for the first edition: it is not invariant to a constant offset in the
+objective, so a problem whose objective is mostly a fixed cost compresses all teams near 1
+and weighs less in the ranking than its equal weight suggests; and weak references inflate
+scores up to the cap.
+6. Evaluation Protocol
+Algorithm Contract
+A Main-track submission is a zip or tar.gz archive of up to 4 MB
+with one folder per problem, named by its slug, each holding a solve.py. Each folder is
+mounted on its own, so algorithms cannot share code. The sandbox runs
+python solve.py --problem <slug> --instance /work/in/instance.json \
+--output /work/out/solution.json --time-limit <seconds>
+and expects a JSON object with a numeric objective value and the decisions the problem’s
+solution schema defines. Algorithms are Python only; teams who want another language use
+the Self-hosted track.
+Environment
+Our images run Python 3.12 or 3.14 with NumPy, SciPy, pandas, NetworkX,
+OR-Tools, PuLP, HiGHS and Pyomo, and their full lockfiles are published. A team may add
+up to 50 open-source packages from PyPI, within the documented installation and resource
+limits; they are installed once before the first run, outside the time limit, and reused by later
+submissions with the same list.
+Main-Track Execution
+Each instance runs in its own gVisor5 sandbox with no network,
+2 vCPU, 4 GB of memory, 1 GB of disk, a read-only algorithm folder and the problem’s
+time limit (Figure 1). Each problem’s public instances run first; if the algorithm fails on
+one, the problem’s private instances are skipped and score 0. The checker then verifies each
+solution. Teams see each instance’s score or the reason it scored 0, but no algorithm logs,
+objective values or run times for private instances, since these could reveal the instances.
+Self-hosted Submissions
+Opening a submission starts a time window long enough to
+solve every private instance of the round one after another, each within its time limit plus
+the grace below, plus 15 minutes. The team starts each private instance separately. The
+instance submission process consists of: starting the evaluation window, downloading the
+instance data, solving the instance locally, and uploading the solution. Each instance has its
+time limit (the same as on the Main track) plus 60 seconds of grace for the download and
+upload. Uploads are final. The submission closes when the last solution is uploaded, after
+which the checker and scoring run on our server, with the same scoring as the Main track.
+Infrastructure
+The portal and API run as a web application backed by PostgreSQL
+and object storage. Submissions are queued and evaluated by an autoscaling fleet of CPU
+workers on AWS, each job receiving a whole worker’s 2 vCPU and 4 GB. Failures on our
+side are retried; an instance that still fails after three tries scores 0. Each team has one
+submission per UTC day, four during the testing stage.
+5. https://gvisor.dev
+7
+
+
+--- Page 8 ---
+Wang et al.
+Team
+participants
+Portal
+Dashboard
+team, submissions
+API
+tokens, uploads
+Leaderboard
+stage, track, category
+Problems & docs
+statements, schemas
+Compute service
+Queue
+one job per instance
+gVisor sandbox
+no network, 2 vCPU, 4 GB
+algorithm
+checker
+submissions
+scores, feedback
+jobs
+instance scores
+Figure 1: Evaluation pipeline. Teams work through the portal; the compute service queues
+one job per instance and runs each in its own gVisor sandbox, and the scores
+flow back to the portal and the leaderboard. A Self-hosted submission takes the
+same path once its window closes, with only the checker running on the uploaded
+solutions.
+7. Baselines and Starter Code
+Starter Repository
+A public starter repository6 works for both tracks. Its example agent
+receives a problem and must produce a function solve(instance, time limit s): it asks
+a model for code, tests it on the public instances, and asks for fixes until it works. The
+prompt adapts FrontierOR’s one-shot prompt to the challenge: open-source solvers instead of
+Gurobi, 2 CPUs, and a function instead of a whole program. A toolkit simplifies the process
+of downloading the problems, running the agent on every problem, testing the algorithms on
+the public instances (optionally in the sandbox’s Docker image), and submitting the results.
+Competitors should further extend this starter code to build their own agentic workflows.
+Baselines
+The organizers run the starter code with several frontier models and submit
+the results through the same API and sandbox as any team. This results in the baseline
+solutions shown on the leaderboard. Baseline scores appear on the Stage 1 leaderboard as
+each round opens; a later version of this paper reports them.
+8. Rules
+Eligibility
+Participants must hold only one account and belong to one team.
+Dependencies
+On the Main track, commercial solvers and remote services are not available
+in the sandbox, and extra packages must be open source. Packages are not all checked
+automatically; prize-eligible submissions may be audited. The Self-hosted track permits any
+software.
+6. https://github.com/Alpha-Z-Pte-Ltd/frontieror-challenge-starter
+8
+
+
+--- Page 9 ---
+FrontierOR Challenge
+Fair Play
+Algorithms code must not try to escape the sandbox, access the network, tamper
+with the evaluation or read instances it was not given. Private instances are confidential:
+they must not be extracted, reconstructed or shared, and Self-hosted teams must not pass
+their instances to anyone. Collusion between teams and the use of several accounts or teams
+to gain submissions are prohibited. The organizers decide questions of scoring, eligibility
+and interpretation, and may disqualify a submission or team that breaks the rules.
+Intellectual Property
+Teams keep ownership of their code and solutions. They grant the
+organizers a non-exclusive, royalty-free license to store, execute, evaluate and analyze them
+in order to run and verify the competition, and to publish scores and rankings. Submitted
+code and solutions are not published without the team’s permission; winning approaches
+may be described in aggregate or with consent.
+Ethics and Accessibility
+The problems come from published literature and contain no
+personal data. Participation is free. On the Main track the organizers provide the evaluation
+compute, so a team needs only a laptop and access to an LLM for its agent. The cost of
+LLM calls falls on the teams, which can favor well-funded groups.
+9. Timeline and Awards
+Timeline
+Table 2 gives the schedule. The initial registration and testing stage is intended
+to let teams familiarize themselves with the portal and the submission process. This stage is
+also intended to let the organizers test the infrastructure and the scoring. Stage 1 releases the
+60 competition problems used for qualification scoring in four weekly rounds of 15 problems.
+Table 2: Schedule. Stage dates are in US Eastern time.
+Date
+Milestone
+16 Sep 2026
+Registration and a public testing stage with six problems open
+27 Dec 2026, 23:59 EST
+Registration, team formation, and testing close
+4 Jan 2027, 00:00 EST
+to 31 Jan 2027, 23:59 EST
+Stage 1 (qualification): four weekly rounds of 15 problems
+1 Feb 2027, when Stage 1 ends
+Stage 2 rules published
+1 to 7 Feb 2027
+Break and Stage 1 wrap-up
+8 to 14 Feb 2027
+Stage 2 (final): development window and final evaluation
+TBA
+Results, awards, artifacts; dated in the Stage 2 rules
+Note. All timestamps shown above use EST (UTC−5). Submissions must be received before
+the applicable closing timestamp.
+Awards
+Table 3 lists the awards. The prizes go to the overall ranking, which comes from
+the Main track, for a pool of US$21,000. Recognitions reward results and contributions
+beyond the ranking: the winner of each sub-track, that is each problem category and each
+formulation (Section 4), the best new problem or instance suite, and the best write-up of an
+agent’s methodology, architecture and findings. Sub-track winners are announced with the
+results.
+9
+
+
+--- Page 10 ---
+Wang et al.
+Table 3: Awards.
+Award
+Place
+Prize (US$)
+Winner
+1st overall
+10,000
+Runner-up
+2nd overall
+5,000
+Merit Awards
+3rd to 6th overall
+1,500 each
+Sub-track Winners
+1st per category and formulation
+recognition
+Best New Problem / Instance
+contribution
+recognition
+Best Write-Up
+write-up
+recognition
+10. Organisation
+The challenge is organized by FrontierOR, MIT and Alpha Z. The FrontierOR team (Kong
+et al., 2026a) provides the benchmark, its audit and the checkers; Alpha Z builds and
+runs the portal and the evaluation infrastructure. The executive committee is Hai Wang
+(chair), Chonghe Jiang, Minwei Kong, Ao Qu, Bretislav Hajek and Huatian Gong. The
+advisory committee is Cynthia Barnhart and Jinhua Zhao from MIT. The organizers provide
+the portal, the problems, instances and checkers, the starter repository and baselines, and
+support by email. Alpha Z sponsors the prize pool and the evaluation compute.
+11. Conclusion
+The goal of this competition is to find out whether agentic workflows can design OR
+algorithms that hold up on unseen data, across many problems and under a fixed budget.
+To that end, we propose 60 of the 180 audited FrontierOR problems in a qualification stage
+of weekly rounds, three time classes, new problems in a final stage, independent checkers,
+hidden instances and two tracks that separate algorithm design under fixed compute from
+tool-augmented solving.
+Acknowledgments
+We thank the authors of the FrontierOR benchmark for the data and checkers, and Alpha Z
+for sponsoring the prize pool and the evaluation compute.
+References
+Cynthia Barnhart, Christopher A. Hane, and Pamela H. Vance. Using branch-and-price-
+and-cut to solve origin-destination integer multicommodity flow problems. Operations
+Research, 48(2), 2000. doi: 10.1287/opre.48.2.318.12378.
+Hongzheng Chen et al. HeuriGym: An agentic benchmark for LLM-crafted heuristics in
+combinatorial optimization. In International Conference on Learning Representations,
+2026.
+FrontierOR Team. FrontierOR-Audited-180: Audited instances, reference solutions, checkers,
+and runtime provenance. Hugging Face dataset, 2026.
+10
+
+
+--- Page 11 ---
+FrontierOR Challenge
+Maxime Gasse, Simon Bowly, Quentin Cappart, et al. The machine learning for combinatorial
+optimization competition (ML4CO): Results and insights. In Proceedings of the NeurIPS
+2021 Competitions and Demonstrations Track, volume 176 of Proceedings of Machine
+Learning Research, pages 220–231, 2022.
+Yuki Imajuku, Kohki Horie, Yoichi Iwata, Kensho Aoki, Naohiro Takahashi, and Takuya
+Akiba. ALE-Bench: A benchmark for long-horizon objective-driven algorithm engineering.
+In Advances in Neural Information Processing Systems, Datasets and Benchmarks Track,
+2025.
+Minwei Kong, Chonghe Jiang, Ao Qu, Wenbin Ouyang, Zhaoming Zeng, Xiaotong Guo,
+Zhekai Li, Junyi Li, Yi Fan, Xinshou Zheng, Xi Jing, Yikai Zhang, Zhiwei Liang, Seonghoo
+Kim, Runqing Yang, Zijian Zhou, Sirui Li, Han Zheng, Wangyang Ying, Ou Zheng,
+Chonghuan Wang, Jinglong Zhao, Hanzhang Qin, Cathy Wu, Paul Pu Liang, Jinhua Zhao,
+and Hai Wang. FrontierOR: Benchmarking LLMs’ capacity for efficient algorithm design
+in large-scale optimization, 2026a. Accepted at NeurIPS 2026, Evaluations and Datasets
+Track. arXiv:2605.25246.
+Minwei Kong, Ao Qu, Xiaotong Guo, Wenbin Ouyang, Chonghe Jiang, Han Zheng, Yining
+Ma, Dingyi Zhuang, Yuhan Tang, Junyi Li, Shenhao Wang, Haris Koutsopoulos, Hai
+Wang, Cathy Wu, and Jinhua Zhao. AlphaOPT: Formulating optimization programs
+with self-improving LLM experience library. In Proceedings of the 32nd ACM SIGKDD
+Conference on Knowledge Discovery and Data Mining V.2, pages 2389–2400. ACM, 2026b.
+doi: 10.1145/3770855.3817974.
+Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao Lu, and
+Qingfu Zhang. Evolution of heuristics: Towards efficient automatic algorithm design using
+large language model. In International Conference on Machine Learning, 2024.
+Alexander Novikov, Ngˆan V˜u, Marvin Eisenberger, et al. AlphaEvolve: A coding agent for
+scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131, 2025.
+Rindranirina Ramamonjison et al. NL4Opt competition: Formulating optimization problems
+based on their natural language descriptions. In Proceedings of the NeurIPS 2022 Compe-
+titions Track, volume 220 of Proceedings of Machine Learning Research, pages 189–203,
+2022.
+Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming
+Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from
+program search with large language models. Nature, 625:468–475, 2024.
+Weiwei Sun, Shengyu Feng, Shanda Li, and Yiming Yang. CO-Bench: Benchmarking
+language model agents in algorithm search for combinatorial optimization. In AAAI
+Conference on Artificial Intelligence, 2026.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon Kim,
+Jinkyoo Park, and Guojie Song. ReEvo: Large language models as hyper-heuristics with
+reflective evolution. In Advances in Neural Information Processing Systems, 2024.
+11
+
+
+--- Page 12 ---
+Wang et al.
+Appendix A. Example Problem
+The testing stage’s barnhart2000, Origin-Destination Integer Multicommodity Flow, comes
+from Barnhart et al. (2000). Below are its statement and schemas as published on the
+problem page. The schemas are annotated examples: each value gives its type in angle
+brackets, then its meaning, and a list shows one element. The objective is minimized.
+Statement
+A telecommunications network operator manages a directed network consisting
+of a set of nodes and a set of directed arcs connecting pairs of nodes. Each arc has a known
+capacity, expressed in units of bandwidth. The operator must handle a set of commodities,
+where each commodity represents a group of calls or messages sharing a common origin
+node and a common destination node. Each commodity has a known demand quantity
+representing the bandwidth it requires.
+Every commodity must be routed as a single, unsplittable unit along exactly one directed
+path from its origin node to its destination node, or it may be rejected entirely.
+To
+allow rejection, the network includes, for each commodity, an artificial direct arc from
+the commodity’s origin to its destination. The artificial arc has no capacity limit and
+carries a cost equal to the revenue that would have been earned by successfully routing that
+commodity. All physical arcs in the network have zero routing cost for every commodity.
+The operator must choose, for each commodity, exactly one origin-to-destination path
+(which may be the artificial rejection arc or any path through the physical network). The
+total demand flowing through any physical arc, summed across all commodities whose chosen
+paths include that arc, must not exceed the arc’s capacity. Flow must be conserved at every
+node for every commodity: at the origin node of a commodity, exactly one unit of that
+commodity’s flow is produced; at the destination node, exactly one unit is absorbed; and
+at every intermediate node, the total flow of that commodity entering the node equals the
+total flow leaving it.
+The goal is to minimize the total cost. For each combination of commodity and arc,
+the cost contribution equals the commodity’s demand multiplied by the per-unit cost for
+that commodity on that arc, counted only when that arc lies on the commodity’s chosen
+path. The total cost is the sum of these contributions across all commodities and all arcs.
+Because physical arcs have zero cost, the total cost reduces to the sum of artificial-arc
+costs for rejected commodities, which equals the total lost revenue from commodities not
+routed through the physical network. Equivalently, minimizing total cost maximizes the
+total revenue earned from commodities successfully carried on the physical network.
+Instance Schema
+{
+"network": {
+"num_nodes": "<int> Total number of nodes in the directed network.",
+"num_arcs": "<int> Total number of directed physical arcs in the network.",
+"nodes": "<list[int], length num_nodes> Identifiers for all nodes in the network.",
+"arcs": [
+{
+"arc_id": "<int> Unique identifier for this arc.",
+"from_node": "<int> Node where this directed arc originates.",
+"to_node": "<int> Node where this directed arc terminates.",
+"capacity": "<int> Maximum total bandwidth that can flow through this arc across
+all commodities.",
+12
+
+
+--- Page 13 ---
+FrontierOR Challenge
+"cost": "<int> Per-unit routing cost for any commodity using this arc."
+}
+]
+},
+"commodities": {
+"num_commodities": "<int> Total number of commodities (call groups) to be routed or
+rejected.",
+"commodity_list": [
+{
+"commodity_id": "<int> Unique identifier for this commodity.",
+"origin": "<int> Node where this commodity originates.",
+"destination": "<int> Node where this commodity must be delivered.",
+"demand": "<int> Bandwidth required by this commodity.",
+"revenue": "<int> Revenue earned if this commodity is successfully routed through
+the physical network.",
+"artificial_arc_cost": "<int> Cost incurred if this commodity is rejected instead
+of being routed."
+}
+]
+},
+"objective": "<str> Direction of optimization for the total routing and rejection cost."
+}
+Solution Schema
+{
+"objective_value": "<float> Total cost of rejected commodities across the entire routing
+plan.",
+"commodities": [
+{
+"commodity_id": "<int> Identifier of the commodity whose routing outcome is described
+in this entry.",
+"rejected": "<bool> Whether this commodity is rejected and sent on its artificial arc
+instead of being routed through the network.",
+"path_arcs": [
+{
+"from": "<int> Origin node of an arc used on this commodity's routing path.",
+"to": "<int> Destination node of an arc used on this commodity's routing path.",
+"arc_id": "<int> Identifier of an arc used on this commodity's routing path."
+}
+]
+}
+]
+}
+On the public tiny instance, an example algorithm finds a feasible solution with objective
+111 against a reference of 64, which would score 64/111 ≈0.5766.
+13
+
+
+--- Page 14 ---
+Wang et al.
+Appendix B. Limits
+Limits as of 20 November 2026.
+Table 4: Limits.
+Limit
+Value
+Submissions per team per UTC day
+1 (4 in the testing stage)
+Archive size (Main)
+4 MB
+Unpacked archive size (Main)
+256 MB
+Extra PyPI packages (Main)
+50
+Environment build time (Main)
+10 min
+CPU and memory per instance (Main)
+2 vCPU, 4 GB
+Disk per instance (Main)
+1 GB
+Processes per instance (Main)
+256
+Solution file (Main)
+16 MB
+Time limit per instance
+10 s, 60 s or 5 min per problem (60 s in testing)
+Stage 1 rounds
+4 rounds of 15 problems, 7 days each
+Submission window (Self-hosted)
+P (time limit + 60 s) + 15 min, rounded up to 5 min
+Upload grace (Self-hosted)
+60 s
+Network access (Main)
+none
+14

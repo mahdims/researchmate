@@ -1,0 +1,3434 @@
+--- Page 1 ---
+Toward Quantum Software Automation: A
+Quantum-Aware Harness for LLM-Guided Evolution
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+University of Illinois Urbana-Champaign
+Urbana, Illinois, USA
+Abstract
+Quantum software is critical for improving the efficiency and
+reliability of scarce quantum hardware. However, its design
+still relies heavily on ad-hoc, handcrafted heuristics that are
+often suboptimal and quickly become obsolete as quantum
+hardware evolves. LLM-guided evolutionary search offers a
+promising way to automatically explore complex software
+designs, but existing search frameworks lack the quantum-
+specific support needed for efficient evolution: verification
+is expensive, feedback is sparse, and heterogeneous quan-
+tum programs require different optimization objectives. In
+this paper, we present QSA, a quantum-aware harness for
+LLM-guided evolutionary search toward automating quantum
+software design. QSA equips the search with three forms of
+quantum-specific guidance: an evolution-hardness-guided
+coreset and approximate scoring to reduce verification cost,
+static and snapshot analyses to provide fine-grained execu-
+tion context, and task-specific rewards for compiler passes
+and runtime policies. We evaluate QSA on the IBM Quan-
+tum platform across three benchmark suites. For multipro-
+gramming, QSA improves QPU utilization by 4.2%–9.5% and
+Hellinger fidelity by 15.2%–19.5% over the state of the art.
+For error mitigation, QSA reduces mitigation time by at least
+96.8% while achieving comparable or better fidelity. These
+gains require only $6.9 in LLM API cost over 11.3 hours.
+1
+Introduction
+Advances in quantum computing have enabled quantum-
+as-a-service through cloud platforms [2, 25, 26, 36, 47, 49].
+As shown in Figure 1, the scale of quantum hardware, mea-
+sured by the number of physical quantum bits (qubits), has
+grown rapidly in recent years. For instance, IBM increased
+its physical qubit count by two orders of magnitude from
+2021 to 2023. These advances bring quantum applications
+closer to reality [28]. A quantum system provides such a
+service by executing quantum circuits and returning classi-
+cal outcomes (e.g., bitstring probabilities) through sampling.
+Figure 2 illustrates a 3-qubit GHZ circuit [22] and its output.
+Quantum software is crucial to modern quantum comput-
+ing. It spans compiler passes that transform quantum circuits
+before execution and runtime policies that determine how
+circuits are scheduled on QPUs. In this work, we study two
+representative components: error mitigation as a compiler
+pass and multiprogramming as a runtime policy. Designing
+such software, however, is costly. First, the design space is
+2020
+2022
+2024
+2026
+Year
+102
+103
+Qubit Count
+Google
+53
+105
+IBM
+27
+1121
+IonQ
+36
+64
+QTM
+20
+56
+RGTI
+32
+80
+Figure 1. Physical qubit count of major providers.
+enormous. For example, multiprogramming must decide how
+circuits are grouped for concurrent execution. Partitioning
+(n) quantum programs into pairs, where (n) is even, already
+yields
+𝑛!
+2𝑛/2( 𝑛
+2 )! possible combinations; even ten programs ad-
+mit 945 different groupings. Second, evaluating a design typi-
+cally requires costly quantum simulation or hardware execu-
+tion, making the design space difficult to model and explore
+efficiently. Finding a good design therefore requires extensive
+trial and error. As a result, existing quantum software of-
+ten relies on ad-hoc, handcrafted heuristics (e.g., brute-force
+search and empirical hyperparameter choices), which can
+be substantially suboptimal. For instance, our study shows
+that an ad-hoc multiprogramming approach [19] achieves
+45.7% lower fidelity than the offline optimal. Moreover, rapid
+hardware evolution (Figure 1) requires heuristic retuning.
+A natural direction is to automate this design process
+through parameter search. Traditional optimization tech-
+niques, such as Bayesian optimization [18, 54], reinforcement
+learning [37, 65], and program synthesis [23, 55], typically
+operate over predefined search spaces, limiting structural
+code exploration. Recent LLMs provide a more flexible search
+operator because they can directly generate and revise source
+code [12, 33, 42]. This has led to LLM-guided evolutionary
+search [11, 39, 51], where an LLM repeatedly mutates a pro-
+gram, verifies the generated candidate on the target system,
+and uses the observed reward to guide subsequent mutations.
+By incorporating system feedback into later iterations, the
+search can progressively refine both program structure and
+decision logic. However, existing frameworks provide only
+a generic evolutionary loop and lack the quantum-specific
+mechanisms needed to interact effectively with quantum
+systems, making them inefficient.
+This paper presents QSA, a quantum-aware harness for
+LLM-guided evolutionary search for quantum compiler and
+runtime optimization. QSA equips the search agent with
+quantum-specific mechanisms that determine what to verify
+and how to score it, what execution context to expose, and how
+arXiv:2609.38883v1  [cs.SE]  30 Sep 2026
+
+
+--- Page 2 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+∣0⟩ :
+H
+∣0⟩ :
+X
+∣0⟩ :
+X
+Qubit
+Measurement
+1-qubit Gate
+2-qubit Gate
+Prob.
+Bitstring
+0.5
+000
+0
+001
+…
+…
+0
+110
+0.5
+111
+Figure 2. An example GHZ [22] quantum circuit. The circuit
+consists of three qubits, one 1-qubit gate, and two 2-qubit
+gates. The measurement module produces classical outcome
+of 3-bit bitstrings with different probability.
+to reward heterogeneous quantum programs. Specifically, QSA
+addresses the following three challenges.
+Challenge 1: Expensive quantum-system verification
+(§4). Verification lies on the critical path of evolutionary
+search: each candidate program must be evaluated across
+multiple quantum circuits. Unfortunately, key metrics such
+as Hellinger fidelity [7] require costly QPU execution or
+quantum-circuit simulation, making verification cost prohib-
+itive. Our key idea is to reduce both what to verify and how to
+score it. First, we develop evolution-hardness-guided coreset
+extraction. It repeatedly evolves programs using uniformly
+sampled verification sets, evaluates the resulting programs
+across circuit scales, and identifies the scale with the low-
+est post-evolution reward. We then sample circuit types at
+this challenging scale to construct the coreset. Second, we
+replace expensive fidelity evaluation during evolution with
+lightweight proxy scores derived from circuit properties.
+These techniques substantially reduce verification overhead
+while preserving effective guidance for evolution.
+Challenge 2: Sparse feedback for LLM-guided search
+(§5). Generic evolutionary search provides the LLM with
+program code and final rewards, but little quantum-specific
+context about the workload or how the program affects it
+during execution. Such sparse feedback makes it difficult for
+the LLM to understand why a mutation succeeds or fails and
+to generate targeted improvements. Our key idea is therefore
+to expose quantum-specific execution context. First, static
+analysis summarizes quantum-circuit characteristics before
+execution. Second, snapshot analysis captures intermediate
+system states as the evolved program executes. These sig-
+nals connect circuit characteristics and program decisions
+to execution outcomes, enabling more informed mutations
+and more efficient search.
+Challenge 3: Heterogeneous programs in quantum soft-
+ware (§6). Quantum software programs can be broadly cat-
+egorized according to how they interact with quantum cir-
+cuits. Compiler passes directly transform the circuit, whereas
+runtime policies leave the circuit unchanged and instead opti-
+mize its execution on quantum hardware. Although quantum
+metrics such as fidelity can directly evaluate compiler passes,
+they are inadequate for runtime policies because they capture
+policy quality only indirectly. Our key idea is therefore to tai-
+lor how to reward different quantum programs. For compiler
+passes, we derive rewards directly from quantum-system
+Quantum 
+Circuit
+Classical 
+Outcome
+Quantum Software Stack
+Quantum Hardware Stack
+Heterogeneous Classical 
+Resources
+Neutral 
+Atoms
+Trapped 
+Ions
+Supercon
+ducting
+Photonic
+Error 
+Mitigation
+Multiprog
+ramming
+Layout 
+Mapping
+Error 
+Correction
+Heterogeneous Quantum 
+Resources
+Interface
+Figure 3. Quantum hybrid computational model.
+metrics. For runtime policies, we design a policy reward
+that jointly captures Pareto optimality and global ranking
+qualities. We measure Pareto optimality across conflicting
+objectives using ranks from non-dominated sorting [15], and
+generalizability using the correlation between the policy’s
+predicted ranks and the corresponding ground-truth ranks.
+We implement QSA on a Linux server with an AMD Ryzen
+9 CPU and evaluate it using the IBM Quantum platform and
+public LLM APIs. For multiprogramming, QSA improves
+QPU utilization by 4.2%–9.5% while increasing fidelity by
+15.2%–19.5% over the state of the art. For error mitigation,
+QSA reduces execution time by at least 96.8% while achieving
+comparable or better fidelity. The evolved programs further
+maintain consistent performance across circuit types and
+scales. These gains incur only $6.9 in LLM API cost over 11.3
+hours.
+Overall, we make the following contributions:
+1. We present QSA, a quantum-aware harness that enables
+LLM-guided evolutionary search to automatically opti-
+mize quantum compiler passes and runtime policies.
+2. We design three quantum-specific harness mechanisms:
+an evolution-hardness-guided coreset and approximate
+scoring for efficient verification, a quantum-aware prompter
+for fine-grained search feedback, and task-specific re-
+wards for heterogeneous quantum programs.
+3. We evaluate QSA on the IBM Quantum platform and
+demonstrate significant improvements in QPU utilization,
+fidelity, and mitigation time over SOTA systems.
+2
+Background and Motivation
+2.1
+Quantum Background
+We introduce the quantum circuit and the quantum hybrid
+computational model, followed by the key metric.
+Quantum circuit. A quantum circuit, often used to repre-
+sent a quantum program, is a fundamental computational
+abstraction executed on quantum hardware. For example,
+Figure 2 shows a GHZ circuit operating on three qubits, the
+quantum counterparts of classical bits. Unlike a classical bit,
+which takes a value of either 0 or 1, a qubit can be prepared in
+a superposition of |0⟩and |1⟩. In this circuit, a Hadamard (𝐻)
+gate [52] places the first qubit into superposition. The subse-
+quent two-qubit controlled-NOT (CNOT or CX) gates [44]
+propagate this superposition across the remaining qubits,
+
+
+--- Page 3 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+12
+24
+Qubits
+100
+101
+102
+Relative Fidelity
+347.7
+Frozen
+CutQC
+QOS
+Figure 4. Fidelity results.
+15
+20
+Circuit Size (# of Qubits)
+10−1
+100
+101
+Search Time (s)
+1.11
+60.06
+0.64
+3.40
+GV
+WC
+Figure 5. Cut time analysis.
+creating a three-qubit entangled state. Measurement maps
+the quantum state to a classical bitstring, with each possible
+outcome occurring according to its measurement probability.
+Repeated circuit executions, commonly called shots, are used
+to estimate the resulting probability distribution. Ideally, the
+GHZ circuit prepares (|000⟩+ |111⟩)/
+√
+2; therefore, only 000
+and 111 have nonzero probabilities, each equal to 0.5. More
+generally, the state of an 𝑛-qubit system is represented in a
+2𝑛-dimensional state space, allowing quantum algorithms
+to exploit superposition, interference, and entanglement for
+certain computational problems.
+Hybrid computational model. Modern quantum comput-
+ing follows a hybrid execution model that tightly couples
+quantum hardware with quantum software, as illustrated in
+Figure 3. Quantum hardware is realized using four major
+technologies: neutral atoms [50], trapped ions [9], supercon-
+ducting circuits [30], and photonic systems [53]. It executes
+a circuit by applying a sequence of quantum gates to qubits
+through physical control operations, evolving the quantum
+state until measurements produce classical outputs. Quan-
+tum software compiles programs by mapping circuits onto
+the target QPU layout [29], and mitigates noise either before
+execution [5, 19, 56] or after execution [32, 58] using classical
+computing resources such as FPGAs, GPUs, and CPUs. In
+this hybrid computational model, a user submits the design
+of a quantum circuit, the quantum hardware and software
+collaborate to output classical outcomes.
+Quantum system metric. We evaluate circuit execution
+quality on NISQ hardware using Hellinger fidelity, which
+measures the similarity between the ideal output distribution
+and the noisy distribution observed from hardware execution.
+Let 𝑝= {𝑝𝑖} denote the ideal distribution and 𝑞= {𝑞𝑖} the
+measured distribution. The Hellinger fidelity is defined as
+𝐹𝐻(𝑝,𝑞) =
+ ∑︁
+𝑖
+√𝑝𝑖𝑞𝑖
+!2
+.
+(1)
+𝐹𝐻(𝑝,𝑞) ∈[0, 1], where 𝐹𝐻= 1 indicates perfect agreement.
+This metric captures the cumulative impact of noise, gate
+errors, and decoherence on quantum hardware. We refer to
+it as fidelity for brevity.
+2.2
+Why Quantum Software Design Matters?
+Quantum software is critical for addressing two major lim-
+itations of modern quantum computing: resource scarcity
+and computation noise.
+60
+70
+80
+90
+100
+Normalized Utilization (%)
+0.00
+0.25
+0.50
+0.75
+Fidelity
+QOS
+MP
+Oracle
+80-85 85-90 90-95 95-100
+Normalized Utilization (%)
+0.4
+0.6
+0.8
+Fidelity
+QOS
+MP
+Oracle
+45.7%
+Figure 6. Existing multiprogramming methods achieve poor
+trade-offs of fidelity and utility.
+Resource scarcity. Due to their high cost and system com-
+plexity, QPUs remain extremely scarce resources. Today’s
+public quantum clouds (e.g., IBM Quantum [25], AWS Braket [2],
+IonQ [26], and Quantinuum [47]) expose only a limited num-
+ber of QPUs and typically execute one circuit per QPU at
+a time to reduce interference. This practice constrains the
+throughput of quantum services. Our measurements on IBM
+Quantum further reveal severe queueing: for example, the
+99.9th-percentile queue length of IBM_fez reaches 39,985
+jobs. Detailed QPU availability and queue statistics are pro-
+vided in Appendix A. To improve throughput, recent works
+explore multiprogramming [10, 14, 19, 57], which bundles
+compatible circuits from the same workload pool and exe-
+cutes them concurrently by spatially partitioning a shared
+QPU. Although circuits within a bundle remain logically in-
+dependent, concurrent execution can substantially improve
+hardware utilization.
+Computation noise. Quantum circuits execute on Noisy
+Intermediate-Scale Quantum (NISQ) devices [46], which are
+inherently susceptible to noise from quantum gates, measure-
+ments, and decoherence. Our measurements further show
+that these error rates vary across QPUs; detailed backend
+statistics are provided in Appendix A. To improve reliability,
+error mitigation techniques transform noisy circuits into exe-
+cutions that are less susceptible to hardware errors [5, 19, 56].
+For example, circuit-cutting-based methods decompose a
+large circuit into smaller fragments, reducing interference
+and shortening individual QPU executions. Figure 4 com-
+pares FrozenQubits, CutQC, and QOS, normalized to Qiskit.
+Boxplots show medians and quartiles, with circles marking
+outliers. QOS achieves the highest fidelity, improving rela-
+tive fidelity by up to 347.7×, demonstrating the importance
+of effective error-mitigation software.
+2.3
+Pitfalls in Quantum Software Design
+Due to the high design cost, quantum software is often ad-
+hoc and built around handcrafted heuristics. These heuristics
+restrict how the large design space is explored and can lead
+to either suboptimal decisions or excessive search overhead.
+Multiprogramming. Multiprogramming determines which
+circuits are bundled for concurrent execution on a shared
+QPU [14, 19]. Existing methods rank feasible bundles using
+manually designed scoring functions whose components
+and weights approximate the fidelity–utilization trade-off.
+
+
+--- Page 4 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+Because this fixed scoring rule explores only a restricted set
+of trade-offs, the selected bundles can remain far from the
+offline optimum.
+Figure 6 compares MP [14] and QOS [19] with an offline-
+optimal Oracle on IBM_Torino. Normalized utilization char-
+acterizes how effectively a bundle uses QPU resources across
+space and time [19]. In Figure 6 (left), the top 10% bundles
+selected by each method for 24-qubit workloads are high-
+lighted. Oracle selects bundles near the top-right corner,
+whereas MP favors central bundles and QOS improves uti-
+lization at the cost of fidelity. Figure 6 (right) further reports
+the average fidelity in each utilization range. At 85%–90%
+utilization, QOS achieves 45.7%, lower fidelity than Oracle,
+demonstrating the suboptimality of handcrafted heuristics.
+Error mitigation. A key design choice in circuit-cutting-
+based error mitigation is the maximum fragment size [38,
+43]. Smaller fragments can improve fidelity, but increase
+both partitioning cost and the number of QPU executions.
+Existing methods therefore sweep candidate fragment sizes
+until finding one that satisfies the execution budget. Because
+each candidate requires solving a costly partitioning problem,
+only a limited portion of the design space can be explored
+within a practical time budget.
+Figure 5 shows the circuit-cut search time of gate virtual-
+ization (GV) [38] and wire cutting (WC) [43] for QAOA-R3
+as the input circuit grows, with the target fragment size fixed
+at 7 as in QOS [19]. WC takes 1.11 seconds at 16 qubits, but
+reaches the 60-second search limit at 18 qubits and remains
+capped thereafter. GV grows more gradually, but its search
+time increases from 0.64 seconds at 20 qubits to 3.40 seconds
+at 22 qubits and over 10 seconds at 24 qubits. This rapidly
+increasing cost makes handcrafted fragment-size exploration
+inefficient for larger circuits.
+Listing 1. LLM-based Evolution Engine
+codebase.add(𝜃0, 𝑟0)
+while not converged:
+Θ = codebase.sample ()
+prompt = prompter.build(Θ)
+𝜃= llm.generate(prompt)
+r = verifier.execute(𝜃)
+codebase.add(𝜃, r)
+2.4
+LLM-Guided Evolutionary Search
+Recent LLM-guided evolutionary frameworks use LLMs as
+mutation operators to iteratively generate and refine pro-
+gram code [39, 51]. As shown in Listing 1, a generic evolution
+loop consists of a codebase, a prompter, an LLM, and a verifier.
+Starting from an initial program 𝜃0, each iteration samples
+prior programs from the codebase, constructs an evolution
+prompt, generates a candidate program 𝜃, and executes it
+to obtain reward 𝑟, which is added back to the codebase to
+guide subsequent search.
+Preliminary Study. We first apply this generic workflow
+to error-mitigation software using OpenEvolve [51] and
+Gemini-3-Flash [20]. Across 100 iterations, evolution dis-
+covers three reward-improving programs, reducing runtime
+by up to 19.9%, demonstrating the potential of LLM-guided
+evolution for quantum software. However, directly applying
+the generic loop exposes three limitations discussed in §1:
+verifying each mutation requires costly quantum simulation
+or execution, the LLM receives little quantum-specific con-
+text beyond final rewards, and different quantum software
+components require different reward formulations. These
+limitations motivate QSA’s designs introduced next.
+3
+System Design
+Figure 7 illustrates how QSA augments a generic LLM-guided
+evolutionary search agent and interfaces with a hybrid quantum–
+classical cloud. The quantum-aware harness provides domain-
+specific mechanisms for verification, prompting, and reward
+design, while the underlying evolution agent performs generic
+program selection and mutation. The optimized quantum
+software is then integrated into the quantum software stack
+to control quantum execution and return classical outcomes
+to user applications.
+Within the evolution loop, the harness provides three
+forms of quantum-specific support. First, the verifier deter-
+mines what to verify and how to score it: coreset extraction
+reduces the circuits used for verification (§4.1), while proxy
+scoring replaces expensive fidelity evaluation with light-
+weight proxy scores derived from circuit properties (§4.2).
+Second, the prompter determines what context to expose:
+static analysis summarizes circuit properties (§5.1), while
+snapshot analysis captures intermediate system states during
+execution (§5.2). Third, task-specific rewards determine how
+to evaluate heterogeneous quantum programs, using quan-
+tum metrics for circuit optimization (§6.1) and policy-specific
+rewards for runtime policies (§6.2). Together, these compo-
+nents form a closed feedback loop: the verifier provides low-
+cost measurements, the prompter exposes quantum-specific
+execution context, and the rewards convert evaluation re-
+sults into guidance for subsequent mutations.
+4
+Efficient Quantum Verifier
+We reduce quantum verification cost along two dimensions:
+selecting a compact verification set through evolution-hardness-
+guided coreset extraction, and replacing expensive fidelity
+evaluation with lightweight approximate scoring.
+4.1
+Evolution-Hardness-Guided Coreset Extraction
+Ideally, every candidate program should be verified on the
+complete test suite. However, full-suite verification is pro-
+hibitively expensive and substantially slows evolution. We
+
+
+--- Page 5 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+§5.1 Static
+Analysis
+§5.2 Snapshot 
+Analysis
+Quantum-aware Prompter
+Efficient Quantum 
+Verifier
+§4.1 Coreset 
+Extraction
+§4.2 
+Proximate 
+Scoring
+§6.2 Policy 
+Reward
+§6.1 Circuit 
+Reward
+Task-specific Reward
+Generic LLM-guided Evolution 
+LLMs
+Candidate 
+Program
+Codebase
+Prompt 
+Composition
+Execute/ 
+Verify
+Circuit Property
+System State
+Quantum 
+Software
+Optimized 
+Quantum
+Software
+Quantum 
+Hardware
+Classical 
+Outcome
+Quantum 
+Application
+Hybrid Quantum-
+Classical Cloud
+User
+Frontend
+What to verify
+How to score
+Reward Guidance
+Execution 
+Feedback
+Quantum 
+Metrics
+Pareto Rank/
+Correlation
+Figure 7. QSA’s quantum-aware harness around generic LLM-guided evolution, integrating efficient verification, quantum-
+aware prompting, and task-specific rewards into a closed evolution loop.
+Sampled
+Evolution
+Full
+Evaluation
+−0.25
+0.00
+0.25
+Reward
+0.36
+-0.08
+Figure 8. Random selection
+performance.
+12
+14
+16
+18
+20
+22
+24
+# Qubits
+−2
+−1
+0
+Reward
+Figure 9. Post-evolution re-
+ward across circuit scales.
+therefore use a compact verification set to score candidate pro-
+grams during evolution, and evaluate only the final evolved
+program on the complete suite.
+A natural baseline is to uniformly sample circuits from
+the full suite. However, such a sample may underrepresent
+cases that remain difficult for evolution. To illustrate, we
+conduct an error-mitigation experiment in which uniformly
+sampled circuits are used throughout evolution with Gemini-
+3-Flash [20]. We defer the reward design to §6. As shown
+in Figure 27, the final program achieves a reward of 0.36 on
+the sampled verification set, but only −0.08 on the complete
+test suite. This gap indicates that evolution can overfit to the
+sampled circuits.
+Our key insight is to use the behavior of evolution itself to
+identify challenging circuit scales. Specifically, we uniformly
+sample circuits from the full suite and use the sampled set
+throughout an evolution run. We then evaluate the evolved
+program separately at each qubit count. We repeat this pro-
+cess across random samples to reduce sampling variance.
+We call the resulting scale-wise difficulty evolutionary hard-
+ness: a lower post-evolution reward indicates that uniformly
+guided evolution performs more poorly at that scale, making
+it a more challenging target for verification.
+Formally, let S(𝑘) denote the 𝑘-th uniformly sampled ver-
+ification set, and let 𝑅𝑞(𝜃) denote the reward of program 𝜃
+on circuits with qubit count 𝑞. We select
+𝑞∗= arg min
+𝑞
+1
+𝐾
+𝐾
+∑︁
+𝑘=1
+𝑅𝑞
+
+Evolve(S(𝑘))
+
+,
+(2)
+where 𝐾is the number of repeated random samples. As
+shown in Figure 9, the evolved programs achieve the lowest
+reward on 22-qubit circuits, identifying this scale as the most
+evolutionarily challenging.
+We then construct the final coreset by sampling from all
+available circuit types at the selected qubit count. Unlike
+selecting a few globally hardest circuits, this group-level de-
+sign preserves circuit diversity while focusing verification on
+a challenging scale. As shown in Figure 19, focusing evolu-
+tion on this hard scale does not sacrifice performance across
+other circuit types or qubit counts.
+4.2
+Evolution-Oriented Approximate Scoring
+Coreset extraction reduces the number of verification cases,
+but evaluating each case remains expensive when fidelity
+must be obtained through simulation or real QPU execution.
+As shown in Figure 10 (top), simulating a 12-qubit circuit
+takes less than 10 seconds, whereas a 24-qubit circuit can be
+nearly three orders of magnitude slower. Real QPU execution
+additionally incurs monetary cost and access delays.
+Our key insight is that evolution does not require ex-
+act fidelity for every candidate program. It instead needs
+a low-cost signal that distinguishes promising candidates
+and guides the search. We therefore replace exact fidelity
+evaluation during evolution with lightweight proxies derived
+from circuit properties. For individual circuits, we use depth
+and CNOT count: depth captures the critical-path length,
+while CNOT count reflects the use of error-prone two-qubit
+gates. Prior work has shown both to be useful fidelity indica-
+tors [5, 24, 63]. Figure 11 further shows a moderate negative
+correlation between depth and fidelity (−0.605). Although
+these proxies do not predict fidelity exactly, they are inex-
+pensive to compute (Figure 10, bottom) and provide effective
+feedback for evolution.
+For bundles that execute multiple circuits concurrently,
+absolute depth or CNOT count alone does not capture how
+work is distributed between the sub-circuits. We therefore
+use their relative balance as a bundle-level proxy. For a circuit
+property 𝑣(e.g., depth or CNOT count), we define
+
+
+--- Page 6 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+0.5
+1.0
+CDF
+Simulation
+12-qubit
+24-qubit
+10−2
+100
+102
+104
+Simulation/Calc Time (s)
+0.5
+1.0
+CDF
+Proxy Calculation
+12-qubit
+24-qubit
+Figure 10. Simulation using
+Qiskit.
+0
+100
+200
+300
+Depth
+0.0
+0.5
+Fidelity
+Pearson r = -0.605
+Qiskit
+QOS
+CutQC
+FrozenQubits
+Figure 11. Correlation of
+depth and fidelity.
+𝑟(𝑣1, 𝑣2) = min{𝑣1, 𝑣2}/max{𝑣1, 𝑣2, 1},
+(3)
+where 𝑣1 and 𝑣2 are the property values of the two bundled
+circuits. The score lies in [0, 1], with a smaller value indi-
+cating greater imbalance. These lightweight, bundle-aware
+proxies replace expensive fidelity evaluation and substan-
+tially accelerate verification during evolution.
+5
+Quantum-Aware Prompter
+The base prompt in OpenEvolve [51] provides the LLM with
+program code and reward feedback, but little information
+about the quantum workloads being optimized or how a
+program changes them during execution. This semantic gap
+makes it difficult for the LLM to diagnose failures and gener-
+ate meaningful mutations. Our key insight is to expose both
+what circuits the program operates on and how their states
+evolve during execution. We therefore augment the prompt
+with two complementary forms of quantum-aware context:
+static circuit profiles and execution snapshots.
+5.1
+Quantum Circuit Static Analysis
+Circuit layouts alone provide limited information about their
+execution characteristics. We therefore statically analyze
+each circuit and summarize it as a compact metadata pro-
+file. The profile combines basic statistics from Qiskit [1]
+with DAG-derived features from SupermarQ [59], including
+circuit width, depth, and CNOT count. Width captures the
+number of required qubits, depth approximates the critical
+execution path, and CNOT count reflects the use of noise-
+sensitive two-qubit operations [6]. For example, the GHZ
+circuit in Figure 2 has width 3, depth 3, and two CNOT gates.
+These features provide the LLM with a concise description
+of circuit scale, structure, and noise sensitivity. By relating
+the metadata to program rewards and execution behavior, the
+LLM can identify workload-dependent patterns and develop
+more effective optimization heuristics. Appendix B lists the
+complete feature set.
+5.2
+Quantum Software Snapshot Analysis
+Static profiles describe the input circuits, but do not reveal
+how an evolved program transforms them. A final reward
+only indicates whether a program performs well but not
+where execution begins to degrade or which operation causes
+the change.
+Program to Eval
+Snapshot 
+Enabler
+Call
+Atomized 
+Operators
+Snapshot-enabled 
+Operators
+System State
+State
+Collection
+Snapshot
+Figure 12. Snapshot Analysis
+We address this limitation through snapshot analysis. As
+illustrated in Figure 12, we instrument key operators that
+modify quantum-related metrics and record the program
+state after each operator completes. When an evolved pro-
+gram invokes these operators, the collected snapshots expose
+intermediate circuit properties and execution outcomes at
+multiple points in the workflow.
+This step-by-step context allows the LLM to associate
+reward changes with specific program decisions, localize in-
+effective transformations, and generate targeted mutations.
+6
+Task-Specific Reward Design
+We select the reward formulation according to how the target
+program interacts with quantum circuits.
+6.1
+Circuit-level Reward
+The circuit-level reward evaluates programs that directly
+modify quantum circuits (e.g., error mitigation and com-
+pilation). Let 𝑀(𝑗) =  𝑚1(𝑗),𝑚2(𝑗), . . . ,𝑚𝑛(𝑗) denote the
+measured system metrics of job 𝑗, such as fidelity, runtime,
+or cost. Because these metrics have different scales and op-
+timization directions, we first normalize each metric into
+a dimensionless utility ˜𝑚𝑖(𝑗), where a larger value consis-
+tently indicates better performance. We then aggregate the
+normalized utilities using a weighted reward:
+𝑟circuit(𝑗) =
+𝑛
+∑︁
+𝑖=1
+𝑤𝑖˜𝑚𝑖(𝑗),
+(4)
+where 𝑤𝑖≥0 specifies the relative importance of metric 𝑖
+and Í
+𝑖𝑤𝑖= 1.
+6.2
+Policy Reward
+The policy reward evaluates programs that optimize how
+circuits are executed on hardware (e.g., multiprogramming
+and scheduling). We design the policy reward using two
+components: Pareto rank, which captures Pareto optimality
+of conflicting objectives, and policy correlation, which en-
+courages generalization of the policy across system settings.
+Pareto Rank. The Pareto optimality ensures the optimality
+across different trade-offs among conflicting objectives. In
+multiprogramming, for example, fidelity and utilization may
+be weighted differently depending on system load: under
+overload, the scheduler may prioritize utilization to sustain
+throughput, whereas under light load, it may favor fidelity
+to improve user experience. A fixed weighted score is often
+too rigid to capture such varying preferences.
+
+
+--- Page 7 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+We therefore evaluate each candidate job using Pareto
+dominance. Let J denote the set of candidate jobs, and let
+𝑀(𝑗) =  𝑚1(𝑗),𝑚2(𝑗), . . . ,𝑚𝑛(𝑗) denote the metric vector
+of job 𝑗∈J (higher the better). Job 𝑗∗Pareto dominates
+job 𝑗if it is no worse in every objective and strictly better
+in at least one (i.e., ∀𝑖∈[1,𝑛], 𝑚𝑖(𝑗∗) ≥𝑚𝑖(𝑗)
+and
+∃𝑘∈
+[1,𝑛], 𝑚𝑘(𝑗∗) > 𝑚𝑘(𝑗)). Based on this relation, we compute
+Pareto fronts by iterative non-dominated sorting.
+The 𝑡-th front is defined as F𝑡= Front J \ Ð𝑡−1
+𝑖=1 F𝑖
+ ,
+where F1 contains all non-dominated jobs, F2 contains the
+non-dominated jobs after removing F1, and so on. We then
+define the Pareto-rank reward of job 𝑗as
+𝑟pareto(𝑗) = 𝑡,
+if 𝑗∈F𝑡.
+(5)
+Lower rank is better. By favoring jobs with smaller Pareto
+rank, the evolved policy is encouraged to remain close to the
+non-dominated frontier.
+Policy Correlation. Pareto optimality alone is insufficient:
+the policy should also generalize across scheduling settings.
+In practice, a policy selects only a subset of jobs from a
+candidate pool, so rewarding only the final outcome can
+overfit the policy to a particular workload composition. Our
+key insight is to evaluate how well the policy’s decisions
+align with the ground truth. Let 𝑝(𝑗) denote the measure
+assigned by the policy to job 𝑗(e.g., its predicted Pareto
+rank), and let 𝑔(𝑗) denote the corresponding ground-truth
+measure (e.g., its offline-optimal rank). We define the policy-
+correlation reward as
+𝑟corr = corr 𝑝(𝑗),𝑔(𝑗),
+(6)
+where corr(·, ·) is the Pearson correlation over all candidate
+jobs in J. A correlation close to 1 indicates that the pol-
+icy closely reproduces the ground-truth ordering. Unlike
+outcome-based rewards computed only over selected jobs,
+this provides a denser signal that encourages generalizable
+policy decisions.
+Finally, we combine Pareto rank and policy correlation:
+𝑟policy = 𝛼
+1
+¯𝑟pareto
++ (1 −𝛼)𝑟corr,
+(7)
+where ¯𝑟pareto is the average Pareto rank of the selected jobs
+and 𝛼∈[0, 1] controls the relative importance of Pareto opti-
+mality and generalization. We use 1/¯𝑟pareto ∈(0, 1] to convert
+the lower-is-better Pareto rank into a higher-is-better reward
+term. The resulting reward favors policies that select jobs
+near the Pareto frontier while preserving decision orderings
+intended to generalize across workload conditions.
+7
+Implementation
+Evolution Engine. We run the evolution loop on a Linux
+server with 32-core AMD Ryzen 9 CPU @ 4.95 GHz based on
+OpenEvolve [51]. LLM inference is performed via external
+API calls, and verification runs single-threaded. To ensure
+system efficiency in the error mitigation, we enforce a 60-
+second execution deadline per circuit. We conduct three
+independent 100-iteration trials per setting. The reported
+performance is averaged across the three runs, and the error
+bars represent ± one standard deviation.
+Reward. We tailor the reward function to each task’s re-
+quirements. For multiprogramming, we use the policy re-
+ward (Equation 7), averaging the Pareto-rank term over the
+top 1% candidate bundles. We set 𝛼= 0.5 and use the depth
+ratio as a lightweight fidelity proxy when computing Pareto
+ranks. For error mitigation, we instantiate the circuit-level
+reward (Equation 4) using depth, CNOT count, and run-
+time. Specifically, ˜𝑚𝑑, ˜𝑚𝑐, and ˜𝑚𝑡denote the normalized
+depth, CNOT-count, and runtime metrics, respectively, each
+averaged across benchmarks and direction-aligned so that
+larger values are better. We use relative weights 1 : 1 : 1
+4 for
+˜𝑚𝑑: ˜𝑚𝑐: ˜𝑚𝑡, prioritizing circuit-complexity reduction while
+still rewarding lower runtime.
+Prompter. To profile program behavior, we extract static
+features from Qiskit [1] and Supermarq [59], encompass-
+ing eight structural metrics (e.g., depth, gate counts) and
+six communication-centric properties (e.g., entanglement ra-
+tio, parallelism). The snapshot analysis includes 1) the cost
+search trace for 22-qubit circuits in error mitigation and 2)
+the Pareto rank and system metrics of top 1% circuit bundles
+from the pool for multiprogramming. See Appendix C for
+complete prompt examples.
+8
+Evaluation
+Our evaluation answers the following research questions:
+1. How effectively can QSA automate quantum software
+design in system metrics? (§8.2)
+2. How robust is QSA? (§8.3)
+3. Where does QSA’s performance gain come from? (§8.4)
+4. How does each harness component contribute? (§8.5)
+8.1
+Experimental Setup
+Quantum Hardware. Experiments are conducted on IBM
+Heron processors [25] to evaluate circuit performance. We
+evaluate QSA on the 133-qubit Torino and 156-qubit Mar-
+rakesh QPUs using 8,192 measurement shots per execution.
+Metrics. We evaluate the following metrics: (1) Hellinger
+Fidelity: A score from 0 to 1 measuring the similarity between
+experimental results and the noise-free ideal (Equation 1).
+Relative fidelity represents the raw fidelity normalized by
+Qiskit results. (2) Normalized Effective Utilization: Following
+QOS [19], normalized utilization is the combined spatial
+and temporal utilization of a bundled execution. It accounts
+for how many qubits are occupied and how long they are
+occupied when bundled circuits have different runtimes. For
+brevity, we refer to this metric as normalized utilization.
+(3) Mitigation Time: The latency incurred during the pre-
+processing of large circuits into smaller ones for improving
+
+
+--- Page 8 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+85
+90
+95
+100
+Normalized Utilization (%)
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+Fidelity
+QOS
+MP
+QSA
+Oracle
+Better
+8
+16
+24
+Total Qubit Count
+0
+5
+10
+15
+20
+25
+30
+Relative Gain (%)
++15.2
++9.5
++1.3
++10.3
++15.9
++5.9
++3.7
++13.3
++19.5
++4.2
++16.6
++13.7
+vs QOS
+vs MP
+Fid.
+Norm. Util.
+Figure 13. Multiprogramming result.
+1.0
+1.1
+1.2
+1.3
+1.4
+Relative Fidelity
+0
+10
+20
+30
+40
+50
+60
+Mitigation Time (s)
+Better
+12-qubit Circuits
+QSA
+QOS
+CutQC
+Frozen
+QSA 97.0% lower
+0
+100
+200
+300
+Relative Fidelity
+0
+20
+40
+60
+Mitigation Time (s)
+Better
+24-qubit Circuits
+QSA
+QOS
+CutQC
+Frozen
+QSA 96.8% lower
+Figure 14. Error mitigation result.
+Gemini 3 Pro
+Gemini 3 Flash
+GPT-5 mini
+GPT-5.3 Codex
+Claude Sonnet 4.6
+Claude Opus 4.6
+0
+10
+20
+Time (hours)
+Mitigation
+Multiprog
+(a) Time Cost.
+Gemini 3 Pro
+Gemini 3 Flash
+GPT-5 mini
+GPT-5.3 Codex
+Claude Sonnet 4.6
+Claude Opus 4.6
+0.0
+2.5
+5.0
+7.5
+10.0
+Cost (USD)
+Mitigation
+Multiprog
+(b) Monetary Cost.
+Figure 15. Time and monetary cost across LLM APIs.
+fidelity. (4) Quantum Overhead: The expansion factor (×) in
+the total number of circuit fragments. (5) Static Properties:
+The CNOT gate count (CNOT) and circuit depth (Depth),
+which indicate circuit complexity and expected error rates.
+Baselines. We compare QSA to two sets of baselines to
+comprehensively evaluate its performance. For multipro-
+gramming, we compare against MP [14], which enables con-
+current execution through interference-aware scheduling,
+and QOS [19], which uses utility/fidelity-aware heuristics to
+place compatible workloads on shared QPU resources. We
+exclude HyperQ [57] and QVM [60] because they primarily
+provide execution abstractions rather than bundle-ranking
+policies. For error mitigation, we compare against Qiskit [1],
+CutQC [56], FrozenQubits [5], and QOS [19], representing
+compiler optimization, circuit cutting, qubit freezing, and an
+integrated mitigation pipeline, respectively.
+Workloads. Following QOS [19], we evaluate error miti-
+gation using nine representative NISQ algorithms from the
+Supermarq [59], MQT-Bench [48], and QASM-Bench [31]
+suites: GHZ, W-State, Bernstein-Vazirani (BV), Hamiltonian
+Simulation (HS), Quantum-enhanced Support Vector Ma-
+chine (QSVM), Two-Local Ansatz (TL), Variational Quantum
+Eigensolver (VQE-n), and Approximate Optimization Algo-
+rithm (QAOA-R/P). The algorithms’ circuits can be scaled by
+the number of qubits, providing comprehensive coverage of
+criteria for evaluating contemporary quantum workloads.
+For multiprogramming, we use dual-program workloads
+that pairs the above heterogeneous circuits across scales,
+following prior works [14, 19]. We enforce a fixed target
+utilization when creating the candidate pool for scheduling:
+we pair circuits such that their combined qubit count remains
+identical across all policies. This ensures a fair evaluation
+while isolating the impact of qubit numbers.
+Mutation Operator. Since the evolution requires an LLM
+engine for mutation, we consider a diverse selection of com-
+mercial LLM families: (1) Gemini 3 Pro [21], (2) Gemini
+3 Flash [20], (3) GPT-5-mini [40], (4) GPT-5.3-Codex [41],
+(5) Claude Sonnet 4.6 [4], (6) Claude Opus 4.6 [3]. Unless
+otherwise specified, the results are derived from Gemini 3
+Pro, which has the best overall performance.
+8.2
+Overall Performance
+Multiprogramming (Fidelity vs. Utilization). We evalu-
+ate the efficacy of QSA’s multiprogramming module using
+fidelity and normalized utilization. As shown in Figure 13,
+QSA outperforms both QOS and MP in both fidelity and
+normalized utilization, while exhibiting a different trade-off
+from the Oracle, i.e., higher utilization but lower fidelity. The
+error bars show variance across total qubit count (8, 16, and
+24). Specifically, compared to QOS, QSA improves fidelity by
+15.2%–19.5% and normalized utilization by 4.2%–9.5% across
+different target utilization settings. Compared to MP, QSA
+improves fidelity by 1.3%–16.6% and normalized utilization
+by 3.7%–13.7%. Overall, the gains become more pronounced
+when the system aims to use more qubits concurrently.
+Error Mitigation (Fidelity vs. Mitigation Time). We eval-
+uate the error mitigation performance of QSA using fidelity
+and mitigation time. Figure 14 shows the trade-off between
+mitigation time and relative fidelity for small-scale (12-qubit)
+and medium-scale (24-qubit) circuits. QSA achieves fidelity
+comparable to QOS while reducing mitigation time by at least
+96.8%, yielding the best trade-off between fidelity and miti-
+gation time. We observe a slight fidelity drop on small-scale
+circuits, but a slight fidelity improvement on medium-scale
+circuits. These results show that QSA maintains strong per-
+formance across different circuit scales and suggest that its
+benefits may become more pronounced for larger circuits.
+Time and Monetary Cost. Figure 15 reports the runtime
+and monetary cost of evolving error mitigation and multi-
+programming across different LLMs. We estimate monetary
+cost using the input/output token usage reported by the API
+together with the official token pricing. On average, error
+mitigation evolution costs 10.7–19.2 hours and $0.5–$10.8,
+while multiprogramming costs 0.2–2.5 hours and $0.4–$5.5.
+Overall, the monetary cost is modest compared to the human
+
+
+--- Page 9 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+12-qubit
+24-qubit
+101
+102
+Quantum Overhead
+Frozen
+CutQC
+QOS
+QSA
+Figure 16. Quantum overhead
+across circuit scales.
+5.8
+5.9
+Δ Normalized Utilization (%)
+0.10
+0.11
+Δ Fidelity
+Gemini 3 Pro
+Gemini 3 Flash
+GPT-5.3 Codex
+GPT-5 mini
+Claude Opus 4.6
+Claude Sonnet 4.6
+Figure 17. Multiprogramming
+comparison across LLMs.
+Time (RoM)
+Time (MoR)
+Depth
+CNOT
+0.0
+0.5
+1.0
+Relative Values
+0.04
+0.80
+1.01
+1.03
+0.04
+0.81
+1.00
+1.01
+1.00
+0.98
+1.01
+1.00
+0.66
+0.87
+0.99
+1.00
+0.90
+0.80
+1.08
+1.12
+0.81
+0.68
+1.12
+1.19
+QOS
+Gemini 3 Pro
+Gemini 3 Flash
+GPT-5 mini
+GPT-5.3 Codex
+Claude Sonnet 4.6
+Claude Opus 4.6
+Figure 18. Error mitigation comparison across LLMs.
+12
+14
+16
+18
+20
+22
+24
+Qubits
+0.0
+0.5
+1.0
+Relative Value
+Depth
+CNOT
+Time (MoR)
+Time (RoM)
+Figure 19. QSA performance
+across circuit scales.
+QAOA-R3
+BV
+GHZ
+HS-1
+QAOA-P1
+QSVM
+TL-1
+VQE-1
+W-STATE
+100
+101
+Time (s)
+QOS
+QSA
+Figure 20. QSA performance
+across circuit topologies.
+12 qubit
+24 qubit
+100
+101
+Mitigation Time (s)
+1.10
+3.07
+11.96
+4.57
+4.56
+5.53
+Mitigation
+Network
+QPU
+Figure 21. QSA time break-
+down.
+Pareto Rank
+Correlation
+0
+10
+Pareto Rank
+5.59
+10.83
+13.75
+QSA
+QOS
+MP
+0.00
+0.25
+0.50
+0.75
+Correlation
+0.60
+0.17
+-0.03
+Figure 22. Pareto rank and
+correlation analysis.
+effort required to manually design and tune quantum soft-
+ware. Error mitigation incurs substantially higher runtime
+because its verification is much more expensive than that of
+multiprogramming. Among the evaluated models, Gemini 3
+Flash [20] and GPT-5-mini [40] achieve the lowest monetary
+cost, whereas Claude Opus 4.6 [3] incurs the highest.
+Quantum Overhead. Figure 16 shows the quantum over-
+head of error mitigation. Across different circuit scales, QSA
+incurs quantum overhead comparable to that of QOS. Both
+QSA and QOS exhibit higher overhead than CutQC and
+FrozenQubit because they partition circuits more aggres-
+sively. However, this additional overhead can be amortized
+through multiprogramming or QPU-level parallelism.
+Overall, QSA translates automated software design into
+4.2–9.5% higher QPU utilization and 15.2–19.5% higher fi-
+delity for multiprogramming, while removing at least 96.8%
+of mitigation preprocessing time without sacrificing fidelity,
+enabling more efficient use of scarce QPU resources.
+8.3
+Robustness Across Settings
+LLM Models. Figure 17 and Figure 18 show how QSA gen-
+eralizes across modern LLM APIs for both error mitigation
+and multiprogramming. For multiprogramming, Figure 17 re-
+ports the improvements in fidelity and normalized utilization
+relative to QOS. All evaluated LLMs achieve better trade-offs
+between fidelity and normalized utilization than QOS. Gem-
+ini 3 Pro and GPT-5.3-Codex form the Pareto frontier, with
+Claude Opus 4.6 attaining the worst performance.
+For error mitigation, Figure 18 compares the relative time,
+depth, and CNOT across different LLM APIs, all normalized
+to QOS. For depth and CNOT, we report the circuit-wise
+mean ratio to QOS. For time, we report both the mean of
+ratios (MoR) and the ratio of means (RoM), with the horizon-
+tal line indicating QOS. Overall, most LLMs substantially
+reduce mitigation time, with Gemini 3 Pro and Gemini 3
+Flash lowering RoM to 0.04 (i.e., a 96% reduction). The main
+exception is GPT-5-mini, which fails to improve the reward
+during evolution. For depth and CNOT, Gemini and GPT
+models keep the relative change within 3%, whereas Claude
+increases them by 8%–19%, suggesting slight overfitting in
+this setting. Overall, QSA generalizes well across modern
+LLM APIs, except that GPT-5-mini fails to improve mitiga-
+tion time and Claude performs worse on circuit properties.
+Circuit Scales. Figure 19 evaluates QSA on quantum cir-
+cuits ranging from 12 to 24 qubits, with all metrics normal-
+ized to those of QOS. Across circuit sizes, QSA preserves
+circuit quality comparable to QOS: the relative depth and
+CNOT count remain within 3% of QOS in nearly all cases,
+except for the CNOT count of the 18-qubit circuit. The error-
+mitigation time under RoM remains consistently below 10%
+of that of QOS across all circuit sizes. Under MoR, the rel-
+ative error-mitigation time generally decreases as the cir-
+cuit size increases and exceeds that of QOS only for the
+14-qubit circuit. Overall, QSA maintains consistent perfor-
+mance across circuit scales, preserving circuit quality while
+substantially reducing error-mitigation time. Moreover, its
+proxy-based verifier avoids the costly simulations required
+by QOS, thereby reducing verification overhead.
+Circuit Topologies. Figure 20 shows the mitigation time
+distribution across different topologies of 24-qubit quantum
+circuits. QOS fails to maintain low latency for 6 out 9 circuit
+topologies (e.g., BV, GHZ). While the error mitigation time
+of QSA is slightly higher than that of QOS for QAOA-R3
+and QSVM circuits, QSA remains a consistent and low error
+mitigation time.
+8.4
+Performance Breakdown
+This subsection explains where QSA’s performance gains
+come from. Additional evolution traces and case studies are
+provided in Appendix §D and Appendix §E.
+Error-Mitigation Breakdown. Figure 21 decomposes end-
+to-end execution into error mitigation, networking/schedul-
+ing, and per-circuit QPU computation. As the circuit size
+
+
+--- Page 10 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+000 001 010 100 111
+0.70
+0.75
+0.80
+Fidelity
+0.76
+0.78
+0.77
+0.77
+0.77
+Fidelity
+Norm. Util.
+95.5
+96.0
+96.5
+Norm. Util. (%)
+96.1
+96.1
+96.3
+96.3
+96.3
+Figure 23. Impact of prompt
+composition.
+0
+0.2
+0.5
+0.8
+1
+Weight of Rank
+0.760
+0.765
+0.770
+0.775
+Fidelity
+Fidelity
+Norm. Util.
+94.0
+95.0
+96.0
+Norm. Util. (%)
+Figure 24. Impact of score
+weights.
+92
+94
+96
+Normalized Utilization (%)
+0.75
+0.80
+Fidelity
+Depth
+Instr.
+CNOT
+NL
+Measure
+Sim. Fid.
+Figure 25. Impact of proxy on
+fidelity and utilization.
+0
+20
+40
+60
+Mitigation Time (s) ↓
+QOS
+Rand.
+BO
+RL
+QSA
+(a) Runtime
+22.6
+55.5
+55.2
+18.5
+1.1
+−0.04
+0.00
+Δ Fidelity ↑
+(b) Fidelity
+-0.013
+-0.041
+-0.011
++0.001
+Figure 26. Impact of optimiza-
+tion strategies.
+increases from 12 to 24 qubits, mitigation time grows only
+from 1.10 s to 3.07 s, while QPU computation increases by
+21.3%. The key gain comes from the evolved mitigation
+logic: QSA bounds the fragment-size search, applies binary
+search and caching, and avoids unnecessary expensive cut-
+ting probes, substantially reducing preprocessing overhead
+(Appendix §E). Detailed depth and CNOT results are pro-
+vided in Appendix §F.
+Multiprogramming Policy Analysis. Figure 22 explains
+the multiprogramming gain through the quality of the evolved
+scheduling policy. QSA achieves an average Pareto rank of
+5.59, substantially lower than QOS and MP, and a policy
+correlation of 0.60, compared with 0.17 for QOS and −0.03
+for MP. Thus, QSA’s gain comes from learning a policy that
+selects bundles closer to the Pareto frontier while better pre-
+serving the ground-truth ordering, leading to the improved
+fidelity–utilization trade-off observed in Figure 13.
+8.5
+Ablation Study
+This subsection quantifies the contribution of QSA’s harness
+components and examines its key design choices. Additional
+ablation studies can be found at Appendix G.
+Impact of Approximation. We evaluate various approxi-
+mation of real fidelity in multiprogramming evolution using
+the relative-balance ratio (§4.2) of: instruction count (Instr.),
+depth (Depth), non-local gates (NL), measurements (Mea-
+sure), and CNOTs (see Appendix H for details). We also
+include simulatted fidelity (Sim. Fid.) for reference. Figure 25
+reveals that Instr., Depth, and NL collectively form the Pareto
+front of the utilization-fidelity trade-off. While Instr. max-
+imizes fidelity, Depth offers a superior balance, achieving
+> 96% utilization with minimal fidelity loss. At comparable
+utilization, Depth outperforms NL and CNOT as it more accu-
+rately reflects decoherence time, the dominant error source
+in NISQ devices. Despite its higher cost, simulated fidelity
+does not improve the final fidelity–utilization trade-off.
+Impact of Prompt Composition. Figure 23 compares dif-
+ferent prompt compositions in multiprogramming evolution.
+We consider three components: 1) the Pareto ranks of the
+currently selected bundles (§5.2), 2) the system metrics of the
+ground-truth bundles (§5.2), and 3) the circuit properties of
+the ground-truth bundles (§5.1). We use a three-digit code to
+indicate whether each component is included. Without static
+Random
+coreset
+Hardness-guided
+coreset
+−0.2
+0.0
+0.2
+0.4
+Reward
+0.36
+0.36
+-0.08
+0.12
+Sampled/evolution
+Full-suite
+Figure 27. Impact of coreset selection on evolution reward.
+or snapshot analysis (000), both fidelity and normalized uti-
+lization are lower than the full design (111). Partial prompt
+(001, 010, 100) improves over 000 and can approach 111, but
+is less stable. Overall, the full composition (111) achieves
+the most stable and strongest performance, delivering high
+fidelity, maximum utilization, and minimal variance.
+Impact of Policy Weight. In Figure 24, we assess the sensi-
+tivity of the system to the parameter 𝛼in the policy reward
+(Equation 7). Keeping other settings fixed, we ablate 𝛼∈
+{0, 0.2, 0.5, 0.8, 1.0} in multiprogramming evolution. When
+𝛼= 1, i.e., policy correlation is disabled, performance de-
+grades noticeably in both fidelity and utilization. When𝛼= 0,
+i.e., Pareto rank is disabled, fidelity also drops slightly. Over-
+all, the best performance is achieved by balancing Pareto
+rank and policy correlation, with 𝛼= 0.5 yielding the best
+evolution outcome.
+Impact of Optimization Strategies. Figure 26 compares
+QSA with Random, Bayesian Optimization (BO), and Re-
+inforcement Learning (RL) for error-mitigation design. All
+methods target the same output decisions (target fragment
+size and cutting method (GV or WC)) under a 60 s search
+deadline. These decisions follow the optimization interface of
+the QOS workflow. Unlike conventional baselines that oper-
+ate within predefined search or policy classes, QSA evolves
+the decision program itself. Appendix I details their con-
+figurations. We report mitigation time and fidelity change
+relative to QOS, averaged across circuit types and scales
+(12–24 qubits). Random and BO frequently hit the deadline
+and are slower than QOS, while RL provides only a mod-
+est speedup with a fidelity reduction of 0.011. The broader
+program-level search enables QSA to discover decision strate-
+gies beyond the predefined search or policy classes of con-
+ventional baselines. Thus, QSA reduces average mitigation
+time from 22.58 s to 1.06 s (21.3×) while preserving fidelity,
+achieving the best overall trade-off.
+
+
+--- Page 11 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+Impact of Coreset Selection. Figure 27 compares uni-
+form random coreset selection with our evolution-hardness-
+guided coreset under the same evolution setting and verifi-
+cation budget. Both approaches achieve the same reward on
+the sampled verification set (0.36), but their full-suite per-
+formance differs substantially. The random coreset yields
+a full-suite reward of −0.08, whereas the hardness-guided
+coreset improves it to 0.12. This result shows that uniform
+sampling can provide a misleading optimization signal, while
+focusing verification on an evolutionarily challenging circuit
+scale produces a more effective coreset for guiding evolution.
+9
+Discussion
+This section discusses the automation scope of QSA and its
+generalizability. More discussions are at Appendix §J.
+Automation Scope. QSA is semi-automated: engineers pro-
+vide a one-time task specification, including the target soft-
+ware component, an initial implementation, and the opti-
+mization objectives. Given this specification, the quantum-
+aware harness automatically drives the subsequent evolution
+process by generating mutations, verifying candidate pro-
+grams, collecting quantum-specific execution context, and
+providing rewards to guide further mutations. Full automa-
+tion could further let the LLM formulate the initial implemen-
+tation and optimization specification, but reliably exploring
+such an unconstrained software design space remains chal-
+lenging for current LLMs [35, 64]. QSA therefore constrains
+the search to a specified software component while automat-
+ing its iterative optimization.
+Hardware Generalizability. QSA is not tied to a specific
+quantum backend (e.g., the IBM Quantum platform). Its har-
+ness relies on observable circuit properties, execution states,
+and system metrics rather than assumptions about a particu-
+lar hardware architecture. Therefore, QSA can be applied to
+different or future quantum platforms as long as the metrics
+required by the optimization objective can be measured and
+the execution stack exposes sufficient feedback for verifica-
+tion and prompting. As quantum hardware exposes more
+software-configurable controls (e.g., circuit layering or pulse-
+level parameters), the same evolutionary approach could
+further extend to lower-level system optimizations.
+10
+Related Work
+Error Mitigation. Many techniques mitigate NISQ noise
+across different abstraction layers. Zero-Noise Extrapolation
+estimates noise-free expectations by scaling noise and extrap-
+olating to the zero-noise limit [32, 58], while Probabilistic Er-
+ror Cancellation reconstructs ideal outcomes through quasi-
+probability sampling [17, 58]. At the pulse and circuit levels,
+Dynamical Decoupling [13, 45] and Pauli Twirling [61] re-
+duce decoherence and coherent noise. Readout Error Miti-
+gation corrects measurement noise through hardware cali-
+bration [8]. At the system level, recent frameworks such as
+QOS incorporate noise-aware mapping and scheduling based
+on hardware calibration. QSA automates the discovery of
+error mitigation strategies through compiler-pass evolution,
+uncovering better fidelity–latency trade-offs.
+Multiprogramming. Quantum multiprogramming evolved
+from rigid physical isolation to suppress crosstalk [14] to-
+ward flexible mapping techniques like X-SWAP [34] that
+improve spatial utilization by relaxing program boundaries.
+QOS [19] uses admission control for fidelity-resource bal-
+ancing, while QVM [57] leverages virtualization to enforce
+execution isolation. However, these systems rely on static
+heuristics that struggle to navigate complex trade-offs be-
+tween fidelity and utilization as hardware scales increase.
+QSA bridges this gap by abstracting decision logic into evolv-
+able policies, autonomously synthesizing scheduling rules
+that approach the Pareto-optimal frontier.
+LLM-Based System Optimization. Traditional approaches
+optimize systems through Bayesian optimization [18, 54],
+RL-based fine-tuning [37, 65], and program synthesis [23,
+55]. However, these approaches typically require predefined
+parameter spaces, action spaces, or synthesis constraints,
+making them less suitable for optimizing complex struc-
+tural code [12]. Recent work therefore increasingly leverages
+LLMs to directly generate and revise system code [12, 33, 42].
+LLM-guided evolutionary search further enables iterative
+refinement by repeatedly generating, evaluating, and improv-
+ing candidate programs. Evolutionary discovery of bivariate
+bicycle codes [11] applies this paradigm to quantum code
+discovery, but focuses on a specific quantum artifact. In con-
+trast, QSA targets reusable quantum software components,
+including compiler passes and runtime policies. More im-
+portantly, existing evolutionary search frameworks provide
+only a generic search loop and lack the quantum-specific
+mechanisms required for efficient verification, informative
+execution feedback, and heterogeneous reward design. QSA
+addresses this gap with a quantum-aware harness that equips
+generic LLM-guided evolutionary search with these domain-
+specific mechanisms.
+11
+Conclusion
+Rapid advances in quantum hardware call for automated soft-
+ware design to keep pace with evolving systems and move
+beyond handcrafted heuristics. We present QSA, a quantum-
+aware harness that enables LLM-guided evolutionary search
+to automatically optimize quantum compiler passes and run-
+time policies. By providing quantum-specific mechanisms
+for efficient verification, informative execution feedback, and
+task-specific reward design, QSA makes generic evolution-
+ary search practical for quantum software. Our evaluation
+shows that QSA consistently outperforms SOTA baselines
+across fidelity, QPU utilization, and execution time, demon-
+strating the potential of quantum-aware evolutionary search
+for automated quantum software engineering.
+
+
+--- Page 12 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+References
+[1] Gadi Aleksandrowicz et al. 2019. Qiskit: An Open-source Framework
+for Quantum Computing. doi:10.5281/zenodo.2562111
+[2] Amazon Web Services. 2025. Amazon Braket: A Fully Managed Quan-
+tum Computing Service. https://aws.amazon.com/braket/. Accessed:
+2026-03-17.
+[3] Anthropic. 2025. Introducing Claude 4.5 Opus. https://www.anthropic.
+com/news/claude-opus-4-5. Accessed: 2026-03-17.
+[4] Anthropic. 2025.
+Introducing Claude 4.5 Sonnet.
+https://www.
+anthropic.com/news/claude-sonnet-4-5. Accessed: 2026-03-17.
+[5] Ramin Ayanzadeh, Narges Alavisamani, Poulami Das, and Moinuddin
+Qureshi. 2023. Frozenqubits: Boosting fidelity of qaoa by skipping
+hotspot nodes. In Proceedings of the 28th ACM International Conference
+on Architectural Support for Programming Languages and Operating
+Systems, Volume 2. 311–324. https://dl.acm.org/doi/10.1145/3575693.
+3575741
+[6] Adriano Barenco, Charles H Bennett, Richard Cleve, David P DiVin-
+cenzo, Norman Margolus, Peter Shor, Tycho Sleator, John A Smolin,
+and Harald Weinfurter. 1995. Elementary gates for quantum compu-
+tation. Physical review A 52, 5 (1995), 3457. https://journals.aps.org/
+pra/abstract/10.1103/PhysRevA.52.3457
+[7] Anil Bhattacharyya. 1943. On a measure of divergence between two
+statistical populations defined by their probability distribution. Bul-
+letin of the Calcutta Mathematical Society 35 (1943), 99–110. https:
+//www.jstor.org/stable/25047882
+[8] Sergey Bravyi, Sarah Sheldon, Abhinav Kandala, David C Mckay, and
+Jay M Gambetta. 2021. Mitigating measurement errors in multiqubit
+experiments. Physical Review A 103, 4 (2021), 042605. https://journals.
+aps.org/pra/abstract/10.1103/PhysRevA.103.042605
+[9] Colin D Bruzewicz, John Chiaverini, Robert McConnell, and Jeremy M
+Sage. 2019. Trapped-ion quantum computing: Progress and challenges.
+Applied physics reviews 6, 2 (2019). doi:10.1063/1.5088164
+[10] Mark Crovella, Prakash Das, Cezary Dubnicki, Thomas LeBlanc, and
+Evangelos Markatos. 1991. Multiprogramming on multiprocessors. In
+Proceedings of the third IEEE Symposium on Parallel and Distributed
+Processing. IEEE, 590–597. https://dl.acm.org/doi/10.1109/SPDP.1991.
+218246
+[11] Juan Cruz-Benito, Andrew W. Cross, David Kremer, and Ismael Faro.
+2026. Evolutionary Discovery of Bivariate Bicycle Codes with LLM-
+Guided Search. arXiv:2606.02418 [quant-ph] doi:10.48550/arXiv.2606.
+02418
+[12] Chris Cummins, Volker Seeker, Dejan Grubisic, Baptiste Roziere, Jonas
+Gehring, Gabriel Synnaeve, and Hugh Leather. 2024. Meta large lan-
+guage model compiler: Foundation models of compiler optimization.
+arXiv preprint arXiv:2407.02524 (2024).
+https://arxiv.org/abs/2407.
+02524
+[13] Poulami Das, Swamit Tannu, Siddharth Dangwal, and Moinuddin
+Qureshi. 2021. Adapt: Mitigating idling errors in qubits via adaptive
+dynamical decoupling. In MICRO-54: 54th Annual IEEE/ACM Interna-
+tional Symposium on Microarchitecture. 950–962. https://dl.acm.org/
+doi/abs/10.1145/3466752.3480059
+[14] Poulami Das, Swamit S Tannu, Prashant J Nair, and Moinuddin
+Qureshi. 2019. A case for multi-programming quantum computers.
+In Proceedings of the 52nd Annual IEEE/ACM International Symposium
+on Microarchitecture. 291–303.
+https://dl.acm.org/doi/abs/10.1145/
+3352460.3358287
+[15] Kalyanmoy Deb, Amrit Pratap, Sameer Agarwal, and TAMT Meyari-
+van. 2002. A fast and elitist multiobjective genetic algorithm: NSGA-II.
+IEEE transactions on evolutionary computation 6, 2 (2002), 182–197.
+https://ieeexplore.ieee.org/document/996017
+[16] Matthew DeCross, Eli Chertkov, Megan Kohagen, and Michael Foss-
+Feig. 2023. Qubit-reuse compilation with mid-circuit measurement
+and reset. Physical Review X 13, 4 (2023), 041057. https://journals.aps.
+org/prx/abstract/10.1103/PhysRevX.13.041057
+[17] Suguru Endo, Simon C Benjamin, and Ying Li. 2018. Practical quan-
+tum error mitigation for near-future applications. Physical Review
+X 8, 3 (2018), 031027. https://journals.aps.org/prx/abstract/10.1103/
+PhysRevX.8.031027
+[18] Peter I Frazier. 2018. A tutorial on Bayesian optimization. arXiv
+preprint arXiv:1807.02811 (2018).
+[19] Emmanouil Giortamis, Francisco Romão, Nathaniel Tornow, and
+Pramod Bhatotia. 2025. {QOS}: Quantum operating system. In 19th
+USENIX Symposium on Operating Systems Design and Implementa-
+tion (OSDI 25). 429–447. https://www.usenix.org/system/files/osdi25-
+giortamis.pdf
+[20] Google DeepMind. 2025. Gemini 3 Flash Preview. https://deepmind.
+google/models/gemini/flash/. Accessed: 2026-03-17.
+[21] Google DeepMind. 2025.
+A new era of intelligence with Gem-
+ini 3. https://blog.google/products-and-platforms/products/gemini/
+gemini-3/. Accessed: 2026-03-17.
+[22] Daniel M Greenberger, Michael A Horne, and Anton Zeilinger. 1989.
+Going beyond Bell’s theorem. In Bell’s theorem, quantum theory and
+conceptions of the universe. Springer, 69–72. https://link.springer.com/
+chapter/10.1007/978-94-017-0849-4_10
+[23] Sumit Gulwani, Oleksandr Polozov, and Rishabh Singh. 2017. Program
+synthesis. Foundations and Trends in Programming Languages 4, 1-2
+(2017), 1–119.
+[24] Patrick Hopf, Nils Quetschlich, Laura Schulz, and Robert Wille. 2025.
+Improving figures of merit for quantum circuit compilation. In 2025
+Design, Automation & Test in Europe Conference (DATE). IEEE, 1–7.
+https://ieeexplore.ieee.org/document/10992761
+[25] IBM Quantum. 2025. IBM Quantum Platform. https://quantum.cloud.
+ibm.com/. Accessed: 2026-03-08.
+[26] IonQ. 2025. IonQ Quantum Computing Systems. https://ionq.com/.
+Accessed: 2026-03-17.
+[27] Hanru Jiang. 2024. Qubit recycling revisited. Proceedings of the ACM
+on Programming Languages 8, PLDI (2024), 1264–1287. https://dl.acm.
+org/doi/10.1145/3656428
+[28] Youngseok Kim, Andrew Eddins, Sajant Anand, Ken Xuan Wei, Ewout
+Van Den Berg, Sami Rosenblatt, Hasan Nayfeh, Yantao Wu, Michael
+Zaletel, Kristan Temme, et al. 2023. Evidence for the utility of quantum
+computing before fault tolerance. Nature 618, 7965 (2023), 500–505.
+https://www.nature.com/articles/s41586-023-06096-3
+[29] Oğuzcan Kırmemiş, Francisco Romão, Emmanouil Giortamis, and
+Pramod Bhatotia. 2025. Weaver: A Retargetable Compiler Framework
+for FPQA Quantum Architectures. In Proceedings of the 23rd ACM/IEEE
+International Symposium on Code Generation and Optimization. 299–
+316. https://dl.acm.org/doi/abs/10.1145/3696443.3708965
+[30] Morten Kjaergaard, Mollie E Schwartz, Jochen Braumüller, Philip
+Krantz, Joel I-J Wang, Simon Gustavsson, and William D Oliver. 2020.
+Superconducting qubits: Current state of play. Annual Review of
+Condensed Matter Physics 11, 1 (2020), 369–395. doi:10.1146/annurev-
+conmatphys-031119-050605
+[31] Ang Li, Samuel Stein, Sriram Krishnamoorthy, and James Ang. 2023.
+Qasmbench: A low-level quantum benchmark suite for nisq evaluation
+and simulation. ACM Transactions on Quantum Computing 4, 2 (2023),
+1–26. https://dl.acm.org/doi/10.1145/3550488
+[32] Ying Li and Simon C Benjamin. 2017. Efficient variational quantum
+simulator incorporating active error minimization. Physical Review
+X 7, 2 (2017), 021050. https://journals.aps.org/prx/abstract/10.1103/
+PhysRevX.7.021050
+[33] Hongyu Lin, Yuchen Li, Haoran Luo, Kaichun Yao, Libo Zhang,
+Zhenghong Lin, Mingjie Xing, Yanjun Wu, and Carl Yang. 2025. Byos:
+Knowledge-driven large language models bring your own operat-
+ing system more excellent. arXiv preprint arXiv:2503.09663 (2025).
+https://arxiv.org/abs/2503.09663
+
+
+--- Page 13 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+[34] Lei Liu and Xinglei Dou. 2021. Qucloud: A new qubit mapping mech-
+anism for multi-programming quantum computing in cloud envi-
+ronment. In 2021 IEEE International symposium on high-performance
+computer architecture (HPCA). IEEE, 167–178. https://ieeexplore.ieee.
+org/document/9407180
+[35] Yecheng Jason Ma, William Liang, Guanzhi Wang, De-An Huang,
+Osbert Bastani, Dinesh Jayaraman, Yuke Zhu, Linxi Fan, and Anima
+Anandkumar. 2023. Eureka: Human-level reward design via coding
+large language models. arXiv preprint arXiv:2310.12931 (2023). https:
+//arxiv.org/abs/2310.12931
+[36] Microsoft. 2025. Azure Quantum: Cloud Quantum Computing Plat-
+form. https://learn.microsoft.com/en-us/azure/quantum/overview-
+azure-quantum. Accessed: 2026-03.
+[37] Azalia Mirhoseini, Hieu Pham, Quoc V Le, Benoit Steiner, Rasmus
+Larsen, Yuefeng Zhou, Naveen Kumar, Mohammad Norouzi, Samy
+Bengio, and Jeff Dean. 2017. Device placement optimization with
+reinforcement learning. In International conference on machine learning.
+PMLR, 2430–2439.
+[38] Kosuke Mitarai and Keisuke Fujii. 2021. Constructing a virtual two-
+qubit gate by sampling single-qubit operations. New Journal of Physics
+23, 2 (2021), 023021. https://iopscience.iop.org/article/10.1088/1367-
+2630/abd7bc
+[39] Alexander Novikov, Ngân V˜u, Marvin Eisenberger, Emilien Dupont,
+Po-Sen Huang, Adam Zsolt Wagner, Sergey Shirobokov, Borislav Ko-
+zlovskii, Francisco JR Ruiz, Abbas Mehrabian, et al. 2025. Alphaevolve:
+A coding agent for scientific and algorithmic discovery. arXiv preprint
+arXiv:2506.13131 (2025). https://arxiv.org/abs/2506.13131
+[40] OpenAI. 2025. GPT-5. https://openai.com/gpt-5/. Accessed: 2026-03-
+17.
+[41] OpenAI. 2026. Introducing GPT-5.3 Codex. https://openai.com/index/
+introducing-gpt-5-3-codex/. Accessed: 2026-03-17.
+[42] Sujin Park, Mingyu Guan, Xiang Cheng, and Taesoo Kim. 2025. Prin-
+ciples and methodologies for serial performance optimization. In 19th
+USENIX Symposium on Operating Systems Design and Implementation
+(OSDI 25). 357–373. https://dl.acm.org/doi/10.5555/3767901.3767921
+[43] Tianyi Peng, Aram W Harrow, Maris Ozols, and Xiaodi Wu. 2020.
+Simulating large quantum circuits on a small quantum computer.
+Physical review letters 125, 15 (2020), 150504. https://journals.aps.org/
+prl/abstract/10.1103/PhysRevLett.125.150504
+[44] JH Plantenberg, PC De Groot, CJPM Harmans, and JE Mooij. 2007.
+Demonstration of controlled-NOT quantum gates on a pair of super-
+conducting quantum bits. Nature 447, 7146 (2007), 836–839.
+[45] Bibek Pokharel, Namit Anand, Benjamin Fortman, and Daniel A Li-
+dar. 2018. Demonstration of fidelity improvement using dynami-
+cal decoupling with superconducting qubits. Physical review letters
+121, 22 (2018), 220502. https://journals.aps.org/prl/abstract/10.1103/
+PhysRevLett.121.220502
+[46] John Preskill. 2018. Quantum computing in the NISQ era and beyond.
+Quantum 2 (2018), 79. https://doi.org/10.22331/q-2018-08-06-79
+[47] Quantinuum. 2025. Quantinuum Quantum Computing Systems. https:
+//www.quantinuum.com/. Accessed: 2026-03-17.
+[48] Nils Quetschlich, Lukas Burgholzer, and Robert Wille. 2023. MQT
+Bench: Benchmarking software and design automation tools for
+quantum computing. Quantum 7 (2023), 1062.
+https://quantum-
+journal.org/papers/q-2023-07-20-1062/
+[49] Rigetti Computing. 2025. Rigetti Quantum Cloud Services (QCS).
+https://www.rigetti.com/. Accessed: 2026-03.
+[50] Mark Saffman. 2016. Quantum computing with atomic qubits and
+Rydberg interactions: progress and challenges. Journal of Physics B:
+Atomic, Molecular and Optical Physics 49, 20 (2016), 202001. doi:10.
+1088/0953-4075/49/20/202001
+[51] Asankhaya Sharma. 2025.
+OpenEvolve: an open-source evolution-
+ary coding agent. https://github.com/algorithmicsuperintelligence/
+openevolve
+[52] Dan J Shepherd. 2006. On the role of Hadamard gates in quantum
+circuits. Quantum Information Processing 5, 3 (2006), 161–177. https:
+//link.springer.com/article/10.1007/s11128-006-0023-4
+[53] Sergei Slussarenko and Geoff J Pryde. 2019. Photonic quantum in-
+formation processing: A concise review. Applied physics reviews 6, 4
+(2019). doi:10.1063/1.5115814
+[54] Jasper Snoek, Hugo Larochelle, and Ryan P Adams. 2012. Practical
+bayesian optimization of machine learning algorithms. Advances in
+neural information processing systems 25 (2012).
+[55] Armando Solar-Lezama. 2008. Program synthesis by sketching. Uni-
+versity of California, Berkeley.
+[56] Wei Tang, Teague Tomesh, Martin Suchara, Jeffrey Larson, and Mar-
+garet Martonosi. 2021. Cutqc: using small quantum computers for
+large quantum circuit evaluations. In Proceedings of the 26th ACM
+International conference on architectural support for programming lan-
+guages and operating systems. 473–486.
+https://dl.acm.org/doi/10.
+1145/3445814.3446758
+[57] Runzhou Tao, Hongzheng Zhu, Jason Nieh, Jianan Yao, and Ronghui
+Gu. 2025. Quantum virtual machines. In 19th USENIX Symposium
+on Operating Systems Design and Implementation (OSDI 25). 411–428.
+https://www.usenix.org/conference/osdi25/presentation/tao
+[58] Kristan Temme, Sergey Bravyi, and Jay M Gambetta. 2017. Error
+mitigation for short-depth quantum circuits. Physical review letters
+119, 18 (2017), 180509. https://journals.aps.org/prl/abstract/10.1103/
+PhysRevLett.119.180509
+[59] Teague Tomesh, Pranav Gokhale, Victory Omole, Gokul Subramanian
+Ravi, Kaitlin N Smith, Joshua Viszlai, Xin-Chuan Wu, Nikos Hardavel-
+las, Margaret R Martonosi, and Frederic T Chong. 2022. Supermarq: A
+scalable quantum benchmark suite. In 2022 IEEE International Sym-
+posium on High-Performance Computer Architecture (HPCA). IEEE,
+587–603. https://ieeexplore.ieee.org/document/9773202
+[60] Nathaniel Tornow, Emmanouil Giortamis, and Pramod Bhatotia. 2025.
+QVM: Quantum Gate Virtualization Machine. Proceedings of the ACM
+on Programming Languages 9, PLDI (2025), 993–1018. https://dl.acm.
+org/doi/10.1145/3729290
+[61] Joel J Wallman and Joseph Emerson. 2016. Noise tailoring for scalable
+quantum computation via randomized compiling. Physical Review A
+94, 5 (2016), 052325. https://journals.aps.org/pra/abstract/10.1103/
+PhysRevA.94.052325
+[62] Robert Wille, Aaron Lye, and Rolf Drechsler. 2014. Optimal SWAP
+gate insertion for nearest neighbor quantum circuits. In 2014 19th
+Asia and South Pacific Design Automation Conference (ASP-DAC). IEEE,
+489–494. https://ieeexplore.ieee.org/abstract/document/6742939
+[63] Ellis Wilson, Frank Mueller, Lindsay Bassman Oftelie, and Costin
+Iancu. 2021. Empirical evaluation of circuit approximations on noisy
+quantum devices. In Proceedings of the international conference for
+high performance computing, networking, storage and analysis. 1–15.
+https://dl.acm.org/doi/10.1145/3458817.3476189
+[64] Chunqiu Steven Xia, Yinlin Deng, Soren Dunn, and Lingming Zhang.
+2024. Agentless: Demystifying llm-based software engineering agents.
+arXiv preprint arXiv:2407.01489 (2024).
+https://arxiv.org/abs/2407.
+01489
+[65] Yanqi Zhou, Sudip Roy, Amirali Abdolrashidi, Daniel Wong, Peter Ma,
+Qiumin Xu, Hanxiao Liu, Phitchaya Phothilimtha, Shen Wang, Anna
+Goldie, et al. 2020. Transferable graph optimizers for ml compilers.
+Advances in Neural Information Processing Systems 33 (2020), 13844–
+13855.
+A
+IBM Quantum Platform Analysis
+This section provides additional characterization of resource
+availability and hardware noise on the IBM Quantum plat-
+form, complementing the discussion in §2.2.
+
+
+--- Page 14 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+IBM
+AWS
+Azure
+IonQ
+Rigetti
+Quantinuum
+0.0
+2.5
+5.0
+7.5
+10.0
+Number of QPUs
+10
+7
+7
+2
+2
+1
+Figure 28. Publicly acces-
+sible QPUs across major
+cloud providers.
+95th
+99th
+99.9th
+Percentile
+0
+100
+101
+102
+103
+104
+Pending Jobs
+113
+3670
+39985
+25
+212
+9605
+22
+201
+1014
+fez
+mar
+tor
+Figure 29. High-percentile
+pending-job counts on IBM
+QPUs.
+03-05
+00:00
+03-09
+00:00
+03-13
+00:00
+03-17
+00:00
+03-21
+00:00
+03-25
+00:00
+UTC Time
+100
+101
+102
+103
+104
+Pending Jobs
+fez
+marrakesh
+torino
+Figure 30. Pending jobs on IBM QPUs throughout March
+2026.
+Backend
+2Q Gate (𝜇)
+1Q Gate (𝜇)
+Readout (𝜇)
+Torino
+2.564 × 10−3
+3.172 × 10−4
+2.961 × 10−2
+Marrakesh
+2.632 × 10−3
+3.201 × 10−4
+1.160 × 10−2
+Fez
+2.626 × 10−3
+2.846 × 10−4
+1.462 × 10−2
+Table 1. Representative error metrics of the evaluated IBM
+QPUs.
+Resource Availability. Figure 28 shows that public quan-
+tum clouds expose only a limited number of QPUs. To further
+characterize resource contention, we collect the number of
+pending jobs on IBM_torino, IBM_marrakesh, and IBM_fez
+every 10 minutes throughout March 2026. Figure 29 reports
+the 95th, 99th, and 99.9th percentiles of the observed queue
+lengths. The long-tail queueing behavior is substantial; for ex-
+ample, the 99.9th-percentile queue length of IBM_fez reaches
+39,985 jobs.
+Figure 30 further shows how queue lengths vary over time.
+IBM_fez consistently experiences heavier contention than
+the other observed QPUs, while all three exhibit substantial
+temporal variation.
+Hardware Noise. Table 1 summarizes representative 1-
+qubit, 2-qubit, and readout error rates for the three IBM
+QPUs. The backends exhibit different error characteristics:
+IBM_torino has the highest readout error, while IBM_fez has
+the lowest 1-qubit gate error among the measured systems.
+Figure 31 shows that these error metrics also vary over
+time. The 2-qubit gate error rates are broadly comparable
+across the observed QPUs, although IBM_marrakesh exhibits
+greater temporal variation. IBM_fez generally has the lowest
+1-qubit gate error, whereas IBM_torino exhibits the highest
+05 09 13 17 21 25
+UTC Day
+0.0025
+0.0030
+0.0035
+Error
+2-qubit Gate
+05 09 13 17 21 25
+UTC Day
+0.00028
+0.00030
+0.00032
+0.00034
+0.00036
+1-qubit Gate
+05 09 13 17 21 25
+UTC Day
+0.01
+0.02
+0.03
+0.04
+0.05
+Readout
+fez
+marrakesh
+torino
+Figure 31. Variation of IBM QPU error metrics over time.
+0
+50
+100
+Iteration
+−101
+−100
+−10−1
+0
+10−1
+100
+Best Reward So-far
+Gemini
+Gemini 3 Pro
+Gemini 3 Flash
+0
+50
+100
+Iteration
+GPT
+GPT-5 mini
+GPT-5.3 Codex
+0
+50
+100
+Iteration
+Claude
+Claude Sonnet 4.6
+Claude Opus 4.6
+Figure 32. Learning curves for error mitigation.
+readout error. Together, these measurements highlight both
+resource contention and backend-dependent noise variation
+in today’s quantum cloud environments.
+B
+Static Feature Details
+Table 2 describes the 14 static features extracted through
+static analysis and their physical meanings. It combines
+structural size/complexity features (e.g., depth, qubit count,
+instruction/CNOT/nonlocal-gate counts), graph/connectiv-
+ity features (e.g., connected components), and execution-
+shape features (e.g., parallelism, liveness, measurement in-
+tensity, entanglement ratio, critical depth). These features
+give a compact physical profile of each circuit, so the op-
+timizer can prioritize candidates that are likely easier to
+mitigate while preserving fidelity and runtime efficiency.
+C
+OpenEvolve Configurations
+Listings 2 and 5 present the OpenEvolve configurations for
+error mitigation and multiprogramming, respectively. In ad-
+dition to the static and snapshot analysis of our design, they
+include four basic components from OpenEvolve [51]: (1)
+Format requirement, which specifies editable code regions
+and function signatures to ensure syntactic correctness; (2)
+Verifier specification, which defines the reward formulation
+(e.g., a single metric or a weighted sum of multiple metrics);
+(3) Parent program, selected via a stochastic policy from top-
+quality candidates (exploitation) or random candidates (ex-
+ploration); and (4) Historical programs, where top programs
+guide optimization toward high-quality solutions, diverse
+programs broaden exploration, and inspiration programs pro-
+vide reusable patterns for generation. We summarize them
+in Table 3.
+D
+Evolution Analysis
+Overall. We analyze all evolution runs that achieve at least
+one improvement within 100 iterations for both multipro-
+gramming and error mitigation. Figure 33 shows the CDFs
+
+
+--- Page 15 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+Static Features
+Physical Meaning
+depth
+Number of sequential gate layers in the circuit.
+num_qubits
+Number of qubits used by the circuit.
+num_clbits
+Number of classical bits used by the circuit.
+num_nonlocal_gates
+Number of nonlocal gates, i.e., a two-qubit gate between qubits that are not directly connected on the
+hardware coupling graph, so SWAPs [62] must first move their states together.
+num_connected_components
+Number of disconnected components in the qubit-interaction graph.
+number_instructions
+Total number of instructions in the circuit.
+num_measurements
+Number of measurement operations.
+num_cnot_gates
+Number of CNOT (controlled-X) gates.
+program_communication
+Degree of interaction or dependency among different parts of the circuit.
+liveness
+Degree to which qubits remain active throughout circuit execution.
+parallelism
+Degree to which operations can be executed concurrently.
+measurement
+Relative amount or intensity of measurement operations in the circuit.
+entanglement_ratio
+Fraction of entangling gates among all gates.
+critical_depth
+Length of the longest dependency chain in the circuit.
+Table 2. Physical meaning of static features used in the evolution target.
+Block
+Content
+Format Req
+Editable region and function signature.
+Verifier Spec
+Scoring formula description.
+Parent Program
+Parent implementation to mutate.
+History Program
+Top/Diverse/Inspirational programs.
++ Static Analysis
+Extracted features through analysis.
++ Snapshot Analysis
+High-level scores and per-case traces.
+Table 3. Prompt description.
+20
+40
+First Improve Iter
+0.0
+0.5
+1.0
+CDF
+Multiprog
+Mitigation
+50
+100
+Last Improve Iter
+0.0
+0.5
+1.0
+CDF
+Multiprog
+Mitigation
+5
+10
+Improve Count
+0.0
+0.5
+1.0
+CDF
+Multiprog
+Mitigation
+Figure 33. Improvement analysis.
+of the first improvement iteration, the last improvement it-
+eration, and the total number of improvements. The first im-
+provement typically occurs within 27 iterations, suggesting
+that improvement tends to happen early or not at all. For mul-
+tiprogramming, the first improvement appears within just 2
+iterations, as it is an easier target to optimize. In contrast, the
+last improvement may occur at any point within the 100 iter-
+ations, highlighting the stochastic nature of evolution. The
+number of improvements is broadly distributed between 0–8
+for multiprogramming and 0–15 for error mitigation, indicat-
+ing sparse reward-improving mutations. Detailed learning
+curves are explained in the following paragraph.
+Learning Curves. Figure 32 illustrates the learning curve for
+Error Mitigation using different LLM APIs. Gemini models
+are the first to improve the best reward. Claude models are
+the second and GPT models are the last. Notably, GPT-5-mini
+can hardly improve the reward. In terms of the reward value,
+Claude achieves the highest score. Unfortunately, it fails to
+generalize well as described in Figure 18.
+0
+50
+100
+0.20
+0.40
+0.60
+0.80
+1.00
+Best Score So Far
+Gemini
+Gemini 3 Pro
+Gemini 3 Flash
+0
+50
+100
+Iteration
+GPT
+GPT-5 mini
+GPT-5.3 Codex
+0
+50
+100
+Claude
+Claude Sonnet 4.6
+Claude Opus 4.6
+Figure 34. Learning curves for multiprogramming.
+Figure 34 shows the learning curve for Multiprogramming
+using different LLM APIs. Most of the reward gain is obtained
+in the early iterations, while later iterations mainly provide
+marginal refinements. Gemini 3 Pro converges the fastest,
+reaching near-final performance almost immediately. In ad-
+dition, Multiprogramming exhibits earlier and more frequent
+improvements than Error Mitigation. It suggesting that the
+search space in the former setting is easier for LLM-driven
+optimization.
+E
+Case Study
+E.1
+Best Case Analysis.
+Our evolution using Gemini 3 Pro results in a sophisticated
+design for error mitigation but a simple-yet-effective one
+for multiprogramming. For error mitigation, QSA derives a
+bounded cost-search policy: it does binary search over target
+size, caches probe results, prefers gate virtualization first, and
+only pays for wire cutting checks when likely useful. This
+approach gives a strong runtime cut while preserving cir-
+cuit properties (depth/CNOT). For multiprogramming, QSA
+distills a minimalist heuristic by discarding 14+ features in
+favor of a two-variable model: utilization and depth ratio.
+This selection minimizes idle-time decoherence while en-
+suring near-zero scheduling overhead. More details can be
+found at Appendix E.3.
+
+
+--- Page 16 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+1
+5
+10
+15
+20
+24
+Method ID
+0
+25
+50
+75
+Depth
+Permutation
+Combination
+Default
+Figure 35. Analysis of combination and permutation.
+E.2
+Failed Case Analysis.
+Effective abstraction is critical for successful policy evolution.
+We initially had an hypothesis that a different combination
+or permutation of techniques [5, 16, 27, 38, 43] adopted by
+QOS [19] may yield a better performance. We then abstract
+the details of these techniques (including circuit cutting that
+should have exposed the cost search logic) and tasked the
+LLM with exploring various permutations and combinations.
+This approach yielded no measurable improvements because
+operator ordering has negligible impact on final mitigation
+efficacy. As analyzed in Figure 35, neither combination nor
+permutation outperform the default setting. Overall, suc-
+cessful evolution requires precise abstraction driven by solid
+weakness analysis results.
+E.3
+Initial and Best Programs
+Listing 3 and Listing 4 show the initial program and the best
+program (generated by Gemini 3 Pro) for the error mitiga-
+tion task. The best program performs well because it turns
+cost-search into a bounded, efficient decision process: it uses
+metadata to set a valid search range, applies a binary search
+to find the smallest feasible target size under budget, and
+avoids unnecessary expensive probes (especially wire cut-
+ting) during the search. That usually yields smaller feasible
+fragment sizes (helping depth/CNOT proxies) while reducing
+search overhead. It also includes caching and a final veri-
+fication step, which improves stability and keeps runtime
+predictable across circuits. Listing 6 and Listing 7 show the
+initial program and the best program (generated by Gemini 3
+Pro) for the error mitigation task. The evolved program iden-
+tifies a minimalist, principle-driven heuristic. It condenses
+14+ architectural features into a weighted sum of effective
+utilization (0.65) and depth similarity (0.35). This shift vali-
+dates a key system insight: quantum resource management
+is fundamentally a temporal synchronization problem. By
+prioritizing the depth ratio, the logic enforces temporal align-
+ment. Such policy parsimony ensures near-zero scheduling
+overhead and robust generalization across diverse hardware
+backends.
+Listing 2. OpenEvolve Configuration for Error Mitigation
+max_iterations: 100
+checkpoint_interval: 10
+log_level: "INFO"
+log_dir: null
+random_seed: 42
+max_tasks_per_child: 1
+diff_based_evolution: false
+max_code_length: 30000
+early_stopping_patience: null
+convergence_threshold: 0.001
+early_stopping_metric: "combined_score"
+llm:
+api_base: "${OPENAI_API_BASE}"
+api_key: "${OPENAI_API_KEY}"
+primary_model: "${OPENAI_MODEL}"
+temperature: 0.7
+top_p: 0.9
+max_tokens: 4096
+timeout: 600
+retries: 3
+retry_delay: 15
+prompt:
+system_message: |
+You are optimizing ONLY the function evolved_cost_search
+(self, q, size_to_reach, budget)
+in qos/error_mitigator/evolution_target.py.
+OUTPUT FORMAT (CRITICAL):
+- Return the full file contents of qos/error_mitigator/
+evolution_target.py.
+- Output code only: no explanations, no markdown fences,
+no extra text.
+GENERALIZATION REQUIREMENT (CRITICAL):
+- The evaluator samples random (circuit_type, num_qubits
+) pairs each run.
+- Qubit counts are constrained to [12,24] and must exist
+in the benchmark set.
+- Your logic must generalize across circuit families (
+QAOA, BV, GHZ, VQE, QSVm, etc.) and sizes.
+- Do NOT branch on q.get_name(), bench strings, or any
+per-benchmark constants.
+FUNCTION CONTRACT (MUST FOLLOW EXACTLY):
+- Do NOT change the function signature.
+It MUST remain: evolved_cost_search(self, q,
+size_to_reach, budget)
+- It MUST return EXACTLY 2 values: (size_to_reach: int,
+method: str) where method is "GV" or "WC".
+- If you violate signature/return arity, evaluation will
+fail.
+CONTEXT:
+The input q is a Qernel. It contains metadata computed
+elsewhere, accessible via:
+input_meta = q.get_metadata()
+Useful fields may include:
+depth, num_qubits, num_clbits, num_nonlocal_gates,
+num_connected_components,
+number_instructions, num_measurements, num_cnot_gates,
+program_communication, liveness, parallelism,
+measurement,
+entanglement_ratio, critical_depth.
+
+
+--- Page 17 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+COST HELPER APIS (from qos/error_mitigator/run.py):
+- compute_gv_cost(q, size_to_reach, timeout_sec=0)
+- compute_wc_cost(q, size_to_reach, timeout_sec=0)
+- Each call returns (cost: int, timed_out: bool).
+- timeout_sec is per-call; GV/WC can use different
+values.
+- timeout_sec=0 means no per-call timeout.
+- On timeout, cost is set high and timed_out=True.
+Inputs/Outputs:
+- Inputs:
+* q: the Qernel (quantum circuit container) whose
+metadata informs the decision.
+* size_to_reach: the current target circuit size
+for cutting/virtualization search.
+* budget: the cost threshold used to decide whether
+GV/WC is acceptable.
+- Outputs:
+* size_to_reach: the chosen target size to use for
+the cutting/virtualization of the target
+circuit.
+* method: "GV" or "WC", which determines which
+technique is applied at that size.
+- Cost logging and traces are handled outside this
+file (in qos/error_mitigator/run.py).
+IMPORTANT PRACTICAL CONSTRAINTS:
+- `budget` is only meaningful for your cost-search logic
+(i.e., your own GV/WC cost queries).
+Do not assume downstream will enforce budget.
+- If size_to_reach >= num_qubits, the decomposition can
+become a no-op.
+Use that ONLY as an explicit fallback when costs
+indicate everything else is too expensive.
+Prefer to clamp sizes into a meaningful range (e.g.,
+[2, num_qubits-1]) for real action.
+EFFICIENCY / GENERALIZATION GUIDELINES (HIGH IMPACT):
+- Minimize gv/wc cost calls. Avoid long +/-1 stepping
+loops.
+Prefer a small number of probes + bounded search (e.g.,
+check a few candidate sizes,
+or use a short binary/ternary-style search on a
+clamped interval).
+- Use cheap metadata heuristics first; only call
+compute_*_cost when needed.
+- Keep behavior monotone and stable: similar circuits
+should yield similar decisions.
+NOTE: "QOS" refers to the baseline implementation, and "
+QOSE" refers to the evolved program.
+METRICS:
+- qose_depth: average depth ratio (QOSE/QOS)
+- qose_cnot: average CNOT gate ratio (QOSE/QOS)
+- qose_overhead: average circuit-count ratio (QOSE/QOS)
+- avg_run_time: average runtime ratio (QOSE/QOS)
+- combined_score (maximize): evaluator score used by
+evolution ranking.
+combined_score = - (qose_depth + qose_cnot + 1./4 *
+avg_run_time)
+NOTE:
+- Depth/CNOT ratios are proxies for fidelity. The goal
+is to improve fidelity,
+reduce cost-search time, and avoid depth/CNOT
+regressions.
+We provide the execution outputs of the last program
+executed by the evaluator.
+Use them to diagnose decisions. Details of the execution
+outputs are as follows:
+EXECUTION OUTPUTS PROVIDED BY EVALUATOR:
+- Artifacts are organized as:
+* artifacts["summary"] (optional): aggregate/run-
+level metrics
+* artifacts["cases"] (optional): list of per-(bench,
+size) case metrics
+EXECUTION OUTPUTS PROVIDED BY EVALUATOR (artifacts["
+summary"]):
+- qose_budget: budget used for all cases
+- qose_run_sec_avg: average runtime of evolved
+mitigator
+- qos_run_sec_avg: average runtime of baseline QOS
+- gv_cost_calls_total: total GV cost calls (evolved)
+- wc_cost_calls_total: total WC cost calls (evolved)
+- qos_gv_cost_calls_total: total GV cost calls (
+baseline)
+- qos_wc_cost_calls_total: total WC cost calls (
+baseline)
+- qose_depth_avg: average absolute depth of evolved
+circuits
+- qose_cnot_avg: average absolute CNOT gate count of
+evolved circuits
+- qose_overhead_avg: average absolute number of
+circuits generated by evolved method
+- qos_depth_avg: average absolute depth of baseline
+circuits
+- qos_cnot_avg: average absolute CNOT gate count of
+baseline circuits
+- qos_overhead_avg: average absolute number of
+circuits generated by baseline
+EXECUTION OUTPUTS PROVIDED BY EVALUATOR (artifacts["
+cases"] per case):
+- input_features: static circuit features (depth,
+qubits, gates, etc.)
+num_connected_components, number_instructions,
+num_measurements, num_cnot_gates,
+program_communication, liveness, parallelism,
+measurement, entanglement_ratio, critical_depth
+- qose_input_size: initial target size before cost-
+search adjustments
+- qose_depth, qos_depth, qose_cnot, qos_cnot,
+qose_run_sec, qos_run_sec: paired QOSE vs baseline
+QOS metrics
+- qose_output_size: final target size chosen by the
+algorithm
+- qose_method: chosen method ("GV" or "WC")
+- qose_gv_cost_trace, qose_wc_cost_trace: cost
+estimates per probe step
+- qose_gv_time_trace, qose_wc_time_trace: time per
+probe step
+POSSIBLE LEVERS TO EXPLORE:
+
+
+--- Page 18 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+A) Decide to use WC or GV selectively instead of
+always using both.
+B) Explore size_to_reach efficiently instead of using
+two while loops iteratively.
+C) Explore early stopping rules for WC and GV.
+D) Skip certain size_to_reach values based on
+heuristics.
+evaluator_system_message: "You are a strict code reviewer.
+Do not add commentary."
+num_top_programs: 3
+num_diverse_programs: 2
+use_template_stochasticity: true
+# Keep artifact injection enabled by default.
+include_artifacts: true
+max_artifact_bytes: 65536
+artifact_security_filter: true
+database:
+db_path: null
+in_memory: true
+log_prompts: true
+population_size: 100
+archive_size: 20
+num_islands: 3
+migration_interval: 30
+migration_rate: 0.12
+elite_selection_ratio: 0.05
+exploration_ratio: 0.65
+exploitation_ratio: 0.30
+feature_dimensions:
+- "complexity"
+- "diversity"
+feature_bins: 12
+diversity_reference_size: 30
+evaluator:
+timeout: 12000
+max_retries: 1
+cascade_evaluation: false
+parallel_evaluations: 1
+use_llm_feedback: false
+llm_feedback_weight: 0.0
+evolution_trace:
+enabled: false
+format: "jsonl"
+include_code: false
+include_prompts: false
+output_path: null
+buffer_size: 10
+compress: false
+Listing 3. Initial Program for Error Mitigation.
+1
+from qos.error_mitigator.run import compute_gv_cost,
+compute_wc_cost
+2
+from qos.types.types import Qernel
+3
+4
+5
+def evolved_cost_search(self, q: Qernel, size_to_reach: int,
+budget: int):
+6
+metadata = q.get_metadata()
+7
+depth = metadata.get("depth", 0)
+8
+num_qubits = metadata.get("num_qubits", 0)
+9
+num_clbits = metadata.get("num_clbits", 0)
+10
+num_nonlocal_gates = metadata.get("num_nonlocal_gates",
+0)
+11
+num_connected_components = metadata.get("
+num_connected_components", 0)
+12
+number_instructions = metadata.get("number_instructions",
+0)
+13
+num_measurements = metadata.get("num_measurements", 0)
+14
+num_cnot_gates = metadata.get("num_cnot_gates", 0)
+15
+program_communication = metadata.get("
+program_communication", 0.0)
+16
+liveness = metadata.get("liveness", 0.0)
+17
+parallelism = metadata.get("parallelism", 0.0)
+18
+measurement = metadata.get("measurement", 0.0)
+19
+entanglement_ratio = metadata.get("entanglement_ratio",
+0.0)
+20
+critical_depth = metadata.get("critical_depth", 0.0)
+21
+22
+# OE_BEGIN
+23
+gv_timeout_sec = 0
+24
+wc_timeout_sec = 0
+25
+gv_cost, _gv_timed_out = compute_gv_cost(q,
+size_to_reach, timeout_sec=gv_timeout_sec)
+26
+wc_cost, _wc_timed_out = compute_wc_cost(q,
+size_to_reach, timeout_sec=wc_timeout_sec)
+27
+while (gv_cost <= budget or wc_cost <= budget) and
+size_to_reach > 2:
+28
+size_to_reach = size_to_reach - 1
+29
+gv_cost, _gv_timed_out = compute_gv_cost(
+30
+q, size_to_reach, timeout_sec=gv_timeout_sec
+31
+)
+32
+wc_cost, _wc_timed_out = compute_wc_cost(
+33
+q, size_to_reach, timeout_sec=wc_timeout_sec
+34
+)
+35
+36
+while gv_cost > budget and wc_cost > budget:
+37
+size_to_reach = size_to_reach + 1
+38
+gv_cost, _gv_timed_out = compute_gv_cost(
+39
+q, size_to_reach, timeout_sec=gv_timeout_sec
+40
+)
+41
+wc_cost, _wc_timed_out = compute_wc_cost(
+42
+q, size_to_reach, timeout_sec=wc_timeout_sec
+43
+)
+44
+45
+method = "GV" if gv_cost <= wc_cost else "WC"
+46
+# OE_END
+47
+return size_to_reach, method
+Listing 4. Best Program by Gemini-3-Pro for Error Mitiga-
+tion
+1
+from qos.error_mitigator.run import compute_gv_cost,
+compute_wc_cost
+2
+from qos.types.types import Qernel
+3
+4
+def evolved_cost_search(self, q: Qernel, size_to_reach: int,
+budget: int):
+
+
+--- Page 19 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+5
+# OE_BEGIN
+6
+# Optimization Strategy:
+7
+# 1. Goal: Minimize 's' (subcircuit size) such that Cost
+(s) <= budget.
+8
+# Smaller 's' -> more cuts -> better fidelity proxy (
+lower depth/CNOTs).
+9
+# 2. Search: Binary search on [2, num_qubits].
+10
+# 3. Efficiency:
+11
+# - Prioritize GV (usually faster).
+12
+# - Skip WC during search if GV is clearly feasible (<=
+0.7 * budget).
+13
+# - Use tight timeouts (0.2s) during search to fail fast
+on bad cuts.
+14
+# - Use relaxed timeouts for final verification to
+ensure stability.
+15
+16
+metadata = q.get_metadata()
+17
+num_qubits = metadata.get("num_qubits", 0)
+18
+19
+# Valid range: [2, num_qubits]
+20
+n = max(2, int(num_qubits))
+21
+22
+# Heuristic: Very small circuits rarely benefit from
+cutting overhead.
+23
+if n <= 4:
+24
+return n, "GV"
+25
+26
+# Cache: size -> (gv_cost, wc_cost)
+27
+cache = {}
+28
+29
+def get_costs(s, strict=False):
+30
+if s in cache:
+31
+# If we need strict but cached result has 'inf'
+for WC, we might ideally re-run.
+32
+# But for speed, we rely on the cache unless
+manually cleared/handled.
+33
+return cache[s]
+34
+35
+# Timeouts: Tight for search, longer for final check
+36
+t_out = 0.5 if strict else 0.2
+37
+38
+# 1. Check GV
+39
+g_res = compute_gv_cost(q, s, timeout_sec=t_out)
+40
+if isinstance(g_res, tuple):
+41
+g_val = float(g_res[0])
+42
+g_to = bool(g_res[1])
+43
+else:
+44
+g_val = float(g_res)
+45
+g_to = False
+46
+if g_to: g_val = float('inf')
+47
+48
+# 2. Check WC
+49
+# Optimization: Skip WC in search mode if GV is
+clearly feasible.
+50
+w_val = float('inf')
+51
+check_wc = True
+52
+53
+if not strict and g_val <= (float(budget) * 0.7):
+54
+check_wc = False
+55
+56
+if check_wc:
+57
+w_res = compute_wc_cost(q, s, timeout_sec=t_out)
+58
+if isinstance(w_res, tuple):
+59
+w_val = float(w_res[0])
+60
+w_to = bool(w_res[1])
+61
+else:
+62
+w_val = float(w_res)
+63
+w_to = False
+64
+if w_to: w_val = float('inf')
+65
+66
+cache[s] = (g_val, w_val)
+67
+return g_val, w_val
+68
+69
+# Binary search for Minimum Feasible Size
+70
+low = 2
+71
+high = n
+72
+best_feasible_size = n
+73
+74
+# Pre-check max size to ensure we have a valid fallback.
+75
+# Max size is usually feasible (cost ~0 or 1).
+76
+g_n, w_n = get_costs(n, strict=False)
+77
+if min(g_n, w_n) > budget:
+78
+return n, ("WC" if w_n < g_n else "GV")
+79
+80
+while low <= high:
+81
+mid = (low + high) // 2
+82
+g, w = get_costs(mid, strict=False)
+83
+84
+if min(g, w) <= budget:
+85
+# Feasible. Try smaller.
+86
+best_feasible_size = mid
+87
+high = mid - 1
+88
+else:
+89
+# Infeasible. Need larger.
+90
+low = mid + 1
+91
+92
+final_size = best_feasible_size
+93
+94
+# Final Decision Phase
+95
+# Retrieve costs. If we skipped WC or timed out during
+search, check properly now.
+96
+g_final, w_final = cache.get(final_size, (float('inf'),
+float('inf')))
+97
+98
+# Heuristic: When to re-check WC?
+99
+# If we skipped it (inf) AND GV is expensive (> 50%
+budget).
+100
+# If GV is cheap, WC is unlikely to be significantly
+better to justify the cost.
+101
+recheck_wc = False
+102
+if w_final == float('inf') and g_final > (float(budget)
+* 0.5):
+103
+recheck_wc = True
+104
+105
+if recheck_wc:
+106
+w_res = compute_wc_cost(q, final_size, timeout_sec
+=0.5)
+107
+if isinstance(w_res, tuple):
+108
+val = float(w_res[0])
+109
+if not w_res[1]: w_final = val
+110
+else:
+111
+w_final = float(w_res)
+112
+113
+# Select best method based on cost
+114
+final_method = "GV"
+115
+if w_final < g_final and w_final <= budget:
+116
+final_method = "WC"
+117
+elif g_final <= budget:
+
+
+--- Page 20 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+118
+final_method = "GV"
+119
+else:
+120
+# Fallback if both over budget
+121
+final_method = "WC" if w_final < g_final else "GV"
+122
+123
+# OE_END
+124
+return final_size, final_method
+Listing 5. OpenEvolve Configuration for Multiprogramming
+max_iterations: 100
+checkpoint_interval: 100
+log_level: "INFO"
+log_dir: null
+random_seed: 42
+max_tasks_per_child: 1
+diff_based_evolution: false
+max_code_length: 30000
+early_stopping_patience: null
+convergence_threshold: 0.001
+early_stopping_metric: score
+llm:
+api_base: "${OPENAI_API_BASE}$"
+api_key: "${OPENAI_API_KEY}$"
+primary_model: "${OPENAI_MODEL}$"
+temperature: 0.7
+top_p: 0.9
+max_tokens: 16384
+timeout: 450
+retries: 0
+retry_delay: 5
+reasoning_effort: low
+prompt:
+system_message:
+You are optimizing ONLY the function get_matching_score(
+self, q1, q2, backend, weighted=False, weights=[])
+in evaluation/openevolve_pairing/target.py.
+OUTPUT FORMAT (CRITICAL):
+* Return the full file contents of evaluation/
+openevolve_pairing/target.py.
+* Output code only: no explanations, no markdown fences,
+no extra text.
+FUNCTION CONTRACT:
+* Do NOT change the function signature. It MUST remain:
+get_matching_score(self, q1, q2, backend, weighted=
+False, weights=[])
+* It MUST return a single float score (higher is better).
+* Keep it deterministic (no randomness or external state
+).
+METADATA KEYS (from q1.get_metadata()/q2.get_metadata())
+:
+* depth, num_qubits, num_clbits, num_nonlocal_gates,
+num_connected_components, number_instructions,
+num_measurements, num_cnot_gates,
+program_communication, liveness, parallelism,
+measurement, entanglement_ratio, critical_depth.
+ARTIFACTS:
+You may receive evaluator artifacts from previous
+iterations. Use them to infer what kinds of pairs
+your current scoring function is selecting and how
+those selections align with strong Pareto rank.
+- rank_distribution_csv: Shows how often each Pareto
+rank appears overall and within your selected Top-K
+pairs. Use this to see whether your score is
+concentrating mass on strong ranks.
+- top_pairs_metrics_csv: Shows the Top-K pairs chosen by
+your score together with effective utilization,
+Pareto metric values, Pareto rank, and score. Use
+this to understand which pair characteristics your
+current formula is rewarding.
+- top_rank_pairs_all_columns_csv: Expanded pair-level
+table for top-ranked pairs. Use this to inspect
+which metadata patterns tend to appear in strong
+candidates.
+CONTEXT:
+The goal is to evolve a scoring function that maximizes
+the evaluator's objective (avg_rank, corr, or
+combined) by selecting optimal circuit pairs for
+multiprogramming based on effective_utilization and
+fidelity.
+num_top_programs: 1
+num_diverse_programs: 1
+use_template_stochasticity: true
+include_artifacts: true
+database:
+db_path: null
+population_size: 100
+archive_size: 20
+num_islands: 3
+migration_interval: 30
+migration_rate: 0.12
+exploration_ratio: 0.65
+exploitation_ratio: 0.3
+evaluator:
+timeout: 4800
+max_retries: 1
+parallel_evaluations: 1
+use_llm_feedback: false
+Listing 6. Initial Program for Multiprogramming.
+1
+2
+def get_matching_score(self, q1, q2, backend, weighted: bool
+= False, weights = []) -> float:
+3
+"""Replacement␣for␣Multiprogrammer.get_matching_score.""
+"
+4
+meta1 = q1.get_metadata()
+5
+meta2 = q2.get_metadata()
+6
+7
+depth1 = meta1.get("depth", 0)
+8
+depth2 = meta2.get("depth", 0)
+9
+qubits1 = meta1.get("num_qubits", 0)
+10
+qubits2 = meta2.get("num_qubits", 0)
+11
+nonlocal1 = meta1.get("num_nonlocal_gates", 0)
+12
+nonlocal2 = meta2.get("num_nonlocal_gates", 0)
+13
+cnot1 = meta1.get("num_cnot_gates", 0)
+14
+cnot2 = meta2.get("num_cnot_gates", 0)
+15
+meas1 = meta1.get("num_measurements", 0)
+
+
+--- Page 21 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+16
+meas2 = meta2.get("num_measurements", 0)
+17
+instr1 = meta1.get("number_instructions", 0)
+18
+instr2 = meta2.get("number_instructions", 0)
+19
+cc1 = meta1.get("num_connected_components", 0)
+20
+cc2 = meta2.get("num_connected_components", 0)
+21
+liveness1 = meta1.get("liveness", 0.0)
+22
+liveness2 = meta2.get("liveness", 0.0)
+23
+prog_comm1 = meta1.get("program_communication", 0.0)
+24
+prog_comm2 = meta2.get("program_communication", 0.0)
+25
+parallel1 = meta1.get("parallelism", 0.0)
+26
+parallel2 = meta2.get("parallelism", 0.0)
+27
+meas_ratio1 = meta1.get("measurement", 0.0)
+28
+meas_ratio2 = meta2.get("measurement", 0.0)
+29
+ent_ratio1 = meta1.get("entanglement_ratio", 0.0)
+30
+ent_ratio2 = meta2.get("entanglement_ratio", 0.0)
+31
+crit1 = meta1.get("critical_depth", 0.0)
+32
+crit2 = meta2.get("critical_depth", 0.0)
+33
+34
+depth_ratio = min(depth1, depth2) / max(depth1, depth2,
+1)
+35
+qubit_ratio = min(qubits1, qubits2) / max(qubits1,
+qubits2, 1)
+36
+nonlocal_ratio = min(nonlocal1, nonlocal2) / max(
+nonlocal1, nonlocal2, 1)
+37
+cnot_ratio = min(cnot1, cnot2) / max(cnot1, cnot2, 1)
+38
+meas_ratio = min(meas1, meas2) / max(meas1, meas2, 1)
+39
+instr_ratio = min(instr1, instr2) / max(instr1, instr2,
+1)
+40
+instr_diff = abs(instr1 - instr2)
+41
+instr_sum = instr1 + instr2
+42
+instr_diff_norm = instr_diff / max(instr_sum, 1)
+43
+cc_ratio = min(cc1, cc2) / max(cc1, cc2, 1)
+44
+crit_ratio = min(crit1, crit2) / max(crit1, crit2, 1e-9)
+45
+liveness_avg = (liveness1 + liveness2) / 2.0
+46
+prog_comm_avg = (prog_comm1 + prog_comm2) / 2.0
+47
+parallel_avg = (parallel1 + parallel2) / 2.0
+48
+meas_ratio_avg = (meas_ratio1 + meas_ratio2) / 2.0
+49
+ent_ratio_avg = (ent_ratio1 + ent_ratio2) / 2.0
+50
+depth_sim = self.depthComparison(q1, q2)
+51
+52
+util_eff = self.effective_utilization(q1, q2, backend)
+53
+util_eff_norm = util_eff / 100.0
+54
+entanglementDiff = self.entanglementComparison(q1, q2)
+55
+measurementDiff = self.measurementComparison(q1, q2)
+56
+parallelismDiff = self.parallelismComparison(q1, q2)
+57
+58
+# OE_BEGIN
+59
+if weighted and sum(weights) > 0:
+60
+return (
+61
+weights[0] * util_eff +
+62
+weights[1] * entanglementDiff +
+63
+weights[2] * measurementDiff +
+64
+weights[3] * parallelismDiff
+65
+)
+66
+# OE_END
+67
+68
+base_score = (util_eff_norm + entanglementDiff +
+measurementDiff + parallelismDiff) / 4.0
+69
+70
+return base_score
+Listing 7. Best Program by Gemini-3-Pro for Multiprogram-
+ming
+QSA
+QOS
+CutQC Frozen
+0.0
+0.5
+1.0
+Relative to Qiskit
+0.39
+0.44
+0.64
+0.90
+(a) Depth - 24 qubits
+QSA
+QOS
+CutQC Frozen
+0.0
+0.5
+1.0
+Relative to Qiskit
+0.36
+0.42
+0.64
+0.92
+(b) CNOT - 24 qubits
+QAOA-R3
+BV
+GHZ
+HS-1
+QAOA-P1
+QSVM
+TL-1
+VQE-1
+W-STATE
+Figure 36. Static metrics comparison for error mitigation
+on 24-qubit circuits. Lower is better.
+1
+def get_matching_score(self, q1, q2, backend, weighted: bool
+= False, weights = []) -> float:
+2
+"""Replacement␣for␣Multiprogrammer.get_matching_score.""
+"
+3
+d1 = q1.get_metadata().get("depth", 0)
+4
+d2 = q2.get_metadata().get("depth", 0)
+5
+util = self.effective_utilization(q1, q2, backend) /
+100.0
+6
+depth_ratio = min(d1, d2) / max(d1, d2, 1)
+7
+return util * 0.65 + depth_ratio * 0.35
+F
+QSA’s Impact on Circuit Properties
+Figure 36 compares the relative depth and CNOT values
+of QSA and the baselines across circuits of different scales.
+Compared to the SOTA QOS, QSA consistently reduces both
+relative depth and relative CNOT by up to 0.06. These reduc-
+tions help explain why QSA is able to maintain, and in some
+cases even improve, fidelity.
+G
+Additional Ablation Studies
+1111 0111 0011 0001 0000
+0.00
+0.25
+0.50
+0.75
+1.00
+Time Ratio
+0.041
+0.428
+0.658 0.631 0.650
+Figure 37. Impact of ar-
+tifact composition (similar
+depth/cnot).
+Low
+Medium
+High
+0.00
+0.25
+0.50
+0.75
+1.00
+Time Ratio
+0.041
+0.040
+0.679
+Figure 38. Impact of think-
+ing levels.
+Ablation of Prompt Composition for Error Mitigation
+Evolution. In Figure 37, we compare different prompt com-
+positions on Gemini-3-Flash-Preview, the most cost-effective
+one. We use four digits to represent the availability of 1) seed
+program, 2) snapshot (per-circuit), 3) snapshot (summary), 4)
+static analysis. When part of the prompt disappears, the mit-
+igation time increases. The mitigation time plateaus when
+the seed program and the snapshot (per-circuit) are removed.
+This analysis showcases the significance of the prompt com-
+ponents.
+Impact of Thinking Level on Error Mitigation Evolu-
+tion. We analyze the impact of thinking levels on evolution
+using Gemini 3 Flash by configuring the thinking level
+in the API. It turns out that a higher thinking level does
+
+
+--- Page 22 ---
+Lily Jiaxin Wan, Deming Chen, Klara Nahrstedt, and Bo Chen
+not lead to a better result. Figure 39 shows that the fidelity
+and normalized utilization decreases with the thinking level.
+Figure 38 shows that medium thinking level achieves com-
+parable time ratio as the low thinking level while the high
+thinking level drastically increases the time ratio (lower the
+better). We speculate the reason is that the model produces
+over-complicated solutions at higher thinking levels that
+fail to make improvements. In contrast, a low thinking level
+makes incremental but steady progress in each iteration,
+which benefits more from the evolution framework.
+Low
+Medium
+High
+Thinking Level
+0.75
+0.76
+0.77
+Fidelity
+Fidelity
+Norm. Util. 96.2
+96.2
+96.3
+Norm. Util. (%)
+Figure 39. Analysis of Impact
+of Thinking Level.
+Mean
+8
+16
+24
+Total Qubit Count
+0.7
+0.8
+0.9
+Fidelity
+Fidelity
+Norm. Util.
+96
+98
+100
+Norm. Util. (%)
+Figure 40. Analysis of Impact
+of Utils Used in Evolution.
+Impact of Utilizations Used in Multiprogramming Evo-
+lution. In Figure 40, we compare the qubit counts (8,16,24)
+we use for evolution. It will impact both the calculation
+of the target optimization score, and the artifacts. While
+single-utilization targets (e.g., 30%) prioritize specific metrics,
+adopting the Mean across all levels yields the most robust
+generalization and balanced trade-off between fidelity and
+utilization.
+1%
+5%
+10%
+15%
+20%
+Top Percentage
+0.76
+0.77
+0.77
+0.78
+Fidelity
+Fidelity
+Norm. Util.
+96.1
+96.2
+96.3
+Norm. Util.
+(a) Ablation Studies across the
+percentage used for evolution.
+1%
+5%
+10%
+15%
+20%
+Top Percentage
+0.0
+0.5
+1.0
+Cost (USD)
+$0.48
+$0.58 $0.72
+$0.91
+$1.11
+(b) The cost of using different
+percentage for evolution.
+Figure 41. Analysis of impact on the percentage used for
+the evolution.
+Impact of Percentage Used in Multiprogramming Evo-
+lution. We compare the percentage used to compose both
+the target optimization score, and artifacts during the code
+evolution. As Figure 41 shows, top 1% and 5% percentage can
+achieve the best fidelity and normalized utilization, while
+the cost of 1% is only half the price of 5% using Gemini 3
+Flash. In conclusion, from the monetary efficiency point of
+view, we would pick up the option of 1% percentage used in
+evolution.
+H
+Fidelity Approximation Details
+Direct fidelity estimation is often computationally infeasible
+for complex circuits. Consequently, these approximation
+metrics serve as objective functions to surrogate for fidelity.
+Table 4 summarizes these fidelity approximation along with
+their corresponding physical rationales. We evaluate them
+as the optimization target in OpenEvolve on Figure 25 in the
+main paper.
+I
+Optimization Baseline Details
+We compare QSA against three conventional optimization
+strategies to determine whether its gains can be achieved
+by optimizing the same error-mitigation decisions without
+evolving program logic. All methods choose from the same
+output decision space: the target circuit fragment size and
+the cutting method (GV or WC). They are evaluated on the
+same workloads using qiskit quantum simulator, under a 60 s
+search deadline.
+Random. Random search uniformly samples valid fragment-
+size and cutting-method configurations and retains the best
+configuration observed within the deadline.
+Bayesian Optimization. BO treats fragment size and cut-
+ting method as optimization variables and sequentially se-
+lects configurations using a constrained Gaussian-process
+surrogate. After evaluating each configuration, the observed
+reward is used to update the surrogate and select the next
+candidate until the deadline is reached.
+Reinforcement Learning. RL learns a feature-based pol-
+icy that maps circuit characteristics to a fragment size and
+cutting method. We train the policy using the same circuit
+coreset used by QSA, so that both methods receive compara-
+ble workload coverage during optimization. At deployment,
+the learned policy directly selects an action from this fixed
+feature–action representation.
+Ours. Unlike these baselines, QSA does not optimize only
+the final configuration. Instead, the LLM mutates the under-
+lying error-mitigation program and can change the control
+logic used to explore fragment sizes and cutting methods.
+For example, the evolved program can alter the search or-
+der, reuse intermediate results, or terminate unproductive
+searches early, while remaining subject to the same execution
+deadline. This comparison therefore isolates the benefit of
+program-level evolutionary optimization from conventional
+search over predefined decisions.
+J
+Additional Discussions
+Robustness and limitations. QSA’s robustness to hard-
+ware calibration drift depends on the metrics. Mitigation
+time and normalized utilization are mainly determined by
+the evolved software policy running on classical computers
+and are therefore less sensitive to calibration changes. In
+contrast, fidelity may vary with the hardware noise level,
+and higher the noise, lower the fidelity gain. Regarding new
+workloads, our experimental results show that QSA can gen-
+eralize to existing topologies with varying scales.
+Extension to quantum error correction. For quantum
+error correction, QSA can evolve decoder implementations or
+decoding schedules. Weakness analysis can identify the code
+
+
+--- Page 23 ---
+Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution
+Approximation Metric
+Rationale
+Circuit Depth
+Represents critical path length; increased depth correlates with decoherence and gate errors.
+Instruction Count
+Denotes total gate count, reflecting the overall computational load of the quantum circuit.
+CNOT Count
+Quantifies error-prone entangling gates, which are primary noise sources in NISQ devices.
+Non-local Gates
+Dictates the requirement for qubit routing and SWAP [62] insertions, impacting execution efficiency.
+Measurement
+Reflects measurement operation count, contributing to readout errors and temporal overhead.
+Table 4. Summary of Performance Proxies in QSA.
+paths that dominate logical error rate or decoding latency,
+while the reward can directly combine these metrics with
+resource overhead. The evolution loop can then search for
+policies that improve decoding quality without violating
+real-time latency constraints.

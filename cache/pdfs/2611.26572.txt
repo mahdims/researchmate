@@ -1,0 +1,631 @@
+--- Page 1 ---
+Optimal Scheduling of Multi-Site AI Data Centers in Day-Ahead Markets
+Xinyang Zhou and Guido Cavraro
+National Laboratory of the Rockies, Golden, CO, USA; Email: xinyang.zhou@nlr.gov, guido.cavraro@nlr.gov
+Abstract—AI data centers are among the fastest-growing loads
+on the power grid, and their flexibility is increasingly sought
+by grid operators. Using it requires a model that links what
+an operator controls, namely GPU power caps, job timing
+and job placement, to the power drawn at each site and the
+electricity prices it faces. This paper develops such a framework
+for a multi-site AI data-center fleet. It represents GPU power-
+cap levels; deferrable jobs with deadlines and inference with
+response-time headroom; and site facility power, and casts the
+fleet schedule as a linear program solved on day-ahead prices.
+A year-long simulation on 2025 California Independent System
+Operator (CAISO) day-ahead prices in three data-center markets
+demonstrates the framework. Coordinated scheduling lowers the
+fleet’s energy cost by 6.3% at equal work. Four operating modes,
+each adding one capability, split this saving into efficient GPU
+operation that needs no price signal, price response in time, and
+routing work between sites.
+Index Terms—Data centers, demand flexibility, GPU power
+capping, locational marginal price, linear programming.
+I. INTRODUCTION
+U.S. data centers used 4.7% of the nation’s electricity in
+2024 and may use 9.5–15.3% by 2030 [1], driven mainly by
+AI servers. About 100 GW of new large load could connect if
+curtailed by about 0.5% of its maximum annual energy use [2].
+Field tests have held a GPU cluster 25% below baseline for
+three hours during a grid peak [3] and, in a later London trial,
+cut a cluster’s demand by up to 40% and followed reduction
+requests lasting up to 10 h [4]. Much of an AI fleet’s work
+can be paused, capped or deferred [5], and an operator with
+several sites can also move it [6].
+Turning this potential into grid value requires a model that
+connects the operator’s controls to the grid. On the data-center
+side, the controls act on individual GPUs and jobs: a power
+cap trades throughput for power, training can pause and resume
+from checkpoints, offline jobs have deadlines, and inference
+must meet response-time targets. On the grid side, what
+matters is each site’s facility power, including cooling, and the
+locational prices and market rules it faces. Geographic load
+balancing [6] and carbon-aware scheduling [5] move work
+between sites and over time, respectively, but do not model
+GPU power caps. Grid studies, conversely, typically assume
+that a fixed share of data-center load can be deferred [7], [8];
+a trace of 155,410 GPUs instead derived flexibility from the
+workloads eligible to curtail and found that it averages about
+6% of facility power [9].
+Such a model must also be clear about where savings come
+from. An AI fleet that faces electricity prices can lower its
+bill in three ways. It can run GPUs at lower power caps,
+which finishes the same work with less energy at any price.
+It can shift work in time, toward hours when power is cheap.
+And it can move work between sites, toward whichever site
+has cheaper power at that moment. Only the last two respond
+to prices, yet all three appear as savings when an optimized
+schedule is compared with a fleet that runs every job at full
+power on arrival, which counts efficiency as flexibility.
+This paper makes the following contributions:
+1) A scheduling framework for a multi-site AI data-center
+fleet that links GPU power-cap levels and workload con-
+straints to site facility power and locational electricity
+prices. It is a linear program that sets each site’s hourly
+power a day ahead from day-ahead (DA) prices.
+2) A year-long demonstration on 2025 CAISO DA prices
+in three data-center markets. Four operating modes, each
+adding one capability, split the saving into efficiency,
+price response in time and routing between sites, with
+confidence intervals. Coordinated scheduling saves 6.3%
+at equal work; efficiency and price response carry nearly
+all of it, and routing adds a small share, mainly on days
+when prices at the sites diverge.
+Because the framework ties GPU-level controls to grid-facing
+quantities, it provides a basis for valuing data-center grid
+services such as demand response and reserves.
+The rest of this paper is organized as follows. Section II
+models the fleet and its operating modes. Section III describes
+the simulation setup, Section IV presents the results, and
+Section V concludes this work.
+II. FLEET SCHEDULING MODEL
+A data center fleet operator manages a fleet of data centers
+over time windows of length ∆indexed by t, so that the t-th
+time window corresponds to the time interval [(t −1)∆, t∆].
+Each data center i hosts Ni identical GPUs. The fleet operator
+sets for every time interval 1) how many GPUs are assigned
+to each computational job, 2) at which power cap the GPUs
+run, and, 3) when sites are coordinated, to which site movable
+work is transferred.
+We assume for simplicity that the fleet is a price taker,
+i.e., the fleet operator schedules against locational marginal
+prices (LMPs) which are not affected by the data center loads.
+We will cast the fleet operator scheduling program as a linear
+program (LP), which can be efficiently solved by off the shelf
+methods, with continuous decision variables. The formulation
+follows geographic load balancing [6], with per-job deadlines
+in place of the daily completion window of [5].
+We assume two types of work here. Deferrable jobs, indexed
+by m, must finish by a deadline but may be paused, slowed
+and, in some cases, moved to other sites. They range from
+training runs that last weeks, use thousands of GPUs and
+are pinned to their site, to short jobs such as fine-tuning,
+evaluation and data processing that last hours and may run at
+arXiv:2611.26572v1  [math.OC]  19 Nov 2026
+
+
+--- Page 2 ---
+TABLE I
+NOTATION
+Indices
+i, j; t, ∆, H
+sites; time step, its length, horizon end
+k, K
+power-cap level; uncapped (natural) level
+m
+deferrable job (training run or short job), or inference
+Variables
+nm,i,t,k
+GPUs of job m at site i in step t at level k
+um,i,t
+GPUs of job m that start up in step t
+ym,i
+share of job m placed at site i
+qj,i,t
+inference demand from site j served at site i
+wm,i,t; Pi,t
+remaining work (GPU-h); facility power (MW)
+Parameters
+ϕm,k, rm,k
+GPU power (TDP share), relative throughput of m at k
+pidle, pm,k
+power of an idle GPU slot; extra power of a busy one
+pTDP, p0
+GPU TDP; fixed extra power of a busy slot
+Ni, ¯Pi
+number of GPUs and power limit of site i
+Wm, Gm, sm
+work at arrival (GPU-h), GPU limit, cost to move ($)
+im, am, dm
+home site, arrival step, deadline of job m
+δ
+work lost per restarted GPU (h)
+Qj,t; ¯ρ
+inference demand arising at site j; utilization cap
+PUE
+facility power divided by IT power
+λi,t
+DA electricity price ($/MWh)
+πlate, πroute
+prices of lateness and inference routing
+vm; κ
+value of leftover work; value of GPU time
+any site. Inference serves live user requests that cannot wait;
+it is indexed as m = inf so that sums over m in the following
+include it.
+In the following, Sections II-A–II-E build the LP; Sec-
+tion II-F describes the day ahead (DA) schedule and the four
+operating modes we compare. Fig. 1 shows how the pieces fit
+together at one site, and Table I summarizes the notation.
+A. GPU Power Levels
+Power capping [10] lets a GPU run at a few discrete levels
+k, which depend on its workload class. A GPU assigned to
+job m at level k draws a fraction ϕm,k of its thermal design
+power (TDP) and has corresponding relative throughput rm,k:
+one hour at level k completes rm,k GPU-hours of uncapped
+work. The last level K is the natural, uncapped draw, with
+rm,K = 1. We assume a GPU can also split a step between
+two levels; it then averages their power and throughput and
+operates on the straight line between them; see the inset of
+Fig. 1. Throughput is therefore a piecewise-linear function of
+power. The levels show diminishing returns: each extra watt
+buys less throughput, so this function is concave. This allows
+us to trade off GPU throughput for power saving, especially
+in presence of flexible job deadlines. We define nm,i,t,k as the
+number of GPUs allocated to job m at site i and time interval
+t capped at the power level k. For simplicity, we consider
+nm,i,t,k as a continuous rather than discrete variable, given
+the big number of GPUs (tens of thousands) in each site.
+B. Deferrable Jobs
+Deferrable jobs are measured in GPU-hours (GPU-h) at un-
+capped throughput: W = 1,000 GPU-h keeps 1,000 uncapped
+GPUs busy for one hour, or 1,000 GPUs at rm,k = 0.5 for
+two hours. A deferrable job m that arrives is characterized
+by its work Wm and by the maximum number of GPUs that
+may be allocated to it at once Gm. To each site i, the schedule
+assigns a share ym,i of job m, with P
+i ym,i = 1, and allocates
+nm,i,t,k GPUs at level k. Usually, training runs are pinned to
+their home site im, short jobs are more easily moved. After
+job m started to be processed in site i, the remaining work
+left at time t is denoted as wm,i,t and evolves like an account
+balance (the tank in Fig. 1) over the planning horizon, which
+ends at step H:
+wm,i,t+1 = wm,i,t −∆P
+k rm,knm,i,t,k +δum,i,t,
+(1a)
+um,i,t = max{P
+k(nm,i,t,k −nm,i,t−1,k), 0},
+(1b)
+wm,i,am = Wm ym,i,
+(1c)
+P
+k nm,i,t,k ≤Gm ym,i,
+(1d)
+wm,i,H ≤Wm ym,i max{dm −H, 0}/(dm −am),
+(1e)
+where um,i,t is the GPUs of job m that start up in step t,
+and am and dm are the arrival step and deadline of job m.
+Equation (1a) updates the remaining work by subtracting the
+work GPUs complete and by adding the cost of restarting
+GPUs: a GPU that resumes a paused job must reload the last
+checkpoint and redo the work done after last saving, so it
+spends δ hours busy without progress. Equation (1b) counts
+the GPUs that start up: the increase in running GPUs. The LP
+imposes (1b) linearly as um,i,t ≥P
+k(nm,i,t,k −nm,i,t−1,k)
+and um,i,t ≥0: since restarts only add work, um,i,t meets this
+bound at the optimum. Constraints (1c) and (1d) give site i its
+share of the job’s work and of its GPU limit. Constraint (1e)
+is a pace limit: the work left at the end of the horizon may
+not exceed a straight-line path to the deadline. A training run
+due in 10 days must finish at least 10% of its work on the
+first day, and a short job due within the horizon must finish
+completely.
+C. Online Inference
+Inference is live traffic and cannot be delayed, so it has no
+work balance. The demand arising at site j, Qj,t, is measured
+in GPU-equivalents, the number of uncapped GPUs it would
+fully occupy during the time slot t. A part qj,i,t of it is
+served at site i by ninf,i,t,k inference GPUs at level k. At this
+DA planning stage, we assume the serving GPUs are loaded
+to at most a fraction ¯ρ of their capacity, the same at every
+site, which leaves slack for bursts of requests [6], [11]. The
+inference constraints are:
+P
+i qj,i,t = Qj,t,
+(2a)
+¯ρ P
+k rinf,kninf,i,t,k ≥P
+j qj,i,t,
+(2b)
+P
+m,k nm,i,t,k ≤Ni.
+(2c)
+Constraint (2a) serves all inference demand, (2b) gives each
+site enough serving GPUs for the demand it takes at utilization
+¯ρ, and (2c) keeps all GPUs in use (including deferrable jobs
+and inference) within the Ni GPUs of the site. In fleet mode
+demand may be served at any site; otherwise qj,i,t = 0 for
+i̸ = j. With ¯ρ = 0.8, serving 1,000 GPU-equivalents takes
+1,250 uncapped GPUs, or 1,543 at 46% of TDP. The lower
+cap may need more GPUs but less power overall.
+
+
+--- Page 3 ---
+Fig. 1. The scheduling model at one site i. Inset: throughput against GPU power at the levels of Table II.
+D. Facility Power
+Every GPU slot, with its share of the server, draws pidle
+even when idle; a busy slot of job m at level k draws
+pm,k = pTDPϕm,k + p0
+(3)
+more, where pTDPϕm,k is the GPU’s power at level k and
+p0 is the server’s extra power when busy, net of the GPU’s
+idle draw. Facility power is IT power times the power usage
+effectiveness (PUE), which adds cooling and power-conversion
+losses:
+Pi,t = PUE
+h
+Nipidle + P
+m,k pm,knm,i,t,k
+i
+≤¯Pi.
+(4)
+The first term in brackets is fixed; the second depends on the
+schedule. We take the PUE as a constant, PUE = 1.1, near
+the fleet averages reported by hyperscale operators [12].
+E. Objective and Optimization Problem
+The goal for the operator is to minimize the following
+objective function:
+J = P
+i,t λi,tPi,t∆+ πlate P
+m,i,t≥dm wm,i,t∆
++ P
+m,i vm wm,i,H + P
+m
+P
+i̸=im sm ym,i
++ πroute P
+t
+P
+j, i̸=j qj,i,t∆,
+(5)
+where λi,t, πlate, and πroute are price for electricity, lateness,
+and inference routing. The first term captures the energy bill,
+the second term models a late penalty πlate on each GPU-hour
+of work still unfinished after its deadline, the third term sums
+the value of the work left at the end of the horizon, which
+must still be done later, the fourth term is the cost of moving
+a job’s data away from its home site, and the fifth term is a
+small routing cost for serving inference away from where it
+arises. Here, the leftover work is valued at:
+vm = pm,K PUE ¯λ + κ,
+(6)
+where the first term is the energy needed to finish the work
+later, at this day’s mean price ¯λ, and the second, κ in $/GPU-
+h, is the value of the GPU time the work will occupy, since a
+GPU-hour deferred today displaces other work later. The two
+differ greatly in scale: at $39/MWh, the energy of a training
+GPU-hour costs about $0.03, while an H100 GPU rents for
+about $2/h. $2/h is near the rental value, so training is never
+deferred, consistent with [9], and every mode completes the
+same work.
+We can now cast our scheduling problem as the LP:
+min
+n, u, w, y, q, P ≥0
+J
+(7a)
+s.t.
+P
+i ym,i = 1,
+(7b)
+(1)–(4),
+(7c)
+with ym,im = 1 for training runs and in the site-level modes.
+The LP input parameters are the prices λ, the workload
+(Wm, Qj,t) and the starting state; its outputs are the GPU
+counts per level, the placement and the facility power at
+each site. To keep the LP always feasible, the implementation
+softens the pace limit (1e) and the inference balance (2a) with
+penalties of $20/GPU-h and $5,000 per GPU-equivalent-hour;
+neither is incurred in the simulation results.
+F. DA Schedule and Operating Modes
+The fleet schedules each operating day in CAISO’s DA
+market. The LP is solved once, in hourly steps (∆= 1h)
+over the 24 hours of the day, with the DA LMPs λi,t and
+the day’s workload. Its hourly power Pi,t is the fleet’s DA
+purchase, which it then consumes as scheduled, so its bill is
+the first term of (5), P
+i,t λi,tPi,t∆.
+We compare four modes. Each adds one capability to the
+one before it, so that the difference between consecutive modes
+isolates one source of saving:
+
+
+--- Page 4 ---
+TABLE II
+MAIN PARAMETERS
+Parameter
+Value
+GPUs per site
+90k Silicon Valley; 60k LA, San Diego
+GPU TDP pTDP; GPU idle; server
+busy/idle
+700; 70; 450/250 W
+pidle; p0 (derived)
+320; 130 W
+Training power-cap levels (ϕ, r)
+(0.85, 1), (0.75, 0.96), (0.65, 0.88),
+(0.55, 0.76), (0.45, 0.62)
+Inference power-cap levels (ϕ, r)
+(0.70, 1), (0.63, 0.96), (0.55, 0.90),
+(0.46, 0.81) [13]
+Short-job power-cap levels (ϕ, r)
+(0.80, 1) ...(0.40, 0.70)
+Inference utilization cap ¯ρ; PUE
+0.8; 1.1 [12]
+Restart overhead δ, training/short
+0.25/0.05 hour
+πlate; sm
+$10/GPU-h per h; $0.01/GPU-h moved
+πroute; κ
+$0.05/GPU-h; $2/GPU-h
+1) Uncoordinated: every job runs on arrival at its home
+site at full power, inference first, then training runs, then
+short jobs in arrival order.
+2) Price-blind: the site-level model is solved at a flat price,
+with a negligible preference for early work. This isolates
+operational efficiency.
+3) Site-level: the model is solved on LMPs, with all work
+and inference kept at its home site.
+4) Fleet-coordinated: the model is solved on LMPs and
+also optimizes routing (y and q).
+All modes pay the DA LMPs for the power they draw. Thus
+(b) minus (a) measures efficiency, (c) minus (b) measures price
+response in time, and (d) minus (c) measures routing.
+III. SIMULATION SETUP
+A. Fleet and Prices
+Three sites host 210,000 GPUs in total. When run uncoordi-
+nated, they average about 190 MW with a mean daily peak of
+230 MW. The sites are placed in CAISO’s three largest data-
+center markets, Silicon Valley, the Los Angeles basin and San
+Diego. Each site pays the LMP that CAISO publishes for its
+local area (PG&E South Bay, SCE Core and SDG&E).
+The 2025 hourly DA LMPs come from CAISO’s OA-
+SIS data portal [14]. DA prices at the three sites averaged
+$39/MWh and peaked at $199/MWh, and midday solar output
+drove them below zero at some site on 102 days. Silicon
+Valley was the most expensive market, with an average price
+of $43/MWh against $35/MWh in Los Angeles.
+B. Workload and Runs
+We assume each site runs two training runs on 26% of its
+GPUs, with 5–30 days left to run and a 15% deadline slack.
+These runs are pinned to their cluster, as large synchronous
+runs are. Short jobs arrive following a business-day profile,
+totaling 19% of GPU capacity per day with lognormal volume,
+and may move between sites; those arriving in the same 3-h
+window with the same deadline are modeled as one job. Each
+short job is due 6, 12 or 24 h after arrival, with assumed
+probabilities 0.2, 0.3 and 0.5, within the 24-h window. Online
+TABLE III
+TOTALS AND AVERAGES OF ENERGY AND COST IN 2025.
+Uncoord.
+Price-blind
+Site
+Fleet
+Energy cost ($M)
+65.32
+62.87
+61.36
+61.24
+Saving vs. uncoord. (%)
+–
+3.76
+6.07
+6.25
+Energy (GWh)
+1,676.1
+1,597.6
+1,617.6
+1,617.6
+Avg. price ($/MWh)
+38.97
+39.35
+37.93
+37.86
+Mean daily peak (MW)
+229.2
+192.0
+216.2
+216.4
+inference follows a diurnal shape with an assumed peak-to-
+trough ratio of 1.6 for the fleet’s mix of services. Average
+GPU allocation is about 75%.
+The workload is taken as known a day ahead. Each day
+is simulated from a fresh state with an independent workload
+draw, and training runs enter at a random point in their run.
+Every day of 2025 (365 days) is simulated in all four modes.
+Models are built in Pyomo and solved with HiGHS.
+IV. SIMULATION RESULTS
+A. Efficiency, Price Response and Routing
+Table III summarizes the year. All modes complete the
+same 835 million GPU-hours of deferrable work, serve all
+inference demand and finish every short job by its deadline,
+so the comparison is at equal output. Fleet coordination cuts
+energy cost by 6.3%, or about $4.1M per year and $2.5/MWh
+consumed. Taking differences between consecutive modes
+splits this saving into three parts, each in percentage points
+of the uncoordinated cost; Fig. 2(a) shows them by month.
+Efficiency: 3.8%. Run at a flat price, the optimizer spreads
+work across spare GPUs at lower power caps, cutting energy
+by 4.7% and the mean daily peak by 16%. The gain comes
+from inference and short jobs. At 46% of TDP, a GPU runs
+each inference request about 1.2 times slower but draws much
+less power. For training, the gain is under 1%: its runs already
+use their full GPU limit, so a lower cap would only slow them.
+Price response: 2.3%. Responding to LMPs lowers the
+average price paid by 3.6% relative to the price-blind schedule,
+mainly by moving work into the midday hours, when solar
+output lowers prices (Fig. 2(b)). Its value follows the solar
+season: about 7% in March and April, when midday prices
+fell below zero on most days, but only about 1% from July to
+September.
+Routing: 0.2%. It exceeds 1% on 23 days. On April 7
+(Fig. 2(c)), for example, midday DA prices fell below zero in
+Los Angeles and San Diego but averaged $25/MWh in Silicon
+Valley. The fleet mode moved about 6 MW of midday load
+out of Silicon Valley, which was worth 2.1% that day.
+V. CONCLUSION AND FUTURE WORK
+This paper developed a modelling and simulation framework
+that links an AI data-center fleet’s GPU power caps, job
+timing and job placement to site power and locational prices.
+Formulated as a linear program, it remains tractable at fleet
+scale, and nested scenarios that release one degree of freedom
+at a time separate efficiency from price-responsive flexibility.
+
+
+--- Page 5 ---
+J
+F M A M J
+J
+A S O N D
+(a) Month of 2025
+0
+2
+4
+6
+8
+10
+Saving (%)
+Efficiency
+Price response
+Routing
+150
+175
+200
+225
+Power (MW)
+Uncoord.
+Price-blind
+Site-level
+Fleet
+0
+4
+8
+12
+16
+20
+(b) Hour of day: average day
+0
+50
+LMP ($/MWh)
+LA
+Silicon Valley
+San Diego
+0
+4
+8
+12
+16
+20
+24
+(c) Hour of day: April 7, 2025
+Fig. 2. Results over 2025. (a) Monthly fleet saving relative to the uncoordinated mode. (b) Average day: fleet power by mode and DA LMP by site, averaged
+over all days for each hour; the site-level and fleet curves nearly coincide. (c) April 7: the price-responsive modes fill the negative-price solar hours, and the
+fleet mode also moves load out of Silicon Valley.
+On 2025 CAISO day-ahead prices, coordinated scheduling
+lowers energy cost by 6.3% at equal work: 3.8% from price-
+independent power-cap efficiency, 2.3% from temporal shifting
+and 0.2% from spatial routing. Routing gains little within one
+ISO, where nodal prices are strongly correlated, but should be
+worth more across sites with larger price differences, such as
+congested nodes or different ISOs.
+Ongoing work will add real-time operation, re-solving the
+LP every 15 min by model-predictive control on CAISO’s
+fifteen-minute market prices, accounting for prediction errors
+and uncertainties. Future work will use the model to schedule
+and value grid services such as demand response, voltage and
+frequency regulation, and couple it with the network through
+congestion-aware allocation and AC optimal power flow.
+ACKNOWLEDGMENT
+This work was authored in part by the National Laboratory
+of the Rockies for the U.S. Department of Energy (DOE) under
+Contract No. DE-AC36-08GO28308. Funding provided by the
+Advanced Modeling Grid Research Program at the Office of
+Electricity, U.S. Department of Energy. The views expressed in
+the article do not necessarily represent the views of the DOE or
+the U.S. Government. The U.S. Government retains and the
+publisher, by accepting the article for publication, acknowl-
+edges that the U.S. Government retains a nonexclusive, paid-
+up, irrevocable, worldwide license to publish or reproduce the
+published form of this work, or allow others to do so, for U.S.
+Government purposes.
+The authors used Anthropic’s Claude Opus 5.5 to revise
+some text in the paper. All AI-assisted content was reviewed,
+edited, and verified by the authors, who take full responsibility
+for the paper.
+REFERENCES
+[1] S. J. Smith, A. Hubbard, A. Newkirk, M. Ganeshalingam, B. Holecek,
+D. Sartor, M. Mills, and A. Shehabi, “United States Data Center
+Energy Usage Report: 2025 Update,” Lawrence Berkeley National
+Laboratory, Tech. Rep. LBNL-2001758, Jun. 2026. [Online]. Available:
+https://escholarship.org/uc/item/33m6w3x0
+[2] T.
+H.
+Norris,
+T.
+Profeta,
+D.
+Patino-Echeverri,
+and
+A.
+Cowie-
+Haskell,
+“Rethinking
+load
+growth:
+Assessing
+the
+potential
+for
+integration of large flexible loads in US power systems,” Nicholas
+Institute for Energy, Environment & Sustainability, Duke University,
+Tech. Rep. NI R 25-01, Feb. 2025. [Online]. Available: https:
+//nicholasinstitute.duke.edu/publications/rethinking-load-growth
+[3] P. Colangelo, A. K. Coskun, J. Megrue, C. Roberts, S. Sengupta,
+V. Sivaram, E. Tiao, A. Vijaykar, C. Williams, D. C. Wilson, Z. Mac-
+Farland, D. Dreiling, N. Morey, A. Ratnayake, and B. Vairamohan,
+“Turning AI data centers into grid-interactive assets: Results from a field
+demonstration in Phoenix, Arizona,” arXiv preprint arXiv:2507.00909,
+2025.
+[4] National Grid, “UK-first trial of AI grid technology successfully demon-
+strates ability of data centres to adjust power needs,” Press release, with
+Emerald AI, EPRI, Nebius and NVIDIA, Mar. 2026.
+[5] A. Radovanovi´c, R. Koningstein, I. Schneider, B. Chen, A. Duarte,
+B. Roy, D. Xiao, M. Haridasan, P. Hung, N. Care, S. Talukdar, E. Mullen,
+K. Smith, M. Cottman, and W. Cirne, “Carbon-aware computing for
+datacenters,” IEEE Transactions on Power Systems, vol. 38, no. 2, pp.
+1270–1280, 2023.
+[6] Z. Liu, M. Lin, A. Wierman, S. H. Low, and L. L. H. Andrew, “Greening
+geographical load balancing,” in Proc. ACM SIGMETRICS, 2011, pp.
+233–244.
+[7] A. H. Mazumder and Y. Sang, “System-level impacts of flexible data
+center load scheduling on cost, emissions, and transmission congestion,”
+arXiv preprint arXiv:2604.23128, 2026.
+[8] I. Riepin, T. Brown, and V. Zavala, “Spatio-temporal load shifting for
+truly clean computing,” Advances in Applied Energy, vol. 17, p. 100202,
+2025.
+[9] M. Li, “Beyond scalar flexibility: From eligible AI workloads to
+dependable load relief,” arXiv preprint arXiv:2609.05406, 2026.
+[10] P. Patel, E. Choukse, C. Zhang, ´I. Goiri, B. Warrier, N. Mahalingam,
+and R. Bianchini, “Characterizing power management opportunities for
+LLMs in the cloud,” in Proc. ACM ASPLOS, 2024, pp. 207–222.
+[11] J. Stojkovic, C. Zhang, ´I. Goiri, J. Torrellas, and E. Choukse, “Dy-
+namoLLM: Designing LLM inference clusters for performance and
+energy efficiency,” in Proc. IEEE HPCA, 2025, pp. 1348–1362.
+[12] Google, “Data center efficiency: Power usage effectiveness (PUE),”
+https://datacenters.google/efficiency/, 2026.
+[13] A. Apartsin and Y. Aperstein, “The joule point: An energy-optimal
+operating point for AI inference,” arXiv preprint: 2609.27926, 2026.
+[14] California ISO, “OASIS: Open access same-time information system,”
+http://oasis.caiso.com, 2025.

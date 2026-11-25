@@ -1,0 +1,5761 @@
+--- Page 1 ---
+Asymptotic Optimality of 𝑐𝜇-Rule for LLM Inference Scheduling
+under Memory Constraint
+Zhenghao Li
+HKUST
+Shengbo Wang
+University of Southern California
+Nian Si
+HKUST
+Abstract
+Large language model (LLM) inference, the process by which a pre-trained model receives an input
+prompt and generates output tokens sequentially, has become increasingly important with the widespread
+deployment of LLM-based applications. As inference workloads continue to scale, GPU memory has
+emerged as a critical bottleneck: the long input prompts and generation sequences common in agentic and
+reasoning workloads lead to substantial key–value (KV) cache usage. In this paper, we study the resulting
+online scheduling problem from a queueing perspective. Requests arrive stochastically with heterogeneous
+prompt and output lengths, undergo prefill and autoregressive decode, and compete for a finite KV-cache
+capacity. Unlike classical queueing models, the duration of a processing step depends on both prefill
+computation and KV-cache I/O, so service capacity is jointly determined by computation, memory access,
+and memory occupancy. We develop a fluid model that reduces the system to a multiclass single-server
+queue with effective service rates capturing computation, memory access, and memory capacity. This fluid
+analysis yields a 𝑐𝜇priority rule, where the effective service rate 𝜇is jointly determined by computational
+speed, memory bandwidth, and memory capacity. We prove that this rule minimizes cumulative holding
+cost in the fluid model and, for a finite workload, also minimizes completion time and maximizes full-run
+output-token throughput. We then construct a feasible scheduling policy for the original finite system and
+prove that its scaled dynamics converge to the optimal fluid policy. Finally, experiments on a real LLM
+serving engine using an NVIDIA H800 show that practical implementations of the proposed priority rule
+substantially reduce average latency while maintaining high throughput relative to existing scheduling
+policies.
+1
+Introduction
+The public debut of ChatGPT in late 2022 marked a turning point in the swift adoption of generative artificial
+intelligence, driven largely by advancements in large language models (LLMs) [7, 31, 34]. These systems have
+rapidly integrated into routine workflows across research, education, industry, and entertainment [17, 21, 30],
+facilitating billions of user interactions to date [16, 18]. However, alongside significant gains in human
+productivity, this explosive growth has introduced critical bottlenecks in serving large-scale LLM inference
+reliably and efficiently.
+LLM inference refers to the process by which a pre-trained LLM receives an input prompt and generates
+output tokens sequentially. Compared with traditional machine learning models, LLM inference is memory
+and computation intensive, often involves long generation sequences, and can incur substantial latency
+and resource costs. The importance of efficient inference is further amplified by the growing adoption of
+reasoning models and test-time compute, which increase the amount of computation required for each request.
+Deloitte1 estimates that inference will account for roughly two-thirds of total AI compute in 2026, up from
+about one-third in 2023. Consequently, efficient LLM inference is not merely a problem of computational
+1https://www.deloitte.com/us/en/insights/industry/technology/technology-media-and-telecom-predi
+ctions/2026/compute-power-ai.html
+1
+arXiv:2611.04807v1  [math.OC]  3 Nov 2026
+
+
+--- Page 2 ---
+optimization, but a system-level challenge that requires carefully balancing responsiveness, throughput, and
+resource costs.
+Key-value (KV) caching [25, 32] has become a standard technique for accelerating LLM inference,
+largely due to the extensive use of attention mechanisms [39]. Roughly speaking, the KV cache stores the
+previously computed key and value representations of past tokens in GPU memory to avoid their repeated
+computation when generating each new token. Thus, KV caching trades increased memory usage for reduced
+computation and achieves substantially accelerated inference. However, this acceleration comes at the cost of
+substantial GPU memory consumption and intensive memory access, making memory capacity and bandwidth
+increasingly important. This becomes a severe issue for inference requests with long input contexts or long
+generated sequences, which are increasingly common in agentic and reasoning workloads, making memory a
+critical bottleneck in modern LLM inference [2].
+In this paper, we study LLM inference with KV-cache memory constraints through an operations lens.
+We abstract and model the inference scheduling task for LLMs as a multiclass queue. In this queueing system
+model, inference requests arrive over time with heterogeneous workloads, characterized by their prompt and
+output lengths, and a GPU server processes them according to prescribed dynamic scheduling decisions. The
+workload each request brings to the system consists of two sequential phases that must be executed in order:
+a prefill phase followed by an autoregressive decode phase. The scheduler dynamically determines which
+requests are admitted and processed at each GPU time step. Our primary objective is to minimize the request
+latency, or, equivalently, the cumulative number of unfinished requests in the system.
+A crucial feature of LLM serving systems, and hence our queueing model, is the KV-cache constraint on
+GPU memory capacity and bandwidth. As a request progresses through the prefill and decode stages, its KV
+cache in GPU memory continues to grow until the request completes, while each processing step must also
+access the KV states accumulated up to that point. These memory requirements can significantly affect the
+number of requests that can be processed concurrently and the time required for each processing step. In
+particular, GPU-step processing time depends on both the amount of prefill computation and the KV-cache
+I/O volume, while the set of concurrently processed requests must satisfy a hard memory-capacity constraint.
+To develop an efficient dynamic scheduling policy for this LLM inference queue, we consider a fluid
+asymptotic regime in which the token processing rate and request arrival rate scale proportionally, while the
+total memory capacity remains fixed. This choice of regime directly captures the key memory bottleneck in
+LLM inference systems with KV caching, which shifts the primary computational burden toward memory
+constraints and I/O costs.
+The fluid approximation yields a tractable yet expressive limiting system with a familiar scheduling
+structure. We show that, under the prescribed limiting regime, the memory-constrained LLM inference system
+can be related to a classical multiclass queueing model with homogeneous servers. However, the effective
+service rates in the fluid system must account for prefill computation, KV-cache I/O, and the effect of memory
+capacity constraints on service availability. This motivates us to adapt the 𝑐𝜇priority rule [8, 28, 38], which
+minimizes cumulative holding cost while maximizing full-run output-token throughput in the fluid model.
+We establish that the 𝑐𝜇-rule remains optimal for this fluid system under the two-phase workload structure
+and the memory constraint in the LLM serving system. Furthermore, to bridge the fluid control problem and
+the prelimit LLM inference system, we construct a dynamic scheduling policy inspired by the 𝑐𝜇-rule. We
+show that the proposed policy converges to the 𝑐𝜇-rule in the fluid limit and that the prelimit systems under
+this policy converge to the proposed fluid system controlled by the 𝑐𝜇-rule.
+Concretely, the paper makes the following main contributions.
+• LLM system modeling. We develop a queueing model of LLM inference that explicitly accounts for
+KV-cache memory capacity constraints and the associated memory I/O costs, with processing times
+calibrated using real GPU measurements to capture their dependence on the composition of the scheduled
+workload.
+2
+
+
+--- Page 3 ---
+• Identifying the asymptotic regime. We identify a fluid regime in which processing and arrival rates
+increase together while memory capacity remains fixed, preserving the system’s memory bottleneck. The
+resulting model reveals a classical single-server scheduling structure with LLM-specific behaviors such as
+two-phase workload and memory constraints.
+• Asymptotic optimality of the 𝑐𝜇-rule. We prove that the 𝑐𝜇-rule minimizes cumulative holding cost and
+maximizes full-run throughput for finite workloads in the fluid limit. To bridge the fluid and finite-system
+models, we construct an implementable 𝑐𝜇-inspired policy and show that the resulting dynamics converge
+to the optimal fluid limit.
+• Numerical and real-system validation. We evaluate practical implementations of the proposed 𝑐𝜇-rule
+using semi-synthetic workloads and real workload data on a real LLM serving engine. In both settings,
+our policy demonstrates substantial reductions in average latency relative to the default scheduler while
+maintaining high throughput.
+Together, these results bridge classical queueing theory and priority-based scheduling policies with imple-
+mentable, effective scheduling rules for modern LLM inference systems.
+1.1
+Related Work
+Recent advances in LLM serving systems have enabled finer-grained control over batching and GPU memory
+management. Yu et al. [47] developed iteration-level scheduling, allowing the batch to be reconstructed after
+each model iteration. Kwon et al. [25] introduced PagedAttention, which stores KV caches in blocks to
+reduce GPU memory waste and enable multiple requests to share cached data. Agrawal et al. [1] split long
+prefill computations into smaller chunks and co-batched them with decode work. Together, these advances
+provide the infrastructure for fine-grained control over batching and GPU memory management, serving as
+both the foundation for our model and the practical testbed for our experiments.
+To analyze LLM serving systems analytically, several pioneering studies have employed queueing models.
+Dai et al. [11] characterize stable throughput under a per-batch token-budget constraint and establish the
+throughput optimality of work-conserving policies, while Nie et al. [29] develop a fine-grained queueing
+model that tracks KV-cache growth and establish stability and overload conditions for continuous batching
+under the restrictive assumption of a constant batch processing time. Furthermore, Lin et al. [26] study
+prefill–decode contention in multi-GPU settings and develop a scheduling policy that achieves asymptotically
+optimal revenue as the number of GPUs grows, without explicitly modeling GPU memory-capacity constraints.
+Recently, Yao et al. [46] study KV-cache reuse in multi-turn LLM conversations under a least-recently-used
+(LRU) eviction policy and establish a mean-field limit for the cache hit ratio as the conversation arrival rate
+and memory capacity scale proportionally.
+The most relevant literature is Ao et al. [4] and Ao et al. [3]. For requests with known output lengths, Ao
+et al. [4] propose WAIT to maximize throughput under a memory constraint. The policy waits for enough
+requests of the same class to accumulate, then processes them together. However, setting these thresholds
+requires arrival-rate information, and their extension to time-varying arrivals imposes additional load and
+class-mix conditions. Moreover, obtaining valid parameters for WAIT requires certain load and memory
+conditions to be satisfied, which may not hold in practical settings. We find that, although theoretically
+optimal, WAIT’s performance can deteriorate in real-GPU implementations due to unnecessary idling. This
+work models batch processing time only through KV-cache I/O, without considering the extra computation
+time required to process tokens during the prefill phase. Ao et al. [3] further show that admitting requests
+whenever memory is available can cause recurring evictions and throughput loss, and mitigate this via
+rate-limited admission and request mixing, especially in multi-GPU deployments.
+3
+
+
+--- Page 4 ---
+Besides queueing-based modeling, other studies approach this problem from an online linear programming
+perspective: Jaillet et al. [23] develop a hindsight benchmark and the MC-SF algorithm, while Kong et al.
+[24] propose the Smallest Volume First policy based on cumulative KV-cache usage. For offline scheduling,
+prior work develops algorithms and evaluates their total completion time against a clairvoyant benchmark.
+Specifically, Wang et al. [41] study the setting with known output lengths, Chen et al. [9] consider interval
+predictions of output lengths, and Feng et al. [12, 13] develop algorithms that do not rely on output-length
+predictions.
+LLM inference under KV-cache memory constraints is closely related to stochastic bin packing, where
+randomly arriving requests must be served subject to resource capacity constraints. Early studies establish
+stability conditions for First-Fit and Best-Fit scheduling [10, 14]. In infinite-server models, greedy policies
+with safety stocks [36], greedy randomized placement [37], and randomized Best-Fit [15] asymptotically
+minimize the number of occupied servers. Stolyar [35] establishes asymptotic optimality of greedy allocation
+for a convex approximation to the server-count objective. For a fixed number of servers, Maguluri et al.
+[27] show that Best-Fit need not be throughput optimal and develop MaxWeight-based scheduling policies
+with throughput guarantees. Gupta and Radovanovic [20] develop Lagrangian-based packing algorithms for
+permanent and departing requests, including a model with configuration-dependent service slowdowns.
+Despite similar constraints and objectives, LLM inference scheduling differs from classical stochastic
+bin-packing problems in several ways. First, while stochastic bin-packing models assume that each request
+has a fixed size upon arrival, the KV-cache usage of an LLM request grows as generation progresses. Second,
+LLM inference involves two distinct phases, prefill and decode, with different memory dynamics. Third,
+whereas service times in classical stochastic bin-packing models are typically independent of current memory
+occupancy, processing times in LLM inference depend on memory usage due to KV-cache I/O costs.
+The objective of minimizing cumulative holding cost connects our problem to the literature on 𝑐𝜇priority
+scheduling. Buyukkoc et al. [8] establish the optimality of the 𝑐𝜇rule for a preemptive single-server queue
+with linear holding costs, geometric service times, and a general arrival process. Van Mieghem [38] extends
+this framework to convex delay costs and establishes the asymptotic optimality of a generalized 𝑐𝜇rule in
+heavy traffic. Mandelbaum and Stolyar [28] further extend the analysis to heterogeneous servers and prove
+heavy-traffic asymptotic optimality under complete resource pooling. Zychlinski et al. [48] study queues
+in which jobs may require multiple servers simultaneously and establish the asymptotic optimality of an
+idle-avoid 𝑐𝜇/𝑚policy in a many-server regime. Their model is related to ours through resource constraints,
+but differs in three key aspects: in LLM inference, a job’s resource usage (KV cache) grows during service,
+service rates depend on the types and numbers of jobs processed together, and memory capacity remains
+𝑀= 𝑂(1), so each job’s resource requirement is non-negligible relative to total capacity.
+The remainder of the paper is organized as follows. In Section 2, we present our queueing model for
+LLM inference. In Section 4, we establish the optimality of the 𝑐𝜇rule for the fluid model. In Section 5, we
+construct a feasible policy for the discrete system and prove that its scaled dynamics converge to those under
+the optimal fluid policy. Section 6 presents real GPU experiments that validate our theoretical results. Finally,
+we conclude the paper and discuss limitations and directions for future work in Section 7.
+2
+LLM Inference Systems
+We consider an online LLM inference system in which user requests arrive stochastically over time and wait
+in a queue for service on a single GPU. Each arriving request contains an input prompt and asks the model to
+generate an output sequence. A scheduler determines which requests are processed by the GPU over time.
+The processing of each request consists of a prefill phase followed by an autoregressive decode phase.
+During the prefill phase, the model processes the prompt tokens and constructs their attention key–value
+(KV) states. With chunked prefill, the input prompt is divided into several smaller chunks that are processed
+4
+
+
+--- Page 5 ---
+sequentially and the first output token is generated when the final chunk is processed. During the decode
+phase, the model generates the remaining output tokens one at a time. Each decode step takes the latest output
+token as input, appends its KV state, and generates the next output token. The request’s KV cache occupies
+GPU memory throughout execution and is released upon completion. Figure 1 summarizes this lifecycle.
+Processed
+this step
+KV cache
+after step
+Generated
+output
+P1 P2 P3 P4
+prompt length sj = 4
+P1 P2
+write KV
+–
+P3 P4
+P1 P2 P3 P4
+write KV
+read KV / emit
+O1
+O1
+P1 P2 P3 P4
+O1
+append KV
+read KV / emit
+O1 O2
+O2
+P1 P2 P3 P4
+O1 O2
+append KV
+read KV / emit
+O1 O2 O3
+released
+O1 O2 O3
+output length oj = 3
+Chunk 1
+Final chunk
+Decode 1
+Decode 2
+Complete
+Prefill phase
+Decode phase
+Figure 1: Lifecycle of a request with prompt length 𝑠𝑗= 4, output length 𝑜𝑗= 3, and two-token prefill chunks. The
+first prefill step processes 𝑃1, 𝑃2 and writes their keys and values to the KV cache without emitting an output token.
+The final prefill step processes 𝑃3, 𝑃4, writes their keys and values to the cache, and emits 𝑂1. Each decode step takes
+the latest output token as input, appends its keys and values to the cache, and emits the next token. After the request
+completes, its KV cache is released.
+Modern inference engines use a GPU step as the smallest unit of scheduling. At each GPU step, a batch is
+formed from requests that may be at different stages of execution. After the step completes, the scheduler
+updates request states and may re-form the next batch from eligible waiting and running requests; requests
+may therefore enter or leave the scheduled batch between GPU steps. This mechanism is commonly called
+continuous batching [47]. Modern engines may also use mixed prefill–decode batching, in which a GPU step
+processes prefill work from some requests and decode work from others [1].
+Every processed token contributes KV states, so a request’s KV-cache occupancy grows during prefill and
+then by one token at each decode step. The running requests share a finite GPU KV-cache capacity, which we
+measure in tokens. Figure 2 illustrates how the scheduled batch changes at GPU-step boundaries.
+Our queueing model represents request progress through its prefill and decode stages. Requests are
+partitioned into 𝐽classes. A class-𝑗request has known prompt length 𝑠𝑗and output length 𝑜𝑗. The GPU
+has KV-cache capacity 𝑀tokens. Each prompt is partitioned into chunks of size 𝑐chunk. Accordingly, we
+define the number of prefill chunks of a class-𝑗request by 𝐿𝑗=
+l
+𝑠𝑗
+𝑐chunk
+m
+. Therefore, a class-𝑗request has 𝐿𝑗
+sequential prefill stages followed by 𝑜𝑗−1 sequential decode stages, with the final prefill stage producing the
+first output token. If 𝑜𝑗= 1, the request leaves the system immediately after its final prefill stage.
+Let 𝑚(𝑡) denote the maximum KV-cache usage during step 𝑡. It consists of the KV states already
+occupying GPU memory and those newly written during the step. The memory constraint is
+𝑚(𝑡) ≤𝑀,
+𝑡= 0, 1, . . . .
+For the batch executed in step 𝑡, let 𝑛pf(𝑡) be the total number of prompt tokens in the prefill stage to be
+processed in this batch, and let 𝑛kv(𝑡) be the batch’s total KV-cache I/O volume in token units. In our model,
+this volume counts the existing KV states accessed by the batch and the new KV states written during the step.
+By empirically testing different mixed batches on an NVIDIA H800, we observe that the step time (batch
+processing time) varies approximately linearly with both KV-cache I/O volume and the number of prompt
+tokens processed. Figure 3 shows these linear relationships.
+5
+
+
+--- Page 6 ---
+Continuous batching
+step t
+step t + 1
+step t + 2
+re-form
+D admitted
+re-form
+C not selected
+waiting queue
+KV cache
+on GPU
+completed
+D
+E
+new arrival
+E
+still waiting
+B
+B
+scheduled
+A
+B
+C
+scheduled
+A
+C
+D
+scheduled
+A
+D
+C
+not selected
+Figure 2: Continuous batching across GPU-step boundaries. During a step, the batch remains fixed and the scheduled
+requests advance by one step. At the next boundary, completed requests leave, and the scheduler may admit waiting
+requests or leave resident requests unscheduled.
+Figure 3: Conditional fits of the GPU step-time model, estimated on the training sample. Left: KV-cache I/O effect at
+fixed prefill levels. Right: prefill effect after adjusting held-out samples to fixed KV-cache I/O.
+Motivated by these observations, we fit the step time of step 𝑡as
+bΔ(𝑡) := b𝑎pf𝑛pf(𝑡) + b𝑎kv𝑛kv(𝑡) + b𝑏,
+(1)
+where b𝑎pf is the fitted per-prompt-token processing-time coefficient, b𝑎kv is the fitted per-token KV-cache I/O
+coefficient, and b𝑏is the estimated fixed per-step overhead. Table 1 reports the coefficient estimates and fit
+statistics.
+3
+System Modeling and Fluid Regime
+In this section, we formulate a sequence of prelimit queueing models for the LLM inference system and
+derive the corresponding fluid control problem. We first specify the system state, queueing dynamics, control
+decisions, and memory constraints. We then apply fluid scaling and formulate the corresponding fluid control
+problem. Finally, we show that the fluid control problem also exhibits a state-space collapse phenomenon
+commonly observed in the queueing literature [6, 44].
+6
+
+
+--- Page 7 ---
+Table 1: Batch processing time estimates in an NVIDIA H800. Out-of-sample statistics use held-out existing-KV strata.
+Parameter
+Estimate
+b𝑎pf (s/token)
+2.264 × 10−5
+b𝑎kv (s/token)
+4.108 × 10−8
+b𝑏(s)
+7.794 × 10−3
+Metric
+In sample
+Out of sample
+Observations
+16,205
+3,987
+𝑅2
+0.999902
+0.999905
+RMSE (ms)
+2.294
+2.268
+3.1
+Queueing Model
+Consider a sequence of queueing systems indexed by 𝑟= 1, 2, . . . , while the fluid model is obtained as
+𝑟→∞. The arrival rate of requests in each class and the GPU processing speed both scale with 𝑟, while
+the KV-cache capacity 𝑀remains fixed. This regime represents the memory bottleneck created by the KV
+caching techniques that trade memory capacity and I/O cost for computation speed in modern LLM inference
+systems. Concretely, for the step-time model in (1), we assume that the positive coefficients of the 𝑟th system
+satisfy
+𝑟𝑎𝑟
+pf →𝑎pf > 0,
+𝑟𝑎𝑟
+kv →𝑎kv > 0,
+𝑟𝑏𝑟→𝑏> 0.
+(2)
+Thus, the one-step processing time of fixed batch is of order 1/𝑟. Accordingly, define the step time
+Δ𝑟(𝑡) := 𝑎𝑟
+pf𝑛𝑟
+pf(𝑡) + 𝑎𝑟
+kv𝑛𝑟
+kv(𝑡) + 𝑏𝑟,
+where 𝑛𝑟
+pf(𝑡) and 𝑛𝑟
+kv(𝑡) are the numbers of prefill and decode tokens processed in step 𝑡, respectively, as
+formally defined in (3).
+Throughout the paper, we index GPU processing steps by the integer 𝑡= 0, 1, 2, . . . and denote clock
+time by 𝜏≥0, since processing steps may have different durations. Thus, the clock time at the beginning of
+step 𝑡is given by
+𝑓𝑟(𝑡) :=
+𝑡−1
+∑︁
+𝑢=0
+Δ𝑟(𝑢).
+At the beginning of GPU step 𝑡, let 𝑝𝑟
+𝑗,𝑘(𝑡) be the number of class-𝑗requests with 𝑘prefill chunks waiting
+to be processed and let 𝑑𝑟
+𝑗,𝑘(𝑡) be the number of class-𝑗requests with 𝑘decode tokens remaining. The system
+state records the number of requests at each prefill and decode stage:
+𝑧𝑟
+𝑡:=  {𝑝𝑟
+𝑗,𝑘(𝑡)}1≤𝑗≤𝐽, 1≤𝑘≤𝐿𝑗, {𝑑𝑟
+𝑗,𝑘(𝑡)}1≤𝑗≤𝐽, 1≤𝑘≤𝑜𝑗−1
+,
+where 𝑝𝑟
+𝑗,𝐿𝑗(0) represents the class-𝑗requests already present in the system at time zero.
+At each GPU step 𝑡, a policy 𝜋𝑟determines how many requests to process at each prefill and decode
+stage. Specifically, the policy schedules one prefill chunk for ΔU𝑟
+𝑗,𝑘(𝑡) class-𝑗requests with 𝑘prefill chunks
+remaining, and one decode step for ΔV𝑟
+𝑗,𝑘(𝑡) class-𝑗requests with 𝑘output tokens remaining. Since in
+practice, each request usually consumes only a small fraction of the total memory capacity 𝑀, we allow
+fractional requests and treat queue lengths and per-step controls as nonnegative real-valued quantities. The
+number of requests processed at each step cannot exceed the corresponding queue length:
+0 ≤ΔU𝑟
+𝑗,𝑘(𝑡) ≤𝑝𝑟
+𝑗,𝑘(𝑡)
+and
+0 ≤ΔV𝑟
+𝑗,𝑘(𝑡) ≤𝑑𝑟
+𝑗,𝑘(𝑡).
+To facilitate the fluid scaling and the analysis of the limiting dynamics in Section 3.2, we introduce the
+following cumulative stage-completion processes:
+U𝑟
+𝑗,𝑘(𝑡) :=
+𝑡−1
+∑︁
+𝑠=0
+ΔU𝑟
+𝑗,𝑘(𝑠)
+and
+V𝑟
+𝑗,𝑘(𝑡) :=
+𝑡−1
+∑︁
+𝑠=0
+ΔV𝑟
+𝑗,𝑘(𝑠),
+7
+
+
+--- Page 8 ---
+with U𝑟
+𝑗,𝑘(0) = 0 and V𝑟
+𝑗,𝑘(0) = 0. Since the increments are recovered by taking one-step differences, the
+cumulative processes provide an equivalent representation of the controls. We therefore write 𝜋𝑟= (U𝑟, V𝑟).
+The selected batch must also satisfy the KV-cache capacity constraint. The maximum KV-cache usage
+during step 𝑡is
+𝑚𝑟(𝑡) =
+𝐽
+∑︁
+𝑗=1
+ 𝐿𝑗
+∑︁
+𝑘=1
+𝑐chunk(𝐿𝑗−𝑘)𝑝𝑟
+𝑗,𝑘(𝑡) +
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+ 𝑜𝑗−𝑘−1)𝑑𝑟
+𝑗,𝑘(𝑡)
++
+𝐿𝑗
+∑︁
+𝑘=1
+ℓ𝑗,𝑘ΔU𝑟
+𝑗,𝑘(𝑡) +
+𝑜𝑗−1
+∑︁
+𝑘=1
+ΔV𝑟
+𝑗,𝑘(𝑡)
+!
+.
+The first two sums count the KV states already in the memory before step 𝑡begins, while the last two count
+the new KV states for which the selected batch reserves slots. Thus, the memory usage should satisfy the
+constraint 𝑚𝑟(𝑡) ≤𝑀at all time steps.
+For the selected batch, let 𝑛𝑟
+pf(𝑡) be the number of prefill tokens processed in step 𝑡, and let 𝑛𝑟
+kv(𝑡) be its
+KV-cache I/O volume in token units:
+𝑛𝑟
+pf(𝑡) =
+𝐽
+∑︁
+𝑗=1
+𝐿𝑗
+∑︁
+𝑘=1
+ℓ𝑗,𝑘ΔU𝑟
+𝑗,𝑘(𝑡),
+𝑛𝑟
+kv(𝑡) =
+𝐽
+∑︁
+𝑗=1
+ 𝐿𝑗
+∑︁
+𝑘=1
+[𝑐chunk(𝐿𝑗−𝑘) + ℓ𝑗,𝑘]ΔU𝑟
+𝑗,𝑘(𝑡) +
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+ 𝑜𝑗−𝑘)ΔV𝑟
+𝑗,𝑘(𝑡)
+!
+.
+(3)
+Thus, each selected prefill stage contributes its existing KV states and the states written for its current chunk,
+while each selected decode stage contributes its existing KV states and one new write.
+The arrival processes are modeled as nonhomogeneous Poisson processes, with arrival rates scaled by a
+factor of 𝑟to match the processing-time scaling. Specifically, let 𝜆𝑟
+𝑗(𝜏) = 𝑟𝜆𝑗(𝜏) denote the class-𝑗arrival
+rate at clock time 𝜏of the 𝑟th system. For each 𝑟≥1, let 𝑁𝑟
+𝑗, 𝑗= 1, . . . , 𝐽, be independent unit-rate Poisson
+processes. The number of class-𝑗requests arriving during step 𝑡is represented as
+𝜂𝑟
+𝑗(𝑡) := 𝑁𝑟
+𝑗
+
+𝑟
+∫
+𝑓𝑟(𝑡+1)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+
+−𝑁𝑟
+𝑗
+
+𝑟
+∫
+𝑓𝑟(𝑡)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+
+(4)
+Therefore, including the class-𝑗requests already present in the system at time zero, the cumulative class-𝑗
+arrival process is
+𝐴𝑟
+𝑗(𝑡) := 𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) = 𝑝𝑟
+𝑗,𝐿𝑗(0) + 𝑁𝑟
+𝑗
+
+𝑟
+∫
+𝑓𝑟(𝑡)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+
+,
+𝑡∈Z+.
+(5)
+These Poisson arrivals are the only sources of randomness in the prelimit systems. Let F 𝑟
+𝜏be the
+information contained in the arrival process before clock time 𝜏; i.e.
+F 𝑟
+𝜏= 𝜎
+
+𝑁𝑟
+𝑗
+
+𝑟
+∫𝑢
+0
+𝜆𝑗(𝑠)𝑑𝑠
+
+: 𝑗= 1, · · · , 𝐽; 𝑢≤𝜏
+
+Under the admissibility condition in Definition 1, we will establish that { 𝑓𝑟(𝑡) : 𝑡≥0} is a sequence of F 𝑟
+𝜏
+stopping times. Thus, we can define the history at each decision time as G𝑟
+𝑡:= F 𝑟
+𝑓𝑟(𝑡).
+8
+
+
+--- Page 9 ---
+Requests arriving during step 𝑡join the waiting queue at step 𝑡+ 1 and can be scheduled from that step
+onward. The queueing dynamics are
+𝑝𝑟
+𝑗,𝐿𝑗(𝑡+1) = 𝑝𝑟
+𝑗,𝐿𝑗(𝑡)+𝜂𝑟
+𝑗(𝑡)−ΔU𝑟
+𝑗,𝐿𝑗(𝑡),
+𝑝𝑟
+𝑗,𝑘(𝑡+1) = 𝑝𝑟
+𝑗,𝑘(𝑡)+ΔU𝑟
+𝑗,𝑘+1(𝑡)−ΔU𝑟
+𝑗,𝑘(𝑡),
+𝑘=1, . . . , 𝐿𝑗−1;
+𝑑𝑟
+𝑗,𝑜𝑗−1(𝑡+1) =𝑑𝑟
+𝑗,𝑜𝑗−1(𝑡)+ΔU𝑟
+𝑗,1(𝑡)−ΔV𝑟
+𝑗,𝑜𝑗−1(𝑡),
+𝑑𝑟
+𝑗,𝑘(𝑡+1) =𝑑𝑟
+𝑗,𝑘(𝑡)+ΔV𝑟
+𝑗,𝑘+1(𝑡)−ΔV𝑟
+𝑗,𝑘(𝑡),
+𝑘=1, . . . , 𝑜𝑗−2,
+(6)
+when 𝑜𝑗≥2. If 𝑜𝑗= 1, the request completes immediately after its final prefill stage. The first equation states
+that the class-𝑗waiting-queue length at step 𝑡+ 1 equals its value at step 𝑡, plus arrivals during step 𝑡, minus
+the admission increment ΔU𝑟
+𝑗,𝐿𝑗(𝑡). The remaining three equations have the same inflow-minus-outflow
+form: completions from the preceding stage enter the state, and completions of the current stage leave it.
+We now specify the admissibility requirements for prelimit policies.
+Definition 1 (Admissible prelimit policy). Fix an admissible initial state 𝑧𝑟
+0. A prelimit policy 𝜋𝑟= (U𝑟, V𝑟)
+is admissible if the following conditions hold at every GPU step 𝑡.
+1. 𝜋𝑟is non-anticipative; i.e. ΔU𝑟
+𝑗,𝑘(𝑡) and ΔV𝑟
+𝑗,𝑘(𝑡) are G𝑟
+𝑡-measureable for all indices ( 𝑗, 𝑘) ranging
+over prefill and decode stages.
+2. The KV-cache capacity constraint holds: 𝑚𝑟(𝑡) ≤𝑀.
+3. For every class 𝑗= 1, . . . , 𝐽, the control increments satisfy
+0 ≤ΔU𝑟
+𝑗,𝑘(𝑡) ≤𝑝𝑟
+𝑗,𝑘(𝑡)
+and
+0 ≤ΔV𝑟
+𝑗,𝑘(𝑡) ≤𝑑𝑟
+𝑗,𝑘(𝑡).
+In Appendix A, we note that the non-anticipativity condition and G𝑟
+𝑡are well-defined by showing that
+{ 𝑓𝑟(𝑡) : 𝑡≥0} is a sequence of F 𝑟
+𝜏stopping times.
+Let 𝑐𝑗≥0 be the holding-cost rate for each class-𝑗request. The normalized expected cumulative holding
+cost under a prelimit scheduling policy 𝜋𝑟is
+J 𝑟(𝜋𝑟; 𝑧𝑟
+0) := 1
+𝑟E
+" ∞
+∑︁
+𝑡=0
+Δ𝑟(𝑡)
+𝐽
+∑︁
+𝑗=1
+𝑐𝑗
+ 𝐿𝑗
+∑︁
+𝑘=1
+𝑝𝑟
+𝑗,𝑘(𝑡) +
+𝑜𝑗−1
+∑︁
+𝑘=1
+𝑑𝑟
+𝑗,𝑘(𝑡)
+  𝑧𝑟
+0
+#
+.
+(7)
+The prelimit control problem is to minimize J 𝑟(𝜋𝑟; 𝑧𝑟
+0) over all feasible scheduling policies.
+To ensure that the objective remains finite, we assume that arrivals occur only up to a fixed horizon
+𝐻< ∞, i.e., 𝜆𝑗(𝜏) = 0 for all 𝜏> 𝐻. We further assume that 𝜆𝑗is nonnegative and locally bounded.
+3.2
+Fluid Scaling
+Within an 𝑂(1) unit of clock time in the 𝑟th system, since the arrival rates scale as 𝑂(𝑟) and each GPU
+step takes 𝑂(1/𝑟) units of clock time, cumulative arrivals, cumulative stage completions, and waiting-queue
+lengths can all be of order 𝑂(𝑟). This suggests the following scaling, which we use to restore stability and
+obtain a sensible limiting system. For 𝜉∈R+, define
+¯𝑝𝑟
+𝑗,𝑘(𝜉) := 1
+𝑟𝑝𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋),
+¯𝑑𝑟
+𝑗,𝑘(𝜉) := 1
+𝑟𝑑𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋),
+¯
+U𝑟
+𝑗,𝑘(𝜉) := 1
+𝑟U𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋),
+¯
+V𝑟
+𝑗,𝑘(𝜉) := 1
+𝑟V𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋),
+¯𝐴𝑟
+𝑗(𝜉) := 1
+𝑟𝐴𝑟
+𝑗(⌊𝑟𝜉⌋),
+¯𝑓𝑟(𝜉) := 𝑓𝑟(⌊𝑟𝜉⌋).
+9
+
+
+--- Page 10 ---
+Here 𝜉= 𝑡/𝑟is fluid-scaled step time. When limits of these scaled processes exist, we omit the bars and the
+index 𝑟and write the limiting processes as 𝑝, 𝑑, U, V, and 𝑓. The formal convergence from the prelimit
+system to the fluid limit is established in Section 5.
+A crucial phenomenon as a consequence of of this fluid regime and the memory constraint stems from
+the following observation. For 𝑘= 1, . . . , 𝐿𝑗−1, each request counted by 𝑝𝑟
+𝑗,𝑘occupies 𝑐chunk(𝐿𝑗−𝑘)
+KV-cache slots. Likewise, for 𝑘= 1, . . . , 𝑜𝑗−1, each request counted by 𝑑𝑟
+𝑗,𝑘occupies 𝑠𝑗+ 𝑜𝑗−𝑘−1
+KV-cache slots. Since the total capacity 𝑀is fixed independently of 𝑟, the memory constraint bounds each of
+these unscaled states by a constant independent of 𝑟. Therefore,
+¯𝑝𝑟
+𝑗,𝑘(𝜉) ≤
+𝑀
+𝑟𝑐chunk(𝐿𝑗−𝑘) →0
+and
+¯𝑑𝑟
+𝑗,𝑘(𝜉) ≤
+𝑀
+𝑟(𝑠𝑗+ 𝑜𝑗−𝑘−1) →0.
+(8)
+Thus, every fluid-scaled intermediate-stage state vanishes as 𝑟→∞. The fluid-scaled waiting-queue length
+¯𝑝𝑟
+𝑗,𝐿𝑗need not vanish because waiting requests do not occupy GPU memory. This observation naturally leads
+to the phenomenon of stage-level state-space collapse, yielding a more tractable limiting system for which we
+can characterize an optimal policy. We provide a detailed characterization of this phenomenon in Section 3.4.
+As a result, on every bounded horizon, the normalized holding-cost contribution of requests in intermediate
+stages vanishes. Thus, although J 𝑟counts all requests in the system, its fluid counterpart contains only the
+waiting-queue lengths 𝑝𝑗,𝐿𝑗.
+The cumulative stage completions need not vanish with these states. A fixed fluid-time interval [𝜉1, 𝜉2]
+contains 𝑂(𝑟) GPU steps. Since each step can complete 𝑂(1) requests at a given stage, the cumulative
+number of stage completions over the interval can be 𝑂(𝑟). After division by 𝑟, the corresponding cumulative
+flow can therefore remain 𝑂(1).
+3.3
+Fluid Control Problem
+We now formulate the limiting fluid control problem driven by the arrival rates 𝜆𝑗. Fluid evolution is indexed
+by step time 𝜉∈R+, the continuous analogue of the discrete GPU-step index, whereas 𝜏∈R+ still represents
+clock time. Under a policy 𝜋, the real-time clock 𝑓𝜋maps step time 𝜉to clock time 𝜏= 𝑓𝜋(𝜉).
+At step time 𝜉, 𝑝𝑗,𝑘(𝜉) ∈R+ is the fluid-scaled number of class-𝑗requests with 𝑘prefill chunks remaining,
+and 𝑑𝑗,𝑘(𝜉) ∈R+ is the fluid-scaled number of class-𝑗requests with 𝑘decode tokens remaining. The system
+state is,
+𝑧𝜉=  {𝑝𝑗,𝑘(𝜉)}1≤𝑗≤𝐽, 1≤𝑘≤𝐿𝑗, {𝑑𝑗,𝑘(𝜉)}1≤𝑗≤𝐽, 1≤𝑘≤𝑜𝑗−1
+.
+For the fluid system, (8) implies that the memory constraint restricts admissible initial states to
+𝑝𝑗,𝐿𝑗(0) ≥0,
+𝑝𝑗,𝑘(0) = 0,
+𝑘= 1, . . . , 𝐿𝑗−1,
+𝑑𝑗,𝑘(0) = 0,
+𝑘= 1, . . . , 𝑜𝑗−1,
+for every class 𝑗.
+Prefill and decode schedules are represented by the respective cumulative control processes.
+For
+𝑘= 1, . . . , 𝐿𝑗, U𝑗,𝑘(𝜉) is the fluid-scaled cumulative number of class-𝑗requests that have completed the
+transition from 𝑘to 𝑘−1 remaining prefill chunks by step time 𝜉. For 𝑘= 1, . . . , 𝑜𝑗−1, V𝑗,𝑘(𝜉) is defined
+analogously for decode tokens.
+10
+
+
+--- Page 11 ---
+For cumulative control processes 𝜋= (U, V), the real-time clock is
+𝑓𝜋(𝜉) = 𝑎pf
+𝐽
+∑︁
+𝑗=1
+𝐿𝑗
+∑︁
+𝑘=1
+ℓ𝑗,𝑘U𝑗,𝑘(𝜉)
++ 𝑎kv
+𝐽
+∑︁
+𝑗=1
+ 𝐿𝑗
+∑︁
+𝑘=1
+[𝑐chunk(𝐿𝑗−𝑘) + ℓ𝑗,𝑘]U𝑗,𝑘(𝜉) +
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+ 𝑜𝑗−𝑘)V𝑗,𝑘(𝜉)
+!
++ 𝑏𝜉.
+The three clock terms accumulate the clock time due to prefill computation, KV-cache I/O, and the fixed
+per-step overhead, respectively.
+Given this clock, the fluid state is determined by the cumulative form of the stagewise flow-balance
+equations, with arrivals evaluated up to clock time 𝑓𝜋(𝜉):
+𝑝𝜋
+𝑗,𝐿𝑗(𝜉) = 𝑝𝑗,𝐿𝑗(0)+
+∫
+𝑓𝜋( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠−U𝑗,𝐿𝑗(𝜉),
+𝑝𝜋
+𝑗,𝑘(𝜉) = 𝑝𝑗,𝑘(0)+U𝑗,𝑘+1(𝜉)−U𝑗,𝑘(𝜉),
+𝑘=1,..., 𝐿𝑗−1;
+𝑑𝜋
+𝑗,𝑜𝑗−1(𝜉) =𝑑𝑗,𝑜𝑗−1(0)+U𝑗,1(𝜉)−V𝑗,𝑜𝑗−1(𝜉),
+𝑑𝜋
+𝑗,𝑘(𝜉) =𝑑𝑗,𝑘(0)+V𝑗,𝑘+1(𝜉)−V𝑗,𝑘(𝜉),
+𝑘=1,...,𝑜𝑗−2.
+(9)
+The equation for 𝑑𝜋
+𝑗,𝑜𝑗−1 applies only when 𝑜𝑗≥2. If 𝑜𝑗= 1, the request completes immediately after its
+final prefill stage, and there are no decode states.
+The fluid control admissibility conditions below inherit the structure of the prelimit model.
+Definition 2 (Admissible fluid policy). Fix an admissible initial state 𝑧0. A policy 𝜋= (U, V) is admissible
+if the following conditions hold:
+1. The cumulative control processes take values in R+, are continuous and nondecreasing, and start from
+zero; i.e. U𝑗,𝑘(0) = 0 and V𝑗,𝑘(0) = 0.
+2. For every 𝜉1 > 𝜉2 ≥0, the cumulative controls satisfy the memory constraint
+𝐽
+∑︁
+𝑗=1
+ 𝐿𝑗
+∑︁
+𝑘=1
+[𝑐chunk(𝐿𝑗−𝑘)+ℓ𝑗,𝑘] U𝑗,𝑘(𝜉1)−U𝑗,𝑘(𝜉2)
++
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+𝑜𝑗−𝑘) V𝑗,𝑘(𝜉1)−V𝑗,𝑘(𝜉2)
+!
+≤𝑀(𝜉1−𝜉2).
+(10)
+3. For every 𝜉≥0, the waiting-queue lengths are nonnegative and all intermediate-stage states are zero:
+𝑝𝜋
+𝑗,𝐿𝑗(𝜉) ≥0,
+𝑗= 1, . . . , 𝐽,
+𝑝𝜋
+𝑗,𝑘(𝜉) = 0,
+𝑗= 1, . . . , 𝐽,
+𝑘= 1, . . . , 𝐿𝑗−1,
+𝑑𝜋
+𝑗,𝑘(𝜉) = 0,
+𝑗= 1, . . . , 𝐽,
+𝑘= 1, . . . , 𝑜𝑗−1.
+(11)
+Definition 2 impose three sets of constraints that reflect the requirements for prelimit policies in Definition
+1. First, the (deterministic) fluid cumulative control processes U and V must start from zero and be
+nondecreasing. Second, the per-step memory constraint 𝑚𝑟(𝑡) ≤𝑀in the prelimit model translates into the
+Lipschitz constraint (10) in the fluid model. The left-hand side measures the cumulative KV-cache usage
+associated with work completed during (𝜉2, 𝜉1], which cannot exceed 𝑀(𝜉1 −𝜉2), the memory capacity
+integrated over the interval. Third, the nonnegativity of the prelimit queues is preserved in the fluid limit,
+while the convergence in (8) implies that all intermediate-stage fluid states must vanish.
+11
+
+
+--- Page 12 ---
+Remark 1. Since 𝑏> 0 and the cumulative controls of an admissible policy are continuous and nondecreasing,
+𝑓𝜋is a continuous strictly increasing bijection from R+ onto itself and therefore admits a continuous inverse.
+Moreover, 𝑓𝜋has bounded variation on every bounded interval and hence induces a Lebesgue–Stieltjes
+measure 𝑑𝑓𝜋. All integrals with respect to 𝑑𝑓𝜋below are understood in this sense.
+Since admissibility implies that all intermediate-stage states are zero, the fluid control problem considers
+the analogue of the prelimit objective (7), seeking an admissible policy 𝜋that minimizes
+J (𝜋; 𝑧0) =
+∫∞
+0
+𝐽
+∑︁
+𝑗=1
+𝑐𝑗𝑝𝜋
+𝑗,𝐿𝑗(𝜉) 𝑑𝑓𝜋(𝜉).
+(12)
+The cumulative holding cost is measured in clock time, with 𝑑𝑓𝜋converting increments in step time into
+elapsed real-time increments.
+3.4
+Stage-Level Collapse
+In this subsection, we focus on the stage-level state-space collapse phenomenon and use it to simplify the
+fluid control problem. For an admissible policy, substituting the zero intermediate-stage constraints (11) into
+the stagewise flow-balance equations (9) gives
+0 = 𝑝𝜋
+𝑗,𝑘(𝜉) = 𝑝𝑗,𝑘(0) + U𝑗,𝑘+1(𝜉) −U𝑗,𝑘(𝜉) = U𝑗,𝑘+1(𝜉) −U𝑗,𝑘(𝜉),
+𝑘= 1, . . . , 𝐿𝑗−1,
+0 = 𝑑𝜋
+𝑗,𝑜𝑗−1(𝜉) = 𝑑𝑗,𝑜𝑗−1(0) + U𝑗,1(𝜉) −V𝑗,𝑜𝑗−1(𝜉) = U𝑗,1(𝜉) −V𝑗,𝑜𝑗−1(𝜉),
+𝑜𝑗≥2,
+0 = 𝑑𝜋
+𝑗,𝑘(𝜉) = 𝑑𝑗,𝑘(0) + V𝑗,𝑘+1(𝜉) −V𝑗,𝑘(𝜉) = V𝑗,𝑘+1(𝜉) −V𝑗,𝑘(𝜉),
+𝑘= 1, . . . , 𝑜𝑗−2.
+Thus, for every class 𝑗, define its cumulative completion process by
+X 𝜋
+𝑗(𝜉) := U𝑗,𝐿𝑗(𝜉) = · · · = U𝑗,1(𝜉).
+(13)
+For classes with 𝑜𝑗≥2, this process also equals the cumulative completions at every decode stage:
+X 𝜋
+𝑗(𝜉) = V𝑗,𝑜𝑗−1(𝜉) = · · · = V𝑗,1(𝜉).
+These identities exhibit a stage-level state-space collapse, a phenomenon well studied in the heavy-traffic
+and fluid limits of queueing systems; see Xu [45, Chapter 7]. The fluid state is therefore fully described by
+the class-level waiting queues, and for each class 𝑗, the cumulative completion process X 𝜋
+𝑗represents all
+stage-level controls.
+Based on the stage-level collapse, we here reformulate the constraints and objective of the fluid control
+problem in terms of the cumulative class-𝑗request completions X 𝜋
+𝑗(𝜉). Let first define the cumulative
+KV-cache usage of a class-𝑗request, summed over its prefill and decode stages, by
+˜𝑚𝑗:=
+𝐿𝑗
+∑︁
+𝑘=1
+
+𝑐chunk(𝐿𝑗−𝑘) + ℓ𝑗,𝑘
+
++
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+ 𝑜𝑗−𝑘).
+(14)
+Throughout the remainder of the paper, assume ˜𝑚𝑗> 0 for every class 𝑗.
+Substituting (13) into the stage-level model and using Í𝐿𝑗
+𝑘=1 ℓ𝑗,𝑘= 𝑠𝑗and (14) yields
+𝑝𝜋
+𝑗,𝐿𝑗(𝜉) = 𝑝𝑗,𝐿𝑗(0) +
+∫
+𝑓𝜋( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠−X 𝜋
+𝑗(𝜉) ≥0.
+(15)
+12
+
+
+--- Page 13 ---
+𝑓𝜋(𝜉) =
+𝐽
+∑︁
+𝑗=1
+ 𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗
+ X 𝜋
+𝑗(𝜉) + 𝑏𝜉.
+(16)
+For 𝜉1 > 𝜉2 ≥0,
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+
+X 𝜋
+𝑗(𝜉1) −X 𝜋
+𝑗(𝜉2)
+
+≤𝑀(𝜉1 −𝜉2).
+(17)
+Conversely, any collection of nondecreasing processes {X 𝜋
+𝑗}𝐽
+𝑗=1 satisfying the initial conditions X 𝜋
+𝑗(0) = 0,
+the queue nonnegativity constraint (15), and the memory constraint (17), with the clock defined by (16),
+uniquely determines an admissible fluid policy 𝜋= (U, V). Therefore, we henceforth study the fluid control
+problem in terms of {X 𝜋
+𝑗}𝐽
+𝑗=1.
+4
+Optimal Control of the Fluid Model
+In this section, we study the 𝑐𝜇priority policy for the fluid model. We first introduce the basic idea of the
+𝑐𝜇rule and define the effective service rate 𝜇𝑗. We then describe the fluid 𝑐𝜇policy and establish that it
+minimizes the cumulative holding cost. Finally, we show that the policy also minimizes the completion time
+and, consequently, maximizes the full-run output-token throughput.
+4.1
+Effective Service Rates and the 𝑐𝜇Rule
+The fluid control objective (12) can be viewed as a linear holding cost on the queue lengths of waiting requests.
+Each unit of waiting class-𝑗requests incurs a holding cost at rate 𝑐𝑗. Serving class-𝑗requests at rate 𝜇𝑗
+therefore reduces the holding-cost rate by 𝑐𝑗𝜇𝑗per unit of time. This motivates the classical 𝑐𝜇rule, which
+prioritizes classes in decreasing order of 𝑐𝑗𝜇𝑗. To apply this rule to our fluid model and establish its optimality,
+we first identify the effective service rates determined by the memory constraint and the step-time model.
+Consider an interval during which only class 𝑗is served. The memory constraint in (17) gives, in
+differential form, that ˜𝑚𝑗𝑑X 𝜋
+𝑗(𝜉) ≤𝑀𝑑𝜉. Hence the class-𝑗service rate in step time is at most 𝑀/ ˜𝑚𝑗, with
+equality when the KV capacity is saturated. At this saturated service rate, the amount of class-𝑗service
+completed per unit of step time is 𝑀/ ˜𝑚𝑗, while the corresponding elapsed clock time is
+ 𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗
+ 𝑀
+˜𝑚𝑗
++ 𝑏.
+This motivates the following definition.
+Definition 3 (Effective service rate). The effective service rate of class 𝑗is
+𝜇𝑗:=
+𝑀/ ˜𝑚𝑗
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗)𝑀/ ˜𝑚𝑗+ 𝑏=
+
+𝑎pf𝑠𝑗+
+
+𝑎kv + 𝑏
+𝑀
+
+˜𝑚𝑗
+ −1
+.
+(18)
+The same coefficients also characterize the allocation of real-time service among multiple classes.
+Substituting the memory constraint (17) into the equation for the real-time clock (16) gives
+𝑑𝑓𝜋(𝜉) =
+𝐽
+∑︁
+𝑗=1
+ 𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗
+ 𝑑X 𝜋
+𝑗(𝜉) + 𝑏𝑑𝜉
+≥
+𝐽
+∑︁
+𝑗=1
+
+𝑎pf𝑠𝑗+
+
+𝑎kv + 𝑏
+𝑀
+
+˜𝑚𝑗
+
+𝑑X 𝜋
+𝑗(𝜉) =
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝑑X 𝜋
+𝑗(𝜉),
+13
+
+
+--- Page 14 ---
+with equality whenever the KV capacity is saturated. Here and below, 𝑑X 𝜋
+𝑗/𝑑𝑓𝜋denotes the Radon–Nikodym
+derivative of the Lebesgue–Stieltjes measure induced by X 𝜋
+𝑗with respect to that induced by 𝑓𝜋. Define
+𝑢𝜋
+𝑗(𝜉) := 𝜇−1
+𝑗
+ 𝑑X 𝜋
+𝑗
+𝑑𝑓𝜋
+!
+(𝜉).
+Then
+ 𝑑X 𝜋
+𝑗
+𝑑𝑓𝜋
+!
+(𝜉) = 𝜇𝑗𝑢𝜋
+𝑗(𝜉),
+𝐽
+∑︁
+𝑗=1
+𝑢𝜋
+𝑗(𝜉) ≤1,
+where the inequality is an equality whenever the KV capacity is saturated. Here, 𝑢𝜋
+𝑗is the fraction of real-time
+service effort allocated to class 𝑗, and 𝜇𝑗is its effective service rate. Thus, the reduced GPU model has the
+same service-effort representation as the classical multiclass single-server model.
+We apply the 𝑐𝜇rule using these effective service rates and index the classes so that
+𝑐1𝜇1 ≥𝑐2𝜇2 ≥· · · ≥𝑐𝐽𝜇𝐽.
+The policy allocates service in this priority order, serving each class at the maximum rate permitted by
+its waiting requests, new arrivals, and the memory constraint (17), and passing any remaining capacity to
+lower-priority classes. For a more detailed characterization of the 𝑐𝜇rule and its generalizations, see for
+example Buyukkoc et al. [8].
+4.2
+Holding-Cost Optimality
+We measure the GPU’s service budget in units of clock time: an interval of length Δ𝜏provides Δ𝜏units of
+budget. Since 𝜇𝑗is the effective service rate of class 𝑗, processing 𝑥class-𝑗requests requires 𝑥/𝜇𝑗units of
+effective work. At each time, the fluid 𝑐𝜇policy considers classes in decreasing order of 𝑐𝑗𝜇𝑗. For each class,
+it uses the available budget to serve waiting requests and new arrivals, then passes any remaining budget to the
+next class. To establish the holding-cost optimality of the 𝑐𝜇rule, we use cumulative completion processes to
+represent the policy and construct these processes recursively in priority order.
+For this recursive construction, let 𝐴𝑗(𝜏) denote the cumulative class-𝑗arrivals by clock time 𝜏:
+𝐴𝑗(𝜏) := 𝑝𝑗,𝐿𝑗(0) +
+∫
+𝜏
+0
+𝜆𝑗(𝑠) 𝑑𝑠.
+(19)
+Definition 4 (Fluid 𝑐𝜇policy). Set 𝑅∗
+0(𝜏) := 𝜏for 𝜏≥0. Recursively, for 𝑗= 1, . . . , 𝐽, define
+𝑅∗
+𝑗(𝜏) := sup
+0≤𝑠≤𝜏
+h
+𝑅∗
+𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+.
+(20)
+Define
+𝐹(𝜏) := 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝜇𝑗
+
+𝑅∗
+𝑗−1(𝜏) −𝑅∗
+𝑗(𝜏)
+
++ 1
+𝑏𝑅∗
+𝐽(𝜏),
+(21)
+and let the policy clock be its generalized inverse:
+𝑓∗(𝜉) := inf {𝜏≥0 : 𝐹(𝜏) ≥𝜉} .
+(22)
+For each class 𝑗= 1, . . . , 𝐽, set
+X∗
+𝑗(𝜉) := 𝜇𝑗
+
+𝑅∗
+𝑗−1( 𝑓∗(𝜉)) −𝑅∗
+𝑗( 𝑓∗(𝜉))
+
+,
+(23)
+and define 𝜋∗:= (U∗, V∗) by
+U∗
+𝑗,𝑘= X∗
+𝑗,
+𝑘= 1, . . . , 𝐿𝑗,
+and
+V∗
+𝑗,𝑘= X∗
+𝑗,
+𝑘= 1, . . . , 𝑜𝑗−1.
+14
+
+
+--- Page 15 ---
+Remark 2 (Policy interpretation). The basic idea is to use Skorokhod reflection to represent the remaining
+service budget passed to the next class and use the effective service rate 𝜇𝑗to convert the budget used by
+class 𝑗into its cumulative completion process. Specifically, 𝑅∗
+0(𝜏) = 𝜏is the total service budget available by
+clock time 𝜏. After classes 1, . . . , 𝑗have been considered, 𝑅∗
+𝑗(𝜏) is the cumulative unused service budget
+passed to the lower-priority classes. Hence, 𝑅∗
+𝑗−1(𝜏) −𝑅∗
+𝑗(𝜏) is the service budget used by class 𝑗. Since
+these budgets are indexed by clock time 𝜏, we evaluate this difference at 𝜏= 𝑓∗(𝜉). Multiplying it by 𝜇𝑗then
+gives X∗
+𝑗(𝜉), the cumulative number of class-𝑗completions by step time 𝜉.
+Theorem 1 (Fluid holding-cost optimality). The fluid 𝑐𝜇policy 𝜋∗is admissible and minimizes the cumulative
+holding cost. Specifically, for every admissible policy 𝜋,
+J (𝜋∗; 𝑧0) ≤J (𝜋; 𝑧0).
+(24)
+The proof is given in Appendix C.
+To better illustrate the priority rule, we consider the case with no new arrivals. We show in Appendix E
+that the policy admits the following closed-form representation:
+X∗
+𝑗(𝜉) =
+"
+𝑀
+˜𝑚𝑗
+ 
+𝜉−
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑝ℓ,𝐿ℓ(0)
+𝑀
+!# 𝑝𝑗,𝐿𝑗(0)
+0
+.
+(25)
+Here [𝑥]𝑦
+0 := max{0, min{𝑥, 𝑦}}. In (25), the slope 𝑀/ ˜𝑚𝑗represents the service rate of class 𝑗when it
+occupies the full memory capacity. At this rate, completing its initial requests takes ˜𝑚𝑗𝑝𝑗,𝐿𝑗(0)/𝑀units of
+step time. The shift Í𝑗−1
+ℓ=1 ˜𝑚ℓ𝑝ℓ,𝐿ℓ(0)/𝑀therefore equals the total service time required by the preceding
+classes. The truncation keeps X∗
+𝑗(𝜉) between 0 and 𝑝𝑗,𝐿𝑗(0). Thus, the formula serves the classes sequentially
+in index order, which is the decreasing order of 𝑐𝑗𝜇𝑗prescribed by the 𝑐𝜇rule. Figure 4 illustrates the 𝑐𝜇
+priority rule for three classes, with each class beginning service when the preceding class has been completed.
+For an illustration under general arrivals, see Appendix B.
+ξ
+X ∗
+j (ξ)
+0
+2
+8
+12
+1
+2
+3
+ξend
+1
+= 2
+ξend
+2
+= 8
+ξend
+3
+= 12
+X ∗
+1 (ξ) = [ξ]2
+0
+X ∗
+2 (ξ) =
+[ ξ−2
+2
+]3
+0
+X ∗
+3 (ξ) =
+[ ξ−8
+4
+]1
+0
+serve class 1
+serve class 2
+serve class 3
+Figure 4: Illustration of the fluid 𝑐𝜇policy for 𝐽= 3, assuming classes are already indexed in priority order. Here
+𝑀= 1, (𝑝1,𝐿1(0), 𝑝2,𝐿2(0), 𝑝3,𝐿3(0)) = (2, 3, 1), and ( ˜𝑚1, ˜𝑚2, ˜𝑚3) = (1, 2, 4).
+15
+
+
+--- Page 16 ---
+4.3
+Completion Time and Throughput Optimality
+For an admissible policy 𝜋, the clock 𝑓𝜋admits a continuous inverse, as noted in Remark 1. Therefore we
+define its average output-token throughput over the real-time interval [0, 𝜏] by
+TP𝜋(𝜏) := 1
+𝜏
+𝐽
+∑︁
+𝑗=1
+
+U𝑗,1
+ ( 𝑓𝜋)−1(𝜏)+
+𝑜𝑗−1
+∑︁
+𝑘=1
+V𝑗,𝑘
+ ( 𝑓𝜋)−1(𝜏)
+= 1
+𝜏
+𝐽
+∑︁
+𝑗=1
+𝑜𝑗X 𝜋
+𝑗
+ ( 𝑓𝜋)−1(𝜏),
+𝜏>0.
+(26)
+The second equality follows from (13).
+Because 𝜆𝑗vanishes after 𝐻, 𝐴𝑗(𝐻) is the total number of class-𝑗requests. For an admissible policy 𝜋
+that eventually completes all requests, define its completion time as
+𝜏𝜋
+c := inf
+n
+𝜏≥0 : X 𝜋
+𝑗
+
+( 𝑓𝜋)−1(𝜏)
+
+= 𝐴𝑗(𝐻)
+o
+.
+(27)
+The equality must hold for all classes simultaneously. If Í𝐽
+𝑗=1 𝑜𝑗𝐴𝑗(𝐻) > 0, then 𝜏𝜋
+c > 0 and
+TP𝜋(𝜏𝜋
+c ) =
+Í𝐽
+𝑗=1 𝑜𝑗𝐴𝑗(𝐻)
+𝜏𝜋
+c
+.
+(28)
+Theorem 2 (Fluid completion-time and throughput optimality). The 𝑐𝜇policy 𝜋∗in Definition 4 minimizes
+the time needed to complete all requests. Specifically, for every admissible policy 𝜋that eventually completes
+all requests,
+𝜏𝜋∗
+c
+≤𝜏𝜋
+c .
+(29)
+When Í𝐽
+𝑗=1 𝑜𝑗𝐴𝑗(𝐻) > 0, completion-time optimality also implies that 𝜋∗maximizes the full-run output-token
+throughput:
+TP𝜋(𝜏𝜋
+c ) ≤TP𝜋∗(𝜏𝜋∗
+c ).
+(30)
+The proof is given in Appendix D.
+5
+Fluid-Limit Convergence
+In this section, we demonstrate that the optimal fluid 𝑐𝜇policy provides operational guidance for the prelimit
+𝑟th system. We construct a smoothed 𝑐𝜇-inspired dynamic policy that is admissible at every finite scale 𝑟. At
+a high level, it follows the 𝑐𝜇priority order when forming admission plans and spreads each plan over a short
+window to satisfy the KV-cache capacity constraint. In particular, this policy does not require knowledge of
+the arrival rates 𝜆𝑗(·). Then, we show that under this policy and fluid scaling, the prelimit system and control
+converge to the fluid system and control under the optimal 𝑐𝜇policy.
+To track the memory used by a request that runs continuously after admission, define the reserved
+KV-cache usage of a class-𝑗request at the start of the GPU step occurring ℎsteps after admission by
+𝑘kv
+𝑗(ℎ) :=
+
+
+min{𝑐chunk(ℎ+1), 𝑠𝑗}, 0≤ℎ≤𝐿𝑗−1,
+𝑠𝑗+ℎ−𝐿𝑗+1, 𝐿𝑗≤ℎ≤𝐿𝑗+𝑜𝑗−2,
+0, otherwise.
+16
+
+
+--- Page 17 ---
+During prefill, this includes the KV slots reserved for the current chunk. During decode, it includes the
+prompt KV states, the KV states of previously generated tokens, and the slot reserved for the current input
+token. It becomes zero after the request completes. Thus, with
+𝐻kv := max
+1≤𝑗≤𝐽(𝐿𝑗+ 𝑜𝑗−2),
+the cumulative KV-cache usage ˜𝑚𝑗satisfies
+𝐻kv
+∑︁
+ℎ=0
+𝑘kv
+𝑗(ℎ) =
+𝐿𝑗
+∑︁
+𝑘=1
+
+𝑐chunk(𝐿𝑗−𝑘) + ℓ𝑗,𝑘
+
++
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+ 𝑜𝑗−𝑘) = ˜𝑚𝑗.
+(31)
+The KV-cache usage at step 𝑡is then
+𝑚𝑟(𝑡) =
+𝐽
+∑︁
+𝑗=1
+𝐻kv
+∑︁
+ℎ=0
+𝑘kv
+𝑗(ℎ)ΔU𝑟
+𝑗,𝐿𝑗(𝑡−ℎ).
+(32)
+For class 𝑗, the requests admitted at step 𝑡−ℎcontribute 𝑘kv
+𝑗(ℎ)ΔU𝑟
+𝑗,𝐿𝑗(𝑡−ℎ) to the KV-cache usage
+at step 𝑡. Summing these contributions over all classes and lags gives 𝑚𝑟(𝑡). Using the priority order
+𝑐1𝜇1 ≥· · · ≥𝑐𝐽𝜇𝐽, we define the smoothed 𝑐𝜇-inspired policy as follows.
+Definition 5 (Smoothed 𝑐𝜇-inspired policy). Choose integer-valued 𝑤𝑟such that
+𝑤𝑟−→∞,
+𝑤𝑟
+𝑟
+−→0,
+𝑤𝑟> 𝐻kv;
+set 𝑦𝑟
+𝑗(𝑡) = ΔU𝑟
+𝑗,𝐿𝑗(𝑡) = 0 for 𝑡< 0, and define the new class-𝑗planned-admission amount recursively in
+priority order by
+𝑦𝑟
+𝑗(𝑡) = min
+("
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+∑︁
+𝑢<𝑡
+𝜂𝑟
+𝑗(𝑢) −
+∑︁
+𝑢<𝑡
+𝑦𝑟
+𝑗(𝑢)
+#+
+, ˜𝑚−1
+𝑗
+
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+−
+∑︁
+ℓ< 𝑗
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡)
+
++)
+.
+(33)
+Construct the admission increment directly by the moving average
+ΔU𝑟
+𝑗,𝐿𝑗(𝑡) =
+1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=0
+𝑦𝑟
+𝑗(𝑡−𝑣).
+(34)
+Recall that we allow fractional requests, so both the planned-admission amounts 𝑦𝑟
+𝑗(𝑡) and the admission
+increments ΔU𝑟
+𝑗,𝐿𝑗(𝑡) may take noninteger values. For 𝑘= 1, . . . , 𝐿𝑗−1, we have
+ΔU𝑟
+𝑗,𝑘(𝑡) = ΔU𝑟
+𝑗,𝐿𝑗
+ 𝑡−(𝐿𝑗−𝑘).
+(35)
+For 𝑘= 1, . . . , 𝑜𝑗−1, we have
+ΔV𝑟
+𝑗,𝑘(𝑡) = ΔU𝑟
+𝑗,𝐿𝑗
+ 𝑡−(𝐿𝑗+ 𝑜𝑗−1 −𝑘).
+(36)
+Remark 3. The choice 𝑤𝑟= max{𝐻kv + 1, ⌈√𝑟⌉} satisfies the required conditions. The condition 𝑤𝑟→∞
+smooths the step-level admission plans, whereas 𝑤𝑟/𝑟→0 ensures that the smoothing window vanishes in
+fluid time. At step 𝑡, 𝑦𝑟
+𝑗(𝑡) specifies how many class-𝑗requests are assigned an admission plan. Equation (34)
+schedules 𝑦𝑟
+𝑗(𝑡)/𝑤𝑟of this plan to enter the GPU in each of steps 𝑡, . . . , 𝑡+ 𝑤𝑟−1, so the plan is carried
+out over a 𝑤𝑟-step window. Once admitted, each request runs continuously until completion; its subsequent
+17
+
+
+--- Page 18 ---
+stage-completion increments are therefore the time shifts in (35)–(36). In Equation (33), the first term is the
+number of class-𝑗requests available at step 𝑡that have not yet received an admission plan, while the second
+is the remaining per-step planning budget expressed in class-𝑗requests. The first term can equivalently be
+written using the waiting-queue length as
+"
+𝑝𝑟
+𝑗,𝐿𝑗(𝑡) −1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=1
+(𝑤𝑟−𝑣)𝑦𝑟
+𝑗(𝑡−𝑣)
+#+
+.
+The subtracted sum is the portion of earlier admission plans that has not yet entered the GPU, so pending
+plans are not included when a new plan is formed.
+The following proposition establishes the admissibility of the policy in the prelimit queueing model.
+Proposition 1 (Admissibility). Suppose that, initially, some requests may be waiting, but no requests are
+being processed on the GPU. Then, the policy in Definition 5 is admissible for the prelimit queueing model.
+Proposition 1 establishes policy admissibility at every finite scale. Its proof is deferred to Appendix F.
+We next show that the smoothed 𝑐𝜇-inspired policy converges under fluid scaling to the fluid 𝑐𝜇policy.
+Theorem 3 (Fluid-limit convergence). Suppose initially no requests are being processed on the GPU, and the
+initial waiting queue lengths satisfy
+1
+𝑟𝑝𝑟
+𝑗,𝐿𝑗(0) −→𝑝𝑗,𝐿𝑗(0),
+𝑗= 1, . . . , 𝐽.
+Consider prelimit systems (6) controlled by the smoothed 𝑐𝜇-inspired policy in Definition 5. Then, for every
+𝑇< ∞and every class 𝑗, the prelimit cumulative control processes and system clock converge to the limiting
+𝑐𝜇-policy and the corresponding clock:
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+
+P−→0,
+𝑘= 1, . . . , 𝐿𝑗,
+(37)
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟V𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+
+P−→0,
+𝑘= 1, . . . , 𝑜𝑗−1;
+(38)
+sup
+0≤𝜉≤𝑇
+ ¯𝑓𝑟(𝜉) −𝑓∗(𝜉)
+ P−→0.
+(39)
+Moreover, the state processes converge to that of the limiting system under the optimal 𝑐𝜇-policy:
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟𝑝𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −𝑝𝜋∗
+𝑗,𝑘(𝜉)
+
+P−→0,
+𝑘= 1, . . . , 𝐿𝑗,
+(40)
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟𝑑𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −𝑑𝜋∗
+𝑗,𝑘(𝜉)
+
+P−→0,
+𝑘= 1, . . . , 𝑜𝑗−1.
+(41)
+The proof of Theorem 3 is deferred to Appendix G. The limit ( 𝑓∗, X∗) is the fluid 𝑐𝜇policy in Definition 4.
+It is holding-cost optimal by Theorem 1 and completion-time and throughput optimal by Theorem 2. Thus,
+the smoothing used at finite scale disappears under fluid scaling, and the real-time clock, system states, and
+the fluid-scaled cumulative stage-completion processes converge uniformly on compacts in probability to the
+optimal fluid trajectory.
+6
+Numerical Experiments
+In this section, we evaluate two practical implementations of the 𝑐𝜇ordering on a real LLM serving engine.
+We conduct semi-synthetic experiments using prompt lengths, decode lengths, and arrival rates derived from
+a real-world dataset [40].
+18
+
+
+--- Page 19 ---
+6.1
+Experimental Setup
+We run Meta-Llama-3-8B-Instruct [19] using vLLM [25], with each run using a single NVIDIA H800 GPU.
+Within each experimental group, all policies are run sequentially on the same GPU. We calibrate the
+step-time model separately for each GPU to estimate 𝑎pf, 𝑎kv, and 𝑏. Substituting these estimates and request
+𝑖’s prompt and output lengths into the effective-service-rate formula (18) gives its estimated service rate b𝜇𝑖
+for the 𝑐𝜇ordering.
+We use the To-B, To-C, Thinking, and Coder traces from the Qwen-Bailian Anonymous Dataset [40].
+To-B covers business-facing API calls and task automation, while To-C covers consumer-facing interactive
+chat. Thinking focuses on reasoning-intensive chat, and Coder covers code generation and interactive
+programming. These anonymized production traces each cover a two-hour period. Each record provides a
+relative arrival time and prompt and output lengths. We retain only requests whose combined prompt and
+output lengths do not exceed the 8K-token context window of Meta-Llama-3-8B-Instruct. We adjust the
+arrival rates to achieve a traffic intensity of approximately 0.95. For replay, we configure the LLM engine to
+generate exactly the specified number of output tokens for each request. Table 2 summarizes their lengths and
+eligible request counts.
+Table 2: Eligible requests in the four production traces. Prompt and output lengths are measured in tokens.
+Trace
+Requests
+Mean prompt length
+Mean output length
+To-B
+172,015
+863.0
+88.4
+To-C
+39,937
+1635.2
+407.2
+Thinking
+7,057
+2494.2
+1993.9
+Coder
+27,099
+2539.7
+727.8
+Figure 5 compares the joint prompt–output length distributions. On average, To-B has the shortest
+prompts and outputs, followed by To-C. Thinking and Coder have similarly long prompts, but Thinking has
+substantially longer outputs, consistent with its focus on long-form reasoning. We use To-B to construct the
+semi-synthetic workloads in Section 6.3, and replay all four traces after time compression in Section 6.4.
+6.2
+Policies and Performance Measures
+Based on the 𝑐𝜇priority rule, we implement two practical scheduling policies: 𝑐𝜇and 𝑐𝜇-backfill. We
+compare them with the default vLLM scheduler, MC-SF [23], SVF [24], and WAIT-frac, a fractional
+implementation of WAIT [4]. The 𝑐𝜇, 𝑐𝜇-backfill, MC-SF, and SVF policies order waiting requests by
+priority. All policies except the default vLLM scheduler use nonpreemptive implementations and assume that
+each request’s output length is known.
+These nonpreemptive policies check future KV-cache usage before admission, accounting for cache
+growth and memory released upon completion. A request is admitted only if the total KV-cache usage will
+remain within 𝑀at every future GPU step.
+Using the future KV-cache feasibility check, the 𝑐𝜇policy scans waiting requests in decreasing 𝑐𝑖b𝜇𝑖order
+and stops at the first infeasible request. The 𝑐𝜇-backfill policy uses the same ordering and feasibility check.
+When a request cannot be admitted immediately, the policy uses the future KV-cache feasibility check to find
+its earliest feasible future admission step and assumes that the request is admitted at that step in subsequent
+checks. It then continues scanning lower-priority requests, admitting a request immediately if the feasibility
+check is satisfied with all these planned admissions included. Figure 6 illustrates this procedure. Both policies
+are nonpreemptive and continuously serve admitted requests until completion.
+19
+
+
+--- Page 20 ---
+1
+16
+256
+4096
+Prompt length s (tokens)
+1
+16
+256
+4096
+Output length o (tokens)
+10−3
+10−2
+10−1
+100
+Requests per bin (%)
+(a) To-B
+1
+16
+256
+4096
+Prompt length s (tokens)
+1
+16
+256
+4096
+Output length o (tokens)
+10−3
+10−2
+10−1
+100
+Requests per bin (%)
+(b) To-C
+1
+16
+256
+4096
+Prompt length s (tokens)
+1
+16
+256
+4096
+Output length o (tokens)
+10−3
+10−2
+10−1
+100
+Requests per bin (%)
+(c) Thinking
+1
+16
+256
+4096
+Prompt length s (tokens)
+1
+16
+256
+4096
+Output length o (tokens)
+10−3
+10−2
+10−1
+100
+Requests per bin (%)
+(d) Coder
+Figure 5: Joint prompt–output length distributions of eligible requests in (a) To-B, (b) To-C, (c) Thinking, and (d)
+Coder. Both axes use logarithmic token scales.
+20
+
+
+--- Page 21 ---
+KV-cache tokens (×103)
+20
+24
+28
+32
+𝑀
+𝑅1 starts
+𝑅2 starts
+𝑅3 starts
+0
+200
+360
+560
+800
+1000
+1200
+GPU steps after 𝑡
+Backfill
+starts
+Backfill completes
+Resident / selected
+Backfill
+Reserved 𝑅1
+Reserved 𝑅2
+Reserved 𝑅3
+Figure 6: Illustrative KV-cache profiles for reservations and backfilling. The blue area shows 10 resident or already
+selected requests. The orange, purple, and red areas add three reserved requests, each with 512 output tokens, starting at
+𝑡+ 200, 𝑡+ 360, and 𝑡+ 560, respectively. The green area adds a smaller backfill request with 400 output tokens at
+𝑡. KV-cache usage grows as tokens are generated and drops at completion. The combined usage remains below 𝑀,
+preserving all three reserved starts.
+MC-SF orders waiting requests by increasing output length 𝑜𝑖, while SVF orders them by increasing
+cumulative KV-cache volume 𝑠𝑖𝑜𝑖+ 𝑜𝑖(𝑜𝑖+ 1)/2. Both use nonpreemptive implementations with the same
+future KV-cache feasibility check. When 𝑐𝑖= 1, 𝑎pf = 0, and prefill is not chunked, the 𝑐𝜇rule reduces to a
+volume-based priority rule, as in SVF.
+The vanilla version of WAIT described in [4] uses positive integer service quotas for each class and stage,
+so the smallest positive quota is one request per GPU step. When the quota is one, a single waiting request
+is sufficient to make its class eligible for service in the next GPU step, eliminating the intended waiting
+mechanism for request accumulation. In our experiments, however, matching class-wise arrival rates may
+require service quotas below one request per GPU step. We therefore introduce WAIT-frac, which maintains
+fractional credits separately for each class and stage. Serving one request at a stage consumes one unit of
+credit; fractional remainders carry over to subsequent steps, subject to an expiry rule. Runtime KV-cache
+checks enforce memory feasibility.
+In WAIT-frac, the reference step time 𝑇WAIT converts class-wise arrival rates into the credit increments for
+each GPU step. Under our GPU configuration, the original parameter formula for WAIT does not yield a
+positive value of 𝑇WAIT, because Ao et al. [4] assumes a different batch service-time model. We therefore set
+𝑇WAIT = 120 ms, chosen to be comparable to the GPU-step time at peak load.
+For a trace containing 𝑁requests, let 𝜏arr
+𝑖
+and 𝜏comp
+𝑖
+be the arrival and completion times of request 𝑖. We
+define the total request latency as
+Latencytot :=
+𝑁
+∑︁
+𝑖=1
+ 𝜏comp
+𝑖
+−𝜏arr
+𝑖
+ .
+We set 𝑐𝑖= 1 for every request, so 𝑐𝑄(𝜏) counts all arrived but unfinished requests, including those on the
+GPU. Our primary performance measure is the average request latency:
+Latencyavg := 1
+𝑁Latencytot = 1
+𝑁
+∫∞
+0
+𝑐𝑄(𝜏) 𝑑𝜏.
+Remark 4. Request 𝑖contributes one to 𝑐𝑄(𝜏) exactly when 𝜏arr
+𝑖
+≤𝜏< 𝜏comp
+𝑖
+. Summing these contributions
+21
+
+
+--- Page 22 ---
+and integrating gives
+∫∞
+0
+𝑐𝑄(𝜏) 𝑑𝜏=
+𝑁
+∑︁
+𝑖=1
+∫
+𝜏comp
+𝑖
+𝜏arr
+𝑖
+1 𝑑𝜏=
+𝑁
+∑︁
+𝑖=1
+ 𝜏comp
+𝑖
+−𝜏arr
+𝑖
+ = Latencytot .
+We also report the mean time to first token (TTFT), measured from arrival to the first output, and the
+99th percentile of request latency (P99 latency). Clearance time is max𝑖𝜏comp
+𝑖
+−min𝑖𝜏arr
+𝑖. Output-token
+throughput is the total number of generated tokens divided by the time from experiment start to the last
+completion.
+6.3
+Semi-Synthetic Workloads
+We estimate a Gaussian mixture model to cluster eligible To-B requests into 16 classes. For each class, we
+generate Poisson arrivals with time-varying rates based on the source trace and rescale the arrival times to
+attain a traffic intensity of 0.95. We then assume that all requests within each class have identical prompt and
+decode lengths, given by their respective cluster centers. We repeat the experiment eight times, replaying the
+same generated trace for every policy within each repetition.
+Table 3 summarizes all eight repetitions. The 𝑐𝜇-backfill policy has the lowest mean latency, mean TTFT,
+and mean clearance time, and the highest mean output-token throughput. The 𝑐𝜇policy also achieves low
+mean latency, only slightly above 𝑐𝜇-backfill and below all other baselines. WAIT-frac has the lowest mean
+P99 latency, showing that the ranking can differ between average and tail latency.
+Table 3: Results on eight semi-synthetic traces. Average latency and clearance are mean ± sample standard deviation;
+the other columns report means across repetitions. P99 latency is computed within each repetition before averaging.
+Bold values are best among the reported policies.
+Policy
+Average
+latency (s)
+Mean
+TTFT (s)
+P99
+latency (s)
+Clearance
+(s)
+Output
+tokens/s
+𝑐𝜇-backfill
+10.366 ± 0.424
+3.593
+68.678
+3,638.4 ± 12.5
+2,521.1
+𝑐𝜇
+10.759 ± 0.447
+3.901
+71.923
+3,646.2 ± 10.2
+2,515.7
+SVF
+11.177 ± 0.484
+4.340
+140.005
+3,647.9 ± 17.5
+2,514.6
+MC-SF
+18.243 ± 1.480
+11.746
+348.470
+3,642.2 ± 13.3
+2,518.5
+WAIT-frac (120 ms)
+14.671 ± 0.703
+8.604
+67.163
+3,655.8 ± 15.7
+2,509.1
+vLLM
+30.226 ± 3.664
+23.548
+92.676
+3,650.6 ± 18.3
+2,512.8
+6.4
+Real Production Traces
+We next evaluate the policies on To-B, To-C, Thinking, and Coder while retaining their original request
+sequences. For each eligible source trace, we multiply all relative arrival times by a common factor to attain a
+traffic intensity of 0.95. This changes the arrival rate while preserving the request order, relative interarrival
+gaps, and each prompt–output length pair. The length distributions are therefore those shown in Figure 5;
+Figure 7 shows the time-varying arrival rate of To-B after compression. We report one run per policy for each
+source trace, with all policies replaying the same compressed trace.
+Table 4 summarizes the results on the four compressed traces. On To-B, both 𝑐𝜇policies achieve lower
+average latency and mean TTFT than the baselines, with 𝑐𝜇-backfill performing best. On To-C and Coder,
+𝑐𝜇-backfill, 𝑐𝜇, and SVF have similar average latency and mean TTFT. On Thinking, 𝑐𝜇achieves the lowest
+average latency and mean TTFT.
+22
+
+
+--- Page 23 ---
+0
+20
+40
+60
+80
+Time (min)
+0
+20
+40
+60
+Arrival rate (requests/s)
+10-s arrival rate
+Overall mean: 32.55 req/s
+Figure 7: Arrival rate of the time-compressed To-B production trace.
+Table 4: Results on four compressed traces. Average latency (Avg.), mean TTFT, and P99 latency are in seconds;
+throughput (TP) is in output tokens/s. Bold values are best within each trace among the compared policies.
+To-B
+To-C
+Thinking
+Coder
+Policy
+Avg. TTFT P99
+TP
+Avg.
+TTFT P99
+TP
+Avg.
+TTFT
+P99
+TP
+Avg. TTFT P99
+TP
+𝑐𝜇-backfill
+9.472
+2.56 121 2851
+28.265
+14.20 666 3553 160.097 105.84 2134 3543 23.145
+1.90 125 3139
+𝑐𝜇
+10.398
+3.20 128 2821
+28.603
+14.22 685 3521 128.826
+74.79 1838 3526 23.151
+1.95 127 3129
+SVF
+10.688
+3.51 144 2821
+28.137
+14.05 675 3526 139.941
+84.98 1918 3499 23.141
+1.94 127 3130
+MC-SF
+11.911
+5.15 182 2836
+37.158
+22.95 969 3498 152.133
+97.21 1949 3471 25.902
+3.69 152 3114
+vLLM
+35.492
+28.77 130 2838 117.943 103.24 496 3446 361.491 300.61
+829 3282 69.700
+46.89 285 3045
+7
+Conclusion and Future Work
+In this paper, we propose a simple modification of the 𝑐𝜇rule and establish its asymptotic optimality for LLM
+inference scheduling under memory constraints. Interesting directions for future research include extending
+the queueing model to multi-GPU settings and agentic workloads, as well as investigating the impact of
+output-length prediction errors on scheduling performance.
+References
+[1] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav Gulavani,
+Alexey Tumanov, and Ramachandran Ramjee. Taming Throughput-Latency tradeoff in LLM inference
+with Sarathi-Serve. In 18th USENIX Symposium on Operating Systems Design and Implementation
+(OSDI 24), pages 117–134. USENIX Association, 2024. URL https://www.usenix.org/confere
+nce/osdi24/presentation/agrawal.
+[2] Eduardo Alvarez, Vishal Mehta, and Farshad Ghodsian. Inside nvidia rubin gpu architecture: Powering
+the era of agentic ai. NVIDIA Technical Blog, July 2026. URL https://developer.nvidia.c
+om/blog/inside-nvidia-rubin-gpu-architecture-powering-the-era-of-agentic-ai/.
+Accessed: 2026-09-20.
+[3] Ruicheng Ao, Jing Dong, Gan Luo, and David Simchi-Levi. Service-induced congestion in memory-
+constrained LLM serving, 2026. URL https://arxiv.org/abs/2606.15555.
+23
+
+
+--- Page 24 ---
+[4] Ruicheng Ao, Gan Luo, David Simchi-Levi, and Xinshang Wang. Optimizing LLM inference: Fluid-
+Guided online scheduling with memory constraints, 2026. URL https://arxiv.org/abs/2504.1
+1320.
+[5] Patrick Billingsley. Convergence of Probability Measures. Wiley, 2 edition, 1999.
+[6] Maury Bramson. State space collapse with application to heavy traffic limits for multiclass queueing
+networks. Queueing Systems, 30(1–2):89–148, 1998. doi: 10.1023/A:1019160803783. URL
+https://doi.org/10.1023/A:1019160803783.
+[7] Tom Brown, Benjamin Mann, Nick Ryder, Melanie Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind
+Neelakantan, Pranav Shyam, Girish Sastry, Amanda Askell, et al. Language models are few-shot learners.
+Advances in neural information processing systems, 33:1877–1901, 2020.
+[8] Cagatay Buyukkoc, Pravin Varaiya, and Jean Walrand. The 𝑐𝜇rule revisited. Advances in Applied
+Probability, 17(1):237–238, 1985. doi: 10.2307/1427064. URL https://doi.org/10.2307/1427
+064.
+[9] Zixi Chen, Yinyu Ye, and Zijie Zhou. Adaptively robust LLM inference optimization under prediction
+uncertainty, 2025. URL https://arxiv.org/abs/2508.14544.
+[10] EG Coffman and Alexander L Stolyar. Bandwidth packing. Algorithmica, 29(1):70–88, 2001.
+[11] J. G. Dai, Tianze Deng, Yueying Li, and Tianyi Peng. Throughput-optimal scheduling algorithms for
+LLM inference and AI agents, 2026. URL https://arxiv.org/abs/2504.07347.
+[12] Yiding Feng, Siyu Liu, Zonghan Yang, and Yuhao Zhang. General non-clairvoyant KV-Cache scheduling
+via regime-aware routing, 2026. URL https://arxiv.org/abs/2607.09248.
+[13] Yiding Feng, Zonghan Yang, and Yuhao Zhang. Competitive non-clairvoyant KV-Cache scheduling for
+LLM inference, 2026. URL https://arxiv.org/abs/2601.22996.
+[14] David Gamarnik. Stochastic bandwidth packing process: stability conditions via lyapunov function
+technique. Queueing systems, 48(3):339–363, 2004.
+[15] Javad Ghaderi, Yuan Zhong, and Rayadurgam Srikant. Asymptotic optimality of bestfit for stochastic
+bin packing. ACM SIGMETRICS Performance Evaluation Review, 42(2):64–66, 2014.
+[16] GilPress. ChatGPT users statistics. WhatsTheBigData, 2024. URL https://whatsthebigdata.co
+m/chatgpt-users/#google_vignette.
+[17] GitHub. GitHub copilot. https://github.com/features/copilot, 2021.
+[18] Cindy Gordon. ChatGPT and Generative AI innovations are creating sustainability havoc. Forbes, 2024.
+URL https://www.forbes.com/sites/cindygordon/2024/03/12/chatgpt-and-generativ
+e-ai-innovations-are-creating-sustainability-havoc/.
+[19] Aaron Grattafiori et al. The Llama 3 herd of models. arXiv preprint arXiv:2407.21783, 2024. doi:
+10.48550/arXiv.2407.21783. URL https://arxiv.org/abs/2407.21783.
+[20] Varun Gupta and Ana Radovanovic. Lagrangian-based online stochastic bin packing. ACM SIGMETRICS
+Performance Evaluation Review, 43(1):467–468, 2015.
+24
+
+
+--- Page 25 ---
+[21] Chenyu Huang, Zhengyang Tang, Shixi Hu, Ruoqing Jiang, Xin Zheng, Dongdong Ge, Benyou Wang,
+and Zizhuo Wang. Orlm: A customizable framework in training large models for automated optimization
+modeling. Operations Research, 2025.
+[22] Jean Jacod and Albert N. Shiryaev. Limit Theorems for Stochastic Processes. Springer, 2 edition, 2003.
+doi: 10.1007/978-3-662-05265-5.
+[23] Patrick Jaillet, Jiashuo Jiang, Konstantina Mellou, Marco Molinaro, Chara Podimata, and Zijie
+Zhou.
+Online scheduling for LLM inference with KV cache constraints, 2025.
+URL https:
+//arxiv.org/abs/2502.07115.
+[24] Li Kong, Qi Qi, Yinyu Ye, and Zijie Zhou. Geometry-aware online scheduling for LLM serving: From
+theoretical bound to system practice, 2026. URL https://arxiv.org/abs/2606.22327.
+[25] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E.
+Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving
+with PagedAttention. In Proceedings of the 29th Symposium on Operating Systems Principles, pages
+611–626. Association for Computing Machinery, 2023. doi: 10.1145/3600006.3613165. URL
+https://doi.org/10.1145/3600006.3613165.
+[26] Ruihan Lin, Zezhen Ding, Zean Han, and Jiheng Zhang. Large-scale LLM inference with heterogeneous
+workloads: Prefill–decode contention and asymptotically optimal control, 2026.
+URL https:
+//arxiv.org/abs/2602.02987.
+[27] Siva Theja Maguluri, Rayadurgam Srikant, and Lei Ying. Stochastic models of load balancing and
+scheduling in cloud computing clusters. In 2012 Proceedings IEEE Infocom, pages 702–710. IEEE,
+2012.
+[28] Avishai Mandelbaum and Alexander L. Stolyar. Scheduling flexible servers with convex delay costs:
+Heavy-traffic optimality of the generalized 𝑐𝜇-rule. Operations Research, 52(6):836–855, 2004. doi:
+10.1287/opre.1040.0152. URL https://doi.org/10.1287/opre.1040.0152.
+[29] Chengyi Nie, Nian Si, and Zijie Zhou. A queueing-theoretic framework for stability analysis of LLM
+inference with KV cache memory constraints. In Proceedings of the 43rd International Conference on
+Machine Learning, 2026. URL https://arxiv.org/abs/2605.04595.
+[30] OpenAI. ChatGPT. https://chat.openai.com, 2019.
+[31] OpenAI. GPT-4 technical report. arxiv 2303.08774. View in Article, 2(5), 2023.
+[32] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin, James Bradbury, Jonathan Heek,
+Kefan Xiao, Shivani Agrawal, and Jeff Dean. Efficiently scaling transformer inference. Proceedings of
+Machine Learning and Systems, 5:606–624, 2023.
+[33] Walter Rudin. Principles of Mathematical Analysis. McGraw–Hill, 3 edition, 1976.
+[34] Aaditya Singh, Adam Fry, Adam Perelman, Adam Tart, Adi Ganesh, Ahmed El-Kishky, Aidan
+McLaughlin, Aiden Low, AJ Ostrow, Akhila Ananthram, et al. Openai gpt-5 system card. arXiv preprint
+arXiv:2601.03267, 2025.
+[35] Alexander L Stolyar. An infinite server system with general packing constraints. Operations Research,
+61(5):1200–1217, 2013.
+25
+
+
+--- Page 26 ---
+[36] Alexander L Stolyar and Yuan Zhong. A large-scale service system with packing constraints: Minimizing
+the number of occupied servers. ACM SIGMETRICS Performance Evaluation Review, 41(1):41–52,
+2013.
+[37] Alexander L Stolyar and Yuan Zhong. Asymptotic optimality of a greedy randomized algorithm in a
+large-scale service system with general packing constraints. Queueing Systems, 79(2):117–143, 2015.
+[38] Jan A. Van Mieghem.
+Dynamic scheduling with convex delay costs: The generalized 𝑐𝜇rule.
+The Annals of Applied Probability, 5(3):809–833, 1995. doi: 10.1214/aoap/1177004706. URL
+https://doi.org/10.1214/aoap/1177004706.
+[39] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N Gomez, Łukasz
+Kaiser, and Illia Polosukhin. Attention is all you need. Advances in neural information processing
+systems, 30, 2017.
+[40] Jiahao Wang, Jinbo Han, Xingda Wei, Sijie Shen, Dingyan Zhang, Chenguang Fang, Rong Chen,
+Wenyuan Yu, and Haibo Chen. KVCache cache in the wild: Characterizing and optimizing KVCache
+cache at a large cloud provider. In 2025 USENIX Annual Technical Conference (USENIX ATC 25).
+USENIX Association, 2025. URL https://www.usenix.org/conference/atc25/presentati
+on/wang-jiahao.
+[41] Meixuan Wang, Yinyu Ye, and Zijie Zhou. LLM serving optimization with variable prefill and decode
+lengths, 2025. URL https://arxiv.org/abs/2508.06133.
+[42] Ward Whitt. Stochastic-Process Limits: An Introduction to Stochastic-Process Limits and Their
+Application to Queues. Springer, 2002.
+[43] Ward Whitt. Internet supplement to Stochastic-Process Limits: An Introduction to Stochastic-Process
+Limits and Their Application to Queues, 2002. URL https://www.columbia.edu/~ww2040/supp
+lement.html.
+[44] Ruth J. Williams. Diffusion approximations for open multiclass queueing networks: Sufficient conditions
+involving state space collapse. Queueing Systems, 30(1–2):27–88, 1998. doi: 10.1023/A:1019108819713.
+URL https://doi.org/10.1023/A:1019108819713.
+[45] Kuang Xu. Drift method: from stochastic networks to machine learning. URL: https://web. stanford.
+edu/kuangxu/papers/driftmethod. pdf. Last visited on, 3(09), 2023.
+[46] Heyuan Yao, Chutong Gao, Yuan Lyu, Izzy Grosof, and David Simchi-Levi. Multi-turn llm conversations
+under the least-recently-used policy: Mean-field asymptotics and hit ratio approximation. arXiv preprint
+arXiv:2609.02027, 2026.
+[47] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A
+distributed serving system for Transformer-Based generative models. In 16th USENIX Symposium on
+Operating Systems Design and Implementation (OSDI 22), pages 521–538. USENIX Association, 2022.
+URL https://www.usenix.org/conference/osdi22/presentation/yu.
+[48] Noa Zychlinski, Carri W. Chan, and Jing Dong. Managing queues with different resource requirements.
+Operations Research, 71(4):1387–1413, 2023.
+doi: 10.1287/opre.2022.2284.
+URL https:
+//doi.org/10.1287/opre.2022.2284.
+26
+
+
+--- Page 27 ---
+Appendices
+A
+Non-Anticipativity of Prelimit Policies
+Fix 𝑟≥1 and an initial state 𝑧𝑟
+0. The arrival processes are the only source of randomness in the system.
+Define their filtration by
+F 𝑟
+𝜏:= 𝜎
+
+𝑁𝑟
+𝑗
+
+𝑟
+∫𝑠
+0
+𝜆𝑗(𝑢) 𝑑𝑢
+
+: 𝑗= 1, . . . , 𝐽, 0 ≤𝑠≤𝜏
+
+,
+𝜏≥0,
+with the usual augmentation. A prelimit policy is non-anticipative if, at every GPU step 𝑡, all control
+increments ΔU𝑟
+𝑗,𝑘(𝑡) and ΔV𝑟
+𝑗,𝑘(𝑡) are measurable with respect to G𝑟
+𝑡:= F 𝑟
+𝑓𝑟(𝑡).
+We show by induction that 𝑓𝑟(𝑡) is a stopping time with respect to {F 𝑟
+𝜏: 𝜏≥0} for every 𝑡∈Z+. First,
+𝑓𝑟(0) = 0 is a stopping time.
+Suppose that 𝑓𝑟(𝑛) is a stopping time for every 𝑛= 0, . . . , 𝑡. By the non-anticipativity condition, the
+control increments ΔU𝑟
+𝑗,𝑘(𝑡) and ΔV𝑟
+𝑗,𝑘(𝑡), over their respective prefill and decode stages, are G𝑟
+𝑡-measurable.
+The step duration Δ𝑟(𝑡) is a function of these increments, so 𝑓𝑟(𝑡+ 1) = 𝑓𝑟(𝑡) + Δ𝑟(𝑡) is also G𝑟
+𝑡-measurable.
+For every 𝜏≥0, the event {Δ𝑟(𝑡) ≤𝜏−𝑓𝑟(𝑡)} belongs to G𝑟
+𝑡= F 𝑟
+𝑓𝑟(𝑡). By the definition of F 𝑟
+𝑓𝑟(𝑡),
+intersecting this event with { 𝑓𝑟(𝑡) ≤𝜏} gives an event in F 𝑟
+𝜏. Since Δ𝑟(𝑡) ≥0, we obtain
+{ 𝑓𝑟(𝑡+ 1) ≤𝜏} = { 𝑓𝑟(𝑡) ≤𝜏, Δ𝑟(𝑡) ≤𝜏−𝑓𝑟(𝑡)} ∈F 𝑟
+𝜏.
+Thus, 𝑓𝑟(𝑡+ 1) is a stopping time, completing the induction. Consequently, G𝑟
+𝑡= F 𝑟
+𝑓𝑟(𝑡) is well-defined for
+every 𝑡.
+B
+Illustration of the Fluid 𝑐𝜇Policy under General Arrivals
+Figure 8 illustrates the policy for three classes with 𝑐1𝜇1 > 𝑐2𝜇2 > 𝑐3𝜇3. Here, X∗
+𝑗,rt(𝜏) denotes the
+cumulative number of class-𝑗completions by clock time 𝜏. During [0, 2], the class-1 backlog receives all
+available service, while lower-priority classes wait. During [6, 9], class-1 requests are served as they arrive,
+using only part of the service budget; the remainder is used to serve the class-2 backlog. During [9, 11], the
+policy keeps up with arrivals to both classes 1 and 2 and allocates the remaining budget to class 3.
+C
+Proof of Theorem 1
+We first introduce the workload processes used to derive a lower bound on the cumulative holding cost.
+Definition 6 (Workload processes). For an admissible policy 𝜋and each priority prefix {1, . . . , ℓ}, define the
+prefix workload at step time 𝜉by
+𝑊𝜋
+ℓ(𝜉) :=
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝑝𝜋
+𝑗,𝐿𝑗(𝜉),
+ℓ= 1, . . . , 𝐽.
+(42)
+In clock time 𝜏, define the net-input process 𝑔ℓand the corresponding reflected workload process 𝜑ℓby
+𝑔ℓ(𝜏) :=
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝐴𝑗(𝜏) −𝜏,
+𝜑ℓ(𝜏) := 𝑔ℓ(𝜏) −inf
+0≤𝑠≤𝜏(𝑔ℓ(𝑠) ∧0).
+27
+
+
+--- Page 28 ---
+τ
+X ∗
+j,rt(τ)
+0
+2
+5
+6
+9
+11
+15
+1
+2
+3
+4
+X ∗
+1,rt(τ)
+X ∗
+2,rt(τ)
+X ∗
+3,rt(τ)
+service allocation
+1
+2
+1
+1
+2
+1
+2
+3
+3
+drain
+backlog 1
+drain
+backlog 2
+JIT
+arrival 1
+arrival 1
++ backlog 2
+arrivals 1,2
++ backlog 3
+drain
+backlog 3
+c1µ1 > c2µ2 > c3µ3
+Figure 8: Real-time representation of the optimal 𝑐𝜇policy for three priority classes under general arrivals. The
+curves show the cumulative class-level completion processes, and the lower bar shows the corresponding service-effort
+allocation.
+Remark 5 (Workload interpretation). The queue length 𝑝𝜋
+𝑗,𝐿𝑗records the number of waiting class-𝑗requests.
+We use the effective service rate 𝜇𝑗to convert this quantity into real-time units, so 𝑊𝜋
+ℓmeasures the total
+effective workload of waiting requests in the first ℓclasses. Applying the same conversion to cumulative
+arrivals, 𝑔ℓdescribes the net workload input to these classes. Since unused service capacity cannot be saved
+for future arrivals, the Skorokhod reflection 𝜑ℓgives the remaining workload when the full service capacity
+is devoted to these classes whenever they have work waiting. This yields the smallest remaining workload
+permitted by the available capacity, and hence a lower bound on 𝑊𝜋
+ℓat the corresponding clock time.
+Proof. First, we establish a lower bound on J (𝜋; 𝑧0). To obtain this bound, we express the integrand in
+J (𝜋; 𝑧0) as a nonnegative weighted sum of the prefix workloads. Setting 𝑐𝐽+1𝜇𝐽+1 := 0, we obtain
+𝐽
+∑︁
+ℓ=1
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1) 𝑊𝜋
+ℓ(𝜉) =
+𝐽
+∑︁
+ℓ=1
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1)
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝑝𝜋
+𝑗,𝐿𝑗(𝜉)
+=
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝑝𝜋
+𝑗,𝐿𝑗(𝜉)
+𝐽
+∑︁
+ℓ= 𝑗
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1)
+=
+𝐽
+∑︁
+𝑗=1
+𝑐𝑗𝑝𝜋
+𝑗,𝐿𝑗(𝜉).
+(43)
+It remains to show that 𝜑ℓprovides a lower bound on the prefix workload 𝑊𝜋
+ℓ. Using the queue balance
+𝑝𝜋
+𝑗,𝐿𝑗(𝜉) = 𝐴𝑗( 𝑓𝜋(𝜉)) −X 𝜋
+𝑗(𝜉), we first write
+𝑊𝜋
+ℓ(𝜉) =
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝐴𝑗( 𝑓𝜋(𝜉)) −
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗X 𝜋
+𝑗(𝜉).
+(44)
+We next establish two inequalities for {X 𝜋
+𝑗}𝐽
+𝑗=1. The memory constraint in (17) gives
+𝑑𝜉≥1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝑑X 𝜋
+𝑗(𝜉).
+28
+
+
+--- Page 29 ---
+Together with the definitions of 𝑓𝜋and 𝜇𝑗, this yields
+𝑑𝑓𝜋(𝜉) =
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) 𝑑X 𝜋
+𝑗(𝜉) + 𝑏𝑑𝜉
+≥
+𝐽
+∑︁
+𝑗=1
+
+𝑎pf𝑠𝑗+
+
+𝑎kv + 𝑏
+𝑀
+
+˜𝑚𝑗
+
+𝑑X 𝜋
+𝑗(𝜉)
+=
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝑑X 𝜋
+𝑗(𝜉).
+(45)
+Since X 𝜋
+𝑗is nondecreasing and X 𝜋
+𝑗(0) = 𝑓𝜋(0) = 0, integrating over [0, 𝜉] and [𝜉′, 𝜉], respectively, gives,
+for 0 ≤𝜉′ ≤𝜉,
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗X 𝜋
+𝑗(𝜉) ≤𝑓𝜋(𝜉),
+and
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗
+
+X 𝜋
+𝑗(𝜉) −X 𝜋
+𝑗(𝜉′)
+
+≤𝑓𝜋(𝜉) −𝑓𝜋(𝜉′).
+(46)
+Substituting the first inequality into (44), we obtain
+𝑊𝜋
+ℓ(𝜉) ≥
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝐴𝑗( 𝑓𝜋(𝜉)) −𝑓𝜋(𝜉) = 𝑔ℓ( 𝑓𝜋(𝜉)).
+(47)
+Substituting the second inequality and using 𝑊𝜋
+ℓ(𝜉′) ≥0, we obtain
+𝑊𝜋
+ℓ(𝜉) ≥
+ℓ
+∑︁
+𝑗=1
+𝜇−1
+𝑗
+
+𝐴𝑗( 𝑓𝜋(𝜉)) −X 𝜋
+𝑗(𝜉′)
+
+−𝑓𝜋(𝜉) + 𝑓𝜋(𝜉′)
+= 𝑊𝜋
+ℓ(𝜉′) + 𝑔ℓ( 𝑓𝜋(𝜉)) −𝑔ℓ( 𝑓𝜋(𝜉′))
+≥𝑔ℓ( 𝑓𝜋(𝜉)) −𝑔ℓ( 𝑓𝜋(𝜉′)).
+(48)
+Combining these two workload bounds and taking the supremum over 0 ≤𝜉′ ≤𝜉, we obtain
+𝑊𝜋
+ℓ(𝜉) ≥𝑔ℓ( 𝑓𝜋(𝜉)) −
+inf
+0≤𝜉′≤𝜉
+ 𝑔ℓ( 𝑓𝜋(𝜉′)) ∧0
+= 𝑔ℓ( 𝑓𝜋(𝜉)) −
+inf
+0≤𝑠≤𝑓𝜋( 𝜉)
+ 𝑔ℓ(𝑠) ∧0
+= 𝜑ℓ( 𝑓𝜋(𝜉)),
+(49)
+where the change of variable 𝑠= 𝑓𝜋(𝜉′) uses the continuity and monotonicity of 𝑓𝜋, together with 𝑓𝜋(0) = 0.
+The clock satisfies 𝑓𝜋(𝜉) ≥𝑏𝜉→∞because 𝑏> 0. Thus, changing variables to 𝜏= 𝑓𝜋(𝜉) preserves the
+29
+
+
+--- Page 30 ---
+integration limits 0 and ∞. Finally, using (43), (49), and 𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1 ≥0, we obtain
+J (𝜋; 𝑧0) =
+∫∞
+0
+𝐽
+∑︁
+𝑗=1
+𝑐𝑗𝑝𝜋
+𝑗,𝐿𝑗(𝜉) 𝑑𝑓𝜋(𝜉)
+=
+∫∞
+0
+𝐽
+∑︁
+ℓ=1
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1) 𝑊𝜋
+ℓ(𝜉) 𝑑𝑓𝜋(𝜉)
+≥
+∫∞
+0
+𝐽
+∑︁
+ℓ=1
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1) 𝜑ℓ( 𝑓𝜋(𝜉)) 𝑑𝑓𝜋(𝜉)
+=
+∫lim𝜉→∞𝑓𝜋( 𝜉)
+𝑓𝜋(0)
+𝐽
+∑︁
+ℓ=1
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1) 𝜑ℓ(𝜏) 𝑑𝜏
+=
+∫∞
+0
+𝐽
+∑︁
+ℓ=1
+(𝑐ℓ𝜇ℓ−𝑐ℓ+1𝜇ℓ+1) 𝜑ℓ(𝜏) 𝑑𝜏.
+Next, we prove that 𝜋∗is admissible by verifying the three conditions in Definition 2.
+We first show that 𝐹is a continuous strictly increasing bijection from [0, ∞) onto itself, so that 𝑓∗= 𝐹−1
+is well defined. Since 𝑅∗
+0 and 𝐴𝑗are continuous and the operations [·]+ and sup0≤𝑠≤𝜏preserve continuity,
+each 𝑅∗
+𝑗defined recursively by (20) is continuous. Each 𝑅∗
+𝑗is also nondecreasing because it is defined using
+sup0≤𝑠≤𝜏. The recursion also gives 𝑅∗
+𝑗(0) = 0. Therefore, by the definition of 𝐹in (21), 𝐹is continuous with
+𝐹(0) = 0.
+To establish strict monotonicity and unboundedness of 𝐹, we use the following lemma.
+Lemma 1. Let 0 ≤𝜏1 ≤𝜏2. Then, for 𝑗= 1, . . . , 𝐽,
+𝑅∗
+𝑗(𝜏2) −𝑅∗
+𝑗(𝜏1) ≤𝑅∗
+𝑗−1(𝜏2) −𝑅∗
+𝑗−1(𝜏1).
+For 0 ≤𝜏1 < 𝜏2, by the definition of 𝐹in (21), we have
+𝐹(𝜏2) −𝐹(𝜏1) =
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝜇𝑗
+𝑀
+
+𝑅∗
+𝑗−1(𝜏2) −𝑅∗
+𝑗(𝜏2) −𝑅∗
+𝑗−1(𝜏1) + 𝑅∗
+𝑗(𝜏1)
+
++ 1
+𝑏
+
+𝑅∗
+𝐽(𝜏2) −𝑅∗
+𝐽(𝜏1)
+
+.
+By Lemma 1 and the monotonicity of 𝑅∗
+𝑗, all increments on the right-hand side are nonnegative. Since 𝑏> 0,
+𝑀> 0, ˜𝑚𝑗> 0, and 𝜇𝑗> 0, we can set
+𝜅:= min
+ 1
+𝑏, ˜𝑚1𝜇1
+𝑀
+, . . . , ˜𝑚𝐽𝜇𝐽
+𝑀
+
+> 0.
+We can therefore bound each coefficient below by 𝜅. By telescoping and using 𝑅∗
+0(𝜏) = 𝜏, we obtain
+𝐹(𝜏2)−𝐹(𝜏1)≥𝜅
+ 𝐽
+∑︁
+𝑗=1
+
+𝑅∗
+𝑗−1(𝜏2)−𝑅∗
+𝑗(𝜏2)−𝑅∗
+𝑗−1(𝜏1)+𝑅∗
+𝑗(𝜏1)
+
++𝑅∗
+𝐽(𝜏2)−𝑅∗
+𝐽(𝜏1)
+!
+=𝜅
+
+𝑅∗
+0(𝜏2)−𝑅∗
+0(𝜏1)
+
+=𝜅(𝜏2−𝜏1)>0.
+This proves that 𝐹is strictly increasing. Taking 𝜏1 = 0 and using 𝐹(0) = 0, we also obtain 𝐹(𝜏) ≥𝜅𝜏→∞.
+Together with continuity, these properties show that 𝐹maps [0, ∞) bijectively onto itself. Consequently, 𝑓∗
+in (22) is well defined and satisfies 𝐹( 𝑓∗(𝜉)) = 𝜉.
+30
+
+
+--- Page 31 ---
+We next verify that each X∗
+𝑗is continuous and nondecreasing, with X∗
+𝑗(0) = 0. Since 𝑓∗and all 𝑅∗
+𝑗
+are continuous, X∗
+𝑗defined in (23) is continuous. Since 𝑓∗(0) = 0 and 𝑅∗
+𝑗(0) = 0 for all 𝑗, (23) also gives
+X∗
+𝑗(0) = 0. For 0 ≤𝜉1 ≤𝜉2, using 𝑓∗(𝜉1) ≤𝑓∗(𝜉2) and Lemma 1, we obtain
+X∗
+𝑗(𝜉2) −X∗
+𝑗(𝜉1) = 𝜇𝑗
+
+𝑅∗
+𝑗−1
+  𝑓∗(𝜉2) −𝑅∗
+𝑗−1
+  𝑓∗(𝜉1)
+−𝜇𝑗
+
+𝑅∗
+𝑗
+  𝑓∗(𝜉2) −𝑅∗
+𝑗
+  𝑓∗(𝜉1)
+≥0.
+We next verify the state constraints. For the intermediate-stage states, substituting U∗
+𝑗,𝑘= V∗
+𝑗,𝑘= X∗
+𝑗from
+Definition 4 into (9), we obtain
+𝑝𝜋∗
+𝑗,𝑘(𝜉) = 𝑝𝑗,𝑘(0) + X∗
+𝑗(𝜉) −X∗
+𝑗(𝜉) = 0,
+and
+𝑑𝜋∗
+𝑗,𝑘(𝜉) = 𝑑𝑗,𝑘(0) + X∗
+𝑗(𝜉) −X∗
+𝑗(𝜉) = 0.
+It remains to show that the waiting-queue lengths satisfy 𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) ≥0.
+𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) = 𝐴𝑗( 𝑓∗(𝜉)) −X∗
+𝑗(𝜉) = 𝜇𝑗
+
+𝜇−1
+𝑗𝐴𝑗( 𝑓∗(𝜉)) −𝑅∗
+𝑗−1( 𝑓∗(𝜉)) + 𝑅∗
+𝑗( 𝑓∗(𝜉))
+
+.
+Since
+𝑅∗
+𝑗( 𝑓∗(𝜉)) =
+sup
+0≤𝑠≤𝑓∗( 𝜉)
+h
+𝑅∗
+𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+≥
+h
+𝑅∗
+𝑗−1( 𝑓∗(𝜉)) −𝜇−1
+𝑗𝐴𝑗( 𝑓∗(𝜉))
+i+
+≥𝑅∗
+𝑗−1( 𝑓∗(𝜉)) −𝜇−1
+𝑗𝐴𝑗( 𝑓∗(𝜉)),
+we have 𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) ≥0. We next verify the memory constraint (17). Using the identity 𝐹( 𝑓∗(𝜉)) = 𝜉, for each
+𝜉≥0,
+𝜉= 𝐹( 𝑓∗(𝜉)) = 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝜇𝑗
+
+𝑅∗
+𝑗−1( 𝑓∗(𝜉)) −𝑅∗
+𝑗( 𝑓∗(𝜉))
+
++ 1
+𝑏𝑅∗
+𝐽( 𝑓∗(𝜉))
+= 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗X∗
+𝑗(𝜉) + 1
+𝑏𝑅∗
+𝐽( 𝑓∗(𝜉)).
+(50)
+Thus, for 0 ≤𝜉1 ≤𝜉2,
+𝜉2 −𝜉1 = 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+
+X∗
+𝑗(𝜉2) −X∗
+𝑗(𝜉1)
+
++ 1
+𝑏
+ 𝑅∗
+𝐽( 𝑓∗(𝜉2)) −𝑅∗
+𝐽( 𝑓∗(𝜉1)) .
+Equivalently,
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+
+X∗
+𝑗(𝜉2) −X∗
+𝑗(𝜉1)
+
+= 𝑀(𝜉2 −𝜉1) −𝑀
+𝑏
+ 𝑅∗
+𝐽( 𝑓∗(𝜉2)) −𝑅∗
+𝐽( 𝑓∗(𝜉1)) .
+Since 𝑓∗and 𝑅∗
+𝐽are nondecreasing, 𝑅∗
+𝐽( 𝑓∗(𝜉2)) −𝑅∗
+𝐽( 𝑓∗(𝜉1)) ≥0. Therefore, for 0 ≤𝜉1 ≤𝜉2,
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+
+X∗
+𝑗(𝜉2) −X∗
+𝑗(𝜉1)
+
+≤𝑀(𝜉2 −𝜉1),
+which is exactly the memory constraint.
+31
+
+
+--- Page 32 ---
+Finally, we verify that 𝑓∗satisfies the clock equation (16). By telescoping and the definition of X∗
+𝑗in
+(23), we obtain
+𝑓∗(𝜉) =
+𝐽
+∑︁
+𝑗=1
+
+𝑅∗
+𝑗−1( 𝑓∗(𝜉)) −𝑅∗
+𝑗( 𝑓∗(𝜉))
+
++ 𝑅∗
+𝐽( 𝑓∗(𝜉))
+=
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗X∗
+𝑗(𝜉) + 𝑅∗
+𝐽( 𝑓∗(𝜉))
+(a)=
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗X∗
+𝑗(𝜉) + 𝑏𝜉−𝑏
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗X∗
+𝑗(𝜉)
+(b)=
+𝐽
+∑︁
+𝑗=1
+ 𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗
+ X∗
+𝑗(𝜉) + 𝑏𝜉,
+where (a) follows from (50) and (b) uses 𝜇−1
+𝑗
+= 𝑎pf𝑠𝑗+
+
+𝑎kv + 𝑏
+𝑀
+
+˜𝑚𝑗. Therefore, {X∗
+𝑗}𝐽
+𝑗=1 satisfies all the
+required conditions. By Section 3.4, the corresponding policy 𝜋∗= (U∗, V∗) is admissible.
+It remains to prove that 𝜋∗attains the lower bound. The following lemma expresses 𝑅∗
+𝑗in terms of the
+net-input process 𝑔𝑗.
+Lemma 2. For 𝑗= 1, . . . , 𝐽and 𝜏≥0,
+𝑅∗
+𝑗(𝜏) = −inf
+0≤𝑠≤𝜏(𝑔𝑗(𝑠) ∧0).
+We now prove 𝑊𝜋∗
+𝑗(𝜉) = 𝜑𝑗( 𝑓∗(𝜉)). Starting from (44) and using Lemma 2, we obtain
+𝑊𝜋∗
+𝑗(𝜉) =
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟( 𝑓∗(𝜉)) −
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟X∗
+𝑟(𝜉)
+=
+𝑗
+∑︁
+𝑟=1
+
+𝜇−1
+𝑟𝐴𝑟( 𝑓∗(𝜉)) −𝑅∗
+𝑟−1( 𝑓∗(𝜉)) + 𝑅∗
+𝑟( 𝑓∗(𝜉))
+
+=
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟( 𝑓∗(𝜉)) −𝑓∗(𝜉) + 𝑅∗
+𝑗( 𝑓∗(𝜉))
+=𝑔𝑗( 𝑓∗(𝜉)) −
+inf
+0≤𝑠≤𝑓∗( 𝜉)(𝑔𝑗(𝑠) ∧0) = 𝜑𝑗( 𝑓∗(𝜉)).
+(51)
+Finally, we compute the cost under this policy:
+J (𝜋∗; 𝑧0) =
+∫∞
+0
+𝐽
+∑︁
+𝑗=1
+𝑐𝑗𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) 𝑑𝑓∗(𝜉)
+=
+∫∞
+0
+𝐽
+∑︁
+𝑗=1
+ 𝑐𝑗𝜇𝑗−𝑐𝑗+1𝜇𝑗+1
+ 𝑊𝜋∗
+𝑗(𝜉) 𝑑𝑓∗(𝜉)
+=
+∫∞
+0
+𝐽
+∑︁
+𝑗=1
+ 𝑐𝑗𝜇𝑗−𝑐𝑗+1𝜇𝑗+1
+ 𝜑𝑗( 𝑓∗(𝜉)) 𝑑𝑓∗(𝜉)
+=
+∫∞
+0
+𝐽
+∑︁
+𝑗=1
+ 𝑐𝑗𝜇𝑗−𝑐𝑗+1𝜇𝑗+1
+ 𝜑𝑗(𝜏) 𝑑𝜏.
+(52)
+The policy therefore attains the lower bound derived above, proving Theorem 1.
+□
+32
+
+
+--- Page 33 ---
+C.1
+Proof of Lemma 1
+Proof. By the definition of 𝑅∗
+𝑗and the monotonicity of 𝑅∗
+𝑗−1, for every 𝑠∈[0, 𝜏1],
+h
+𝑅∗
+𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+≤
+sup
+0≤𝑢≤𝜏1
+h
+𝑅∗
+𝑗−1(𝑢) −𝜇−1
+𝑗𝐴𝑗(𝑢)
+i+
+= 𝑅∗
+𝑗(𝜏1) ≤𝑅∗
+𝑗(𝜏1) +
+h
+𝑅∗
+𝑗−1(𝜏2) −𝑅∗
+𝑗−1(𝜏1)
+i
+.
+(53)
+For 𝑠∈(𝜏1, 𝜏2], since 𝑅∗
+𝑗−1 and 𝐴𝑗are nondecreasing and 𝜇𝑗> 0, we have
+h
+𝑅∗
+𝑗−1(𝑠)−𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+≤
+h
+𝑅∗
+𝑗−1(𝜏2)−𝜇−1
+𝑗𝐴𝑗(𝜏1)
+i+
+.
+Using [𝑥+ 𝑦]+ ≤𝑥+ [𝑦]+ for 𝑥≥0, we obtain
+h
+𝑅∗
+𝑗−1(𝜏2)−𝜇−1
+𝑗𝐴𝑗(𝜏1)
+i+
+=
+h
+𝑅∗
+𝑗−1(𝜏2)−𝑅∗
+𝑗−1(𝜏1)+𝑅∗
+𝑗−1(𝜏1)−𝜇−1
+𝑗𝐴𝑗(𝜏1)
+i+
+≤ 𝑅∗
+𝑗−1(𝜏2)−𝑅∗
+𝑗−1(𝜏1)+
+h
+𝑅∗
+𝑗−1(𝜏1)−𝜇−1
+𝑗𝐴𝑗(𝜏1)
+i+
+≤𝑅∗
+𝑗(𝜏1)+ 𝑅∗
+𝑗−1(𝜏2)−𝑅∗
+𝑗−1(𝜏1),
+where the last inequality follows from (53). Therefore, for 𝑠∈[0, 𝜏2],
+h
+𝑅∗
+𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+≤𝑅∗
+𝑗(𝜏1) +
+h
+𝑅∗
+𝑗−1(𝜏2) −𝑅∗
+𝑗−1(𝜏1)
+i
+.
+Taking the supremum of both sides over 𝑠∈[0, 𝜏2], we obtain
+𝑅∗
+𝑗(𝜏2) =
+sup
+0≤𝑠≤𝜏2
+h
+𝑅∗
+𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+≤𝑅∗
+𝑗(𝜏1) +
+h
+𝑅∗
+𝑗−1(𝜏2) −𝑅∗
+𝑗−1(𝜏1)
+i
+.
+Therefore, 𝑅∗
+𝑗(𝜏2) −𝑅∗
+𝑗(𝜏1) ≤𝑅∗
+𝑗−1(𝜏2) −𝑅∗
+𝑗−1(𝜏1).
+□
+C.2
+Proof of Lemma 2
+Proof. We first prove, by induction on 𝑗, that
+𝑅∗
+𝑗(𝜏) = sup
+0≤𝑢≤𝜏
+"
+𝑢−
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+,
+where the sum is understood as 0 when 𝑗= 0. For 𝑗= 0, 𝑅∗
+0(𝜏) = sup0≤𝑢≤𝜏[𝑢]+. Suppose the claim holds
+for 𝑗−1. Then
+𝑅∗
+𝑗(𝜏) = sup
+0≤𝑠≤𝜏
+h
+𝑅∗
+𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠)
+i+
+= sup
+0≤𝑠≤𝜏
+
+sup
+0≤𝑢≤𝑠
+"
+𝑢−
+𝑗−1
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+−𝜇−1
+𝑗𝐴𝑗(𝑠)
+
++
+.
+For 0 ≤𝑢≤𝑠≤𝜏, since 𝐴𝑗is nonnegative and nondecreasing, applying the identity
+
+[𝑥]+ −𝑎
++ = [𝑥−𝑎]+
+for 𝑎≥0 gives
+
+"
+𝑢−
+𝑗−1
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+−𝜇−1
+𝑗𝐴𝑗(𝑠)
+
++
+≤
+"
+𝑢−
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+.
+33
+
+
+--- Page 34 ---
+Taking the supremum over 0 ≤𝑢≤𝑠≤𝜏, we obtain
+𝑅∗
+𝑗(𝜏) ≤sup
+0≤𝑢≤𝜏
+"
+𝑢−
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+.
+Conversely, for any 0 ≤𝑢≤𝜏, by the definition of 𝑅∗
+𝑗,
+𝑅∗
+𝑗(𝜏) ≥
+h
+𝑅∗
+𝑗−1(𝑢) −𝜇−1
+𝑗𝐴𝑗(𝑢)
+i+
+≥
+
+"
+𝑢−
+𝑗−1
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+−𝜇−1
+𝑗𝐴𝑗(𝑢)
+
++
+=
+"
+𝑢−
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+.
+Taking the supremum over 𝑢∈[0, 𝜏] gives the reverse inequality. Therefore,
+𝑅∗
+𝑗(𝜏) = sup
+0≤𝑢≤𝜏
+"
+𝑢−
+𝑗
+∑︁
+𝑟=1
+𝜇−1
+𝑟𝐴𝑟(𝑢)
+#+
+= sup
+0≤𝑢≤𝜏
+
+−𝑔𝑗(𝑢)
++ = −inf
+0≤𝑢≤𝜏
+ 𝑔𝑗(𝑢) ∧0 .
+□
+D
+Proof of Theorem 2
+Proof. We first show that the 𝑐𝜇policy 𝜋∗completes all requests in finite time. By (42), the total workload is
+𝑊𝜋∗
+𝐽(𝜉) =
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉).
+Since 𝜇𝑗> 0 and 𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) ≥0, 𝑊𝜋∗
+𝐽(𝜉) = 0 if and only if 𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) = 0 for all 𝑗. For any clock time 𝜏≥𝐻,
+all requests have arrived, so 𝑊𝜋∗
+𝐽(( 𝑓∗)−1(𝜏)) = 0 if and only if all requests have been completed by time 𝜏.
+Let 𝜏:= 𝐻+ Í𝐽
+𝑗=1 𝜇−1
+𝑗𝐴𝑗(𝐻). We will show that 𝑊𝜋∗
+𝐽(( 𝑓∗)−1(𝜏)) = 0. Recall that, by (51),
+𝑊𝜋∗
+𝑗(𝜉) = 𝜑𝑗( 𝑓∗(𝜉)),
+𝑗= 1, . . . , 𝐽,
+𝜉≥0.
+By this identity, it suffices to prove that 𝜑𝐽(𝜏) = 0. We do so by determining the minimum of 𝑔𝐽over [0, 𝜏].
+For 0 ≤𝑠≤𝐻,
+𝑔𝐽(𝑠) =
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝐴𝑗(𝑠) −𝑠≥−𝑠≥−𝐻.
+For 𝐻≤𝑠≤𝜏, the arrival truncation and the definition of 𝜏give
+𝑔𝐽(𝑠) =
+𝐽
+∑︁
+𝑗=1
+𝜇−1
+𝑗𝐴𝑗(𝐻) −𝑠= 𝜏−𝐻−𝑠≥−𝐻,
+with equality at 𝑠= 𝜏. Thus, inf0≤𝑠≤𝜏(𝑔𝐽(𝑠) ∧0) = −𝐻. By the definition of 𝜑𝐽, we obtain
+𝜑𝐽(𝜏) = 𝑔𝐽(𝜏) −inf
+0≤𝑠≤𝜏(𝑔𝐽(𝑠) ∧0) = (−𝐻) −(−𝐻) = 0.
+Equation (51) now gives 𝑊𝜋∗
+𝐽(( 𝑓∗)−1(𝜏)) = 0. Since 𝜏≥𝐻, all requests are completed by this time, so
+𝜏𝜋∗
+c
+≤𝜏< ∞.
+34
+
+
+--- Page 35 ---
+Next, we prove that if an arbitrary admissible policy 𝜋completes all requests at 𝜏𝜋
+c , then 𝜋∗also completes
+all requests by that time. For such a policy 𝜋, we have 𝑊𝜋
+𝐽
+ ( 𝑓𝜋)−1(𝜏𝜋
+c ) = 0. Recall that, by (49),
+𝑊𝜋
+𝐽
+
+( 𝑓𝜋)−1(𝜏)
+
+≥𝜑𝐽(𝜏),
+𝜏≥0.
+Together with (51), this gives
+0 = 𝑊𝜋
+𝐽
+
+( 𝑓𝜋)−1(𝜏𝜋
+c )
+
+≥𝜑𝐽(𝜏𝜋
+c ) = 𝑊𝜋∗
+𝐽
+
+( 𝑓∗)−1(𝜏𝜋
+c )
+
+≥0.
+Since all requests have arrived by 𝜏𝜋
+c , zero workload implies that 𝜋∗has completed all requests by 𝜏𝜋
+c . Thus,
+𝜏𝜋∗
+c
+≤𝜏𝜋
+c , proving (29).
+Finally, we prove the throughput claim. Every policy that completes all requests produces the same total
+number Í𝐽
+𝑗=1 𝑜𝑗𝐴𝑗(𝐻) of output tokens. Therefore, when this number is positive, (28) and (29) give
+TP𝜋(𝜏𝜋
+𝑐) =
+Í𝐽
+𝑗=1 𝑜𝑗𝐴𝑗(𝐻)
+𝜏𝜋𝑐
+≤
+Í𝐽
+𝑗=1 𝑜𝑗𝐴𝑗(𝐻)
+𝜏𝜋∗
+𝑐
+= TP𝜋∗(𝜏𝜋∗
+𝑐),
+which proves (30).
+□
+E
+Derivation of the No-Arrival Closed Forms
+Let 𝐵𝑗:= 𝑝𝑗,𝐿𝑗(0) for 𝑗= 1, . . . , 𝐽. Since 𝜆𝑗(·) ≡0, we have 𝐴𝑗(𝜏) = 𝐵𝑗. Substituting 𝐴𝑗(𝑠) = 𝐵𝑗into the
+definition of 𝑅∗
+𝑗in (20) gives
+𝑅∗
+𝑗(𝜏) =
+"
+𝜏−
+𝑗
+∑︁
+ℓ=1
+𝜇−1
+ℓ𝐵ℓ
+#+
+,
+𝑗= 0, 1, . . . , 𝐽.
+(54)
+For 𝜏∈[Í𝑗−1
+ℓ=1 𝜇−1
+ℓ𝐵ℓ, Í𝑗
+ℓ=1 𝜇−1
+ℓ𝐵ℓ], we have 𝑅∗
+ℓ(𝜏) = 0 for ℓ= 𝑗, . . . , 𝐽. Substituting (54) into the definition
+of 𝐹in (21) yields
+𝐹(𝜏) =
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝐵ℓ
+𝑀
++ ˜𝑚𝑗𝜇𝑗
+𝑀
+ 
+𝜏−
+𝑗−1
+∑︁
+ℓ=1
+𝜇−1
+ℓ𝐵ℓ
+!
+.
+On this interval, substituting (54) into the definition of X∗
+𝑗in (23) gives
+X∗
+𝑗(𝐹(𝜏)) = 𝜇𝑗
+
+𝑅∗
+𝑗−1(𝜏) −𝑅∗
+𝑗(𝜏)
+
+= 𝜇𝑗
+ 
+𝜏−
+𝑗−1
+∑︁
+ℓ=1
+𝜇−1
+ℓ𝐵ℓ
+!
+= 𝑀
+˜𝑚𝑗
+ 
+𝐹(𝜏) −
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝐵ℓ
+𝑀
+!
+,
+where the last equality uses the expression for 𝐹(𝜏) above. Since 𝐹is continuous and strictly increasing,
+𝜉= 𝐹(𝜏) ranges over [Í𝑗−1
+ℓ=1
+˜𝑚ℓ𝐵ℓ
+𝑀, Í𝑗
+ℓ=1
+˜𝑚ℓ𝐵ℓ
+𝑀] on the above 𝜏interval. By (54), X∗
+𝑗(𝜉) = 0 before this
+step-time interval and X∗
+𝑗(𝜉) = 𝐵𝑗after it. Hence, for all 𝜉≥0,
+X∗
+𝑗(𝜉) =
+"
+𝑀
+˜𝑚𝑗
+ 
+𝜉−
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝐵ℓ
+𝑀
+!# 𝐵𝑗
+0
+.
+Using 𝐵𝑗= 𝑝𝑗,𝐿𝑗(0) gives (25).
+35
+
+
+--- Page 36 ---
+F
+Proof of Proposition 1
+Proof. According to Definition 5, Í
+𝑢<𝑡𝜂𝑟
+𝑗(𝑢) and Í
+𝑢<𝑡𝑦𝑟
+𝑗(𝑢) are determined by the history available at step
+𝑡. The term Í
+ℓ< 𝑗˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) involves only higher-priority admission plans, which have already been computed
+using the same history. Thus, by recursion over the priority classes, 𝑦𝑟
+𝑗(𝑡) is G𝑟
+𝑡-measurable and hence
+non-anticipative. Since the moving average and time shifts in (34)–(36) use only current and past values, all
+control increments ΔU𝑟
+𝑗,𝑘(𝑡) and ΔV𝑟
+𝑗,𝑘(𝑡) are also G𝑟
+𝑡-measurable, so the policy is non-anticipative.
+We next prove by induction on 𝑡that the cumulative planned admissions of class 𝑗through step 𝑡do not
+exceed its initial queue length plus cumulative arrivals before step 𝑡:
+𝑡∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) ≤𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢),
+𝑡∈Z+.
+(55)
+For 𝑡= 0, the planning rule (33) gives 0 ≤𝑦𝑟
+𝑗(0) ≤𝑝𝑟
+𝑗,𝐿𝑗(0). Suppose that (55) holds at 𝑡−1. The induction
+hypothesis and the nonnegativity of arrivals give
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) −
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) =
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−2
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) −
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢)
+#
++ 𝜂𝑟
+𝑗(𝑡−1) ≥𝜂𝑟
+𝑗(𝑡−1) ≥0.
+Since this quantity is nonnegative, the first argument of the minimum in the planning rule (33) gives
+𝑦𝑟
+𝑗(𝑡) ≤
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) −
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢)
+#+
+= 𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) −
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢).
+Consequently,
+𝑡∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) =
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) + 𝑦𝑟
+𝑗(𝑡)
+≤
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) +
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) −
+𝑡−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢)
+#
+= 𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢).
+This completes the induction.
+Summing the admission increments in (34) and setting 𝑢= 𝑠−𝑣gives
+U𝑟
+𝑗,𝐿𝑗(𝑡+ 1) = 1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=0
+𝑡∑︁
+𝑠=0
+𝑦𝑟
+𝑗(𝑠−𝑣) = 1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=0
+𝑡−𝑣
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢)
+≤
+ 
+1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=0
+1
+!
+𝑡∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) =
+𝑡∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) ≤𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢),
+where 𝑦𝑟
+𝑗(𝑢) = 0 for 𝑢< 0 and sums with an upper limit below zero are empty. Subtracting U𝑟
+𝑗,𝐿𝑗(𝑡) from
+both sides of the preceding inequality and using the waiting-queue balance yields
+0 ≤ΔU𝑟
+𝑗,𝐿𝑗(𝑡) ≤𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑡−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢) −U𝑟
+𝑗,𝐿𝑗(𝑡) = 𝑝𝑟
+𝑗,𝐿𝑗(𝑡).
+Next, we verify that the service increment at each intermediate stage does not exceed its queue length.
+For a prefill stage 𝑘< 𝐿𝑗, the queueing dynamics give
+𝑝𝑟
+𝑗,𝑘(𝑢+ 1) −𝑝𝑟
+𝑗,𝑘(𝑢) = ΔU𝑟
+𝑗,𝑘+1(𝑢) −ΔU𝑟
+𝑗,𝑘(𝑢).
+36
+
+
+--- Page 37 ---
+Summing over 𝑢= 0, . . . , 𝑡−1 and telescoping the left-hand side, we obtain
+𝑝𝑟
+𝑗,𝑘(𝑡) −𝑝𝑟
+𝑗,𝑘(0) =
+𝑡−1
+∑︁
+𝑢=0
+h
+𝑝𝑟
+𝑗,𝑘(𝑢+ 1) −𝑝𝑟
+𝑗,𝑘(𝑢)
+i
+=
+𝑡−1
+∑︁
+𝑢=0
+h
+ΔU𝑟
+𝑗,𝑘+1(𝑢) −ΔU𝑟
+𝑗,𝑘(𝑢)
+i
+.
+Since the intermediate stages are initially empty, 𝑝𝑟
+𝑗,𝑘(0) = 0. Substituting the stage shifts in (35) gives
+𝑝𝑟
+𝑗,𝑘(𝑡) =
+𝑡−1
+∑︁
+𝑢=0
+ΔU𝑟
+𝑗,𝐿𝑗(𝑢−(𝐿𝑗−𝑘−1)) −
+𝑡−1
+∑︁
+𝑢=0
+ΔU𝑟
+𝑗,𝐿𝑗(𝑢−(𝐿𝑗−𝑘))
+= ΔU𝑟
+𝑗,𝐿𝑗(𝑡−(𝐿𝑗−𝑘)) = ΔU𝑟
+𝑗,𝑘(𝑡).
+The same calculation for the first decode stage and the remaining decode stages gives
+𝑑𝑟
+𝑗,𝑜𝑗−1(𝑡) =
+𝑡−1
+∑︁
+𝑢=0
+h
+ΔU𝑟
+𝑗,1(𝑢)−ΔV𝑟
+𝑗,𝑜𝑗−1(𝑢)
+i
+=ΔU𝑟
+𝑗,𝐿𝑗(𝑡−𝐿𝑗) =ΔV𝑟
+𝑗,𝑜𝑗−1(𝑡),
+𝑜𝑗≥2,
+𝑑𝑟
+𝑗,𝑘(𝑡) =
+𝑡−1
+∑︁
+𝑢=0
+h
+ΔV𝑟
+𝑗,𝑘+1(𝑢)−ΔV𝑟
+𝑗,𝑘(𝑢)
+i
+=ΔU𝑟
+𝑗,𝐿𝑗
+ 𝑡−(𝐿𝑗+𝑜𝑗−1−𝑘) =ΔV𝑟
+𝑗,𝑘(𝑡),
+𝑘=1,...,𝑜𝑗−2.
+Thus each intermediate stage serves exactly the requests available there. Together with the admission bound
+proved above, this verifies the queue-length bounds on all stage-completion increments and the nonnegativity
+of all queueing states.
+We now prove that the memory constraint holds. Induction over the priority classes in the planning rule
+(33) gives, pathwise,
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝑦𝑟
+𝑗(𝑡) ≤
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+𝑀.
+(56)
+Substituting the moving-average admission formula in (34) into the expression for 𝑚𝑟(𝑡) in (32) gives
+𝑚𝑟(𝑡) =
+𝐽
+∑︁
+𝑗=1
+𝐻kv
+∑︁
+ℎ=0
+𝑘kv
+𝑗(ℎ)ΔU𝑟
+𝑗,𝐿𝑗(𝑡−ℎ) = 1
+𝑤𝑟
+𝐽
+∑︁
+𝑗=1
+𝐻kv
+∑︁
+ℎ=0
+𝑤𝑟−1
+∑︁
+𝑣=0
+𝑘kv
+𝑗(ℎ)𝑦𝑟
+𝑗(𝑡−ℎ−𝑣).
+Making the change of variable 𝑢= ℎ+ 𝑣, we obtain
+𝑚𝑟(𝑡) = 1
+𝑤𝑟
+𝐽
+∑︁
+𝑗=1
+𝐻kv
+∑︁
+ℎ=0
+ℎ+𝑤𝑟−1
+∑︁
+𝑢=ℎ
+𝑘kv
+𝑗(ℎ)𝑦𝑟
+𝑗(𝑡−𝑢).
+To exchange the sums over ℎand 𝑢, note that the full range of 𝑢is 0 ≤𝑢≤𝑤𝑟+ 𝐻kv −1. For a fixed 𝑢, the
+admissible values of ℎare exactly those satisfying 0 ≤ℎ≤𝐻kv and 0 ≤𝑢−ℎ≤𝑤𝑟−1. After exchanging
+the order of summation, we factor 𝑦𝑟
+𝑗(𝑡−𝑢) out of the sum over ℎ, since it does not depend on ℎ. This gives
+𝑚𝑟(𝑡) = 1
+𝑤𝑟
+𝑤𝑟+𝐻kv−1
+∑︁
+𝑢=0
+𝐽
+∑︁
+𝑗=1
+𝑦𝑟
+𝑗(𝑡−𝑢)
+∑︁
+0≤ℎ≤𝐻kv
+0≤𝑢−ℎ≤𝑤𝑟−1
+𝑘kv
+𝑗(ℎ)
+≤1
+𝑤𝑟
+𝑤𝑟+𝐻kv−1
+∑︁
+𝑢=0
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝑦𝑟
+𝑗(𝑡−𝑢)
+≤𝑤𝑟+𝐻kv
+𝑤𝑟
+𝑤𝑟
+𝑤𝑟+𝐻kv
+𝑀= 𝑀.
+This establishes the admissibility of the policy.
+□
+37
+
+
+--- Page 38 ---
+G
+Proof of Theorem 3
+We first show that the moving average and the fixed stage delays produce vanishing errors under fluid scaling,
+so it suffices to analyze the cumulative planned-admission processes and the clock approximation constructed
+from them (Lemma 3). We then establish joint 𝐶-tightness and show that every subsequential limit satisfies
+the fluid model’s queue nonnegativity constraints, memory constraint, and clock equation (Lemma 4). The
+key step is to recover the priority rule in the limit: on any interval where a class’s waiting-queue length
+is positive, its priority prefix uses the full capacity and the corresponding residual service budget remains
+constant. This yields the reflection representation that identifies every subsequential limit with the fluid 𝑐𝜇
+policy (Lemma 5).
+We begin by defining the auxiliary processes used throughout the proof.
+Definition 7 (Auxiliary processes). For 𝑁∈Z+, define the cumulative planned-admission process by
+𝑃𝑟
+𝑗(𝑁) :=
+𝑁−1
+∑︁
+𝑡=0
+𝑦𝑟
+𝑗(𝑡),
+𝑃𝑟
+𝑗(0) = 0.
+(57)
+For 𝜉≥0, define its fluid-scaled version by
+¯𝑃𝑟
+𝑗(𝜉) := 1
+𝑟𝑃𝑟
+𝑗(⌊𝑟𝜉⌋).
+Let 𝑛= ⌊𝑟𝜉⌋. Define the linear interpolation b𝑃𝑟
+𝑗of ¯𝑃𝑟
+𝑗and use it to construct a clock approximation b𝑓𝑟(𝜉) of
+¯𝑓𝑟(𝜉) as follows:
+b𝑃𝑟
+𝑗(𝜉) := ¯𝑃𝑟
+𝑗(𝜉) + 𝑟𝜉−𝑛
+𝑟
+𝑦𝑟
+𝑗(𝑛),
+(58)
+b𝑓𝑟(𝜉) :=
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) b𝑃𝑟
+𝑗(𝜉) + 𝑏𝜉.
+(59)
+The continuous approximation of the fluid-scaled cumulative arrival process ¯𝐴𝑟
+𝑗is defined by
+b𝐴𝑟
+𝑗(𝜉) := 𝐴𝑗( b𝑓𝑟(𝜉)) = 𝑝𝑗,𝐿𝑗(0) +
+∫
+b𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠.
+(60)
+Lemma 3. Under the initial condition of Theorem 3, consider the smoothed 𝑐𝜇-inspired policy in Definition 5.
+Then the following statements hold.
+(i) For every scale 𝑟, class 𝑗, and integer time 𝑡,
+0 ≤𝑦𝑟
+𝑗(𝑡) ≤𝑀
+˜𝑚𝑗
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+≤𝑀
+˜𝑚𝑗
+,
+(61)
+0 ≤ΔU𝑟
+𝑗,𝐿𝑗(𝑡) ≤𝑀
+˜𝑚𝑗
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+≤𝑀
+˜𝑚𝑗
+.
+(62)
+Moreover,
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝑦𝑟
+𝑗(𝑡) ≤
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+.
+(63)
+(ii) For every class 𝑗and every 𝑇< ∞,
+sup
+0≤𝜉≤𝑇
+ ¯𝑃𝑟
+𝑗(𝜉) −1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)
+≤𝑀
+2 ˜𝑚𝑗
+𝑤𝑟
+𝑟
+→0.
+(64)
+38
+
+
+--- Page 39 ---
+(iii) For every class 𝑗and every 𝑇< ∞, the following bounds hold for 𝑘= 1, . . . , 𝐿𝑗and 𝑘= 1, . . . , 𝑜𝑗−1,
+respectively:
+sup
+0≤𝜉≤𝑇
+
+U𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋)
+𝑟
+−
+U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)
+𝑟
+ ≤𝐻kv𝑀
+𝑟˜𝑚𝑗
+−→0,
+(65)
+sup
+0≤𝜉≤𝑇
+
+V𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋)
+𝑟
+−
+U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)
+𝑟
+ ≤𝐻kv𝑀
+𝑟˜𝑚𝑗
+−→0.
+(66)
+(iv) For every 𝑇< ∞,
+sup
+0≤𝜉≤𝑇
+
+¯𝑓𝑟(𝜉) −
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) ¯𝑃𝑟
+𝑗(𝜉) −𝑏𝜉
+ −→0.
+(67)
+(v) For every class 𝑗, every fixed 𝑇< ∞, and all 𝜉1, 𝜉2 ∈[0,𝑇],
+sup
+0≤𝜉≤𝑇
+b𝑃𝑟
+𝑗(𝜉) −¯𝑃𝑟
+𝑗(𝜉)
+ ≤𝑀
+𝑟˜𝑚𝑗
+−→0,
+and
+b𝑃𝑟
+𝑗(𝜉2) −b𝑃𝑟
+𝑗(𝜉1)
+ ≤𝑀
+˜𝑚𝑗
+|𝜉2 −𝜉1|.
+(68)
+Moreover, define
+𝐿𝑓:= 𝑏+ 𝑀
+𝐽
+∑︁
+𝑗=1
+𝑎pf𝑠𝑗
+˜𝑚𝑗
++ 𝑎kv
+
+.
+(69)
+Then b𝑓𝑟is 𝐿𝑓-Lipschitz and
+sup
+0≤𝜉≤𝑇
+ ¯𝑓𝑟(𝜉) −b𝑓𝑟(𝜉)
+ −→0.
+(70)
+(vi) For every class 𝑗and every fixed 𝑇< ∞,
+sup
+0≤𝜉≤𝑇
+ ¯𝐴𝑟
+𝑗(𝜉) −b𝐴𝑟
+𝑗(𝜉)
+
+P−→0.
+(71)
+Remark 6 (Interpretation of the prelimit estimates).
+(i) Equations (61) and (62) give memory-based upper bounds on both the class-𝑗planned-admission
+amount 𝑦𝑟
+𝑗(𝑡) and the admission increment ΔU𝑟
+𝑗,𝐿𝑗(𝑡) at each step 𝑡. Equation (63) states that the plans
+for all classes share one memory-based planning budget.
+(ii) Equation (64) shows that the difference between the fluid-scaled cumulative planned admissions ¯𝑃𝑟
+𝑗(𝜉)
+and the fluid-scaled cumulative admissions U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)/𝑟vanishes uniformly on compact step-time
+intervals. Thus, spreading each plan over 𝑤𝑟steps has a negligible effect on cumulative admissions at
+the fluid scale.
+(iii) The prefill-stage delay bound (65) and the decode-stage delay bound (66) show that the fixed delays
+between admission and later stages disappear under fluid scaling. The fluid-scaled cumulative stage-
+completion processes U𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋)/𝑟and V𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋)/𝑟are therefore asymptotically equivalent to the
+fluid-scaled cumulative admission process U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)/𝑟.
+(iv) The clock approximation in (67) uses the fluid-scaled cumulative planned admissions ¯𝑃𝑟
+𝑗(𝜉) to
+approximate the real-time clock ¯𝑓𝑟(𝜉).
+39
+
+
+--- Page 40 ---
+(v) Equations (68) and (70) show that the linear interpolation b𝑃𝑟
+𝑗(𝜉) and the fluid-scaled cumulative
+planned-admission process ¯𝑃𝑟
+𝑗(𝜉), as well as b𝑓𝑟(𝜉) and ¯𝑓𝑟(𝜉), are asymptotically equivalent uniformly
+on compact intervals. Moreover, b𝑃𝑟
+𝑗and b𝑓𝑟are Lipschitz with constants 𝑀/ ˜𝑚𝑗and 𝐿𝑓, respectively,
+independent of 𝑟.
+(vi) Equation (71) shows that the difference between the fluid-scaled cumulative arrival process ¯𝐴𝑟
+𝑗and its
+continuous approximation b𝐴𝑟
+𝑗vanishes uniformly on compact intervals in probability.
+Proof. (i) By the policy definition,
+0 ≤˜𝑚𝑗𝑦𝑟
+𝑗(𝑡) ≤
+"
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+−
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡)
+#+
+≤
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+.
+Equation (34) expresses the admission increments as the moving average of the planned-admission amounts,
+which are zero at negative times. Hence,
+0 ≤ΔU𝑟
+𝑗,𝐿𝑗(𝑡) = 1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=0
+𝑦𝑟
+𝑗(𝑡−𝑣) ≤𝑀
+˜𝑚𝑗
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+≤𝑀
+˜𝑚𝑗
+.
+The planning-budget bound follows by induction over the priority classes: starting from zero, each class
+uses at most the budget remaining after the preceding classes. Specifically, if the budget holds through class
+𝑗−1, its remaining budget is nonnegative, and
+𝑗
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) =
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) + ˜𝑚𝑗𝑦𝑟
+𝑗(𝑡)
+≤
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) +
+"
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+−
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡)
+#+
+=
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+.
+Taking 𝑗= 𝐽proves (63).
+(ii) Fix 𝑁∈Z+. Changing variables 𝑡= 𝑠−𝑣in the inner sum, and using 𝑦𝑟
+𝑗(𝑡) = 0 for 𝑡< 0, gives
+U𝑟
+𝑗,𝐿𝑗(𝑁) =
+𝑁−1
+∑︁
+𝑠=0
+1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=0
+𝑦𝑟
+𝑗(𝑠−𝑣) = 1
+𝑤𝑟
+𝑁−1
+∑︁
+𝑠=0
+𝑠
+∑︁
+𝑡=𝑠−𝑤𝑟+1
+𝑦𝑟
+𝑗(𝑡) = 1
+𝑤𝑟
+𝑁−1
+∑︁
+𝑠=0
+𝑠
+∑︁
+𝑡=max{0,𝑠−𝑤𝑟+1}
+𝑦𝑟
+𝑗(𝑡).
+For each fixed 0 ≤𝑡≤𝑁−1, the admissible values of 𝑠satisfy 𝑡≤𝑠≤min{𝑁−1, 𝑡+ 𝑤𝑟−1}. Exchanging
+the order of summation therefore yields
+U𝑟
+𝑗,𝐿𝑗(𝑁) = 1
+𝑤𝑟
+𝑁−1
+∑︁
+𝑡=0
+min{𝑁−1,𝑡+𝑤𝑟−1}
+∑︁
+𝑠=𝑡
+𝑦𝑟
+𝑗(𝑡) = 1
+𝑤𝑟
+𝑁−1
+∑︁
+𝑡=0
+min{𝑤𝑟, 𝑁−𝑡} 𝑦𝑟
+𝑗(𝑡) =
+𝑁−1
+∑︁
+𝑡=0
+min
+
+1, 𝑁−𝑡
+𝑤𝑟
+
+𝑦𝑟
+𝑗(𝑡).
+40
+
+
+--- Page 41 ---
+Subtracting this expression from 𝑃𝑟
+𝑗(𝑁), and setting 𝑣= 𝑁−𝑡in the last line, gives
+𝑃𝑟
+𝑗(𝑁) −U𝑟
+𝑗,𝐿𝑗(𝑁) =
+𝑁−1
+∑︁
+𝑡=0
+
+1 −min
+
+1, 𝑁−𝑡
+𝑤𝑟
+
+𝑦𝑟
+𝑗(𝑡)
+=
+𝑁−1
+∑︁
+𝑡=max{0,𝑁−𝑤𝑟+1}
+
+1 −𝑁−𝑡
+𝑤𝑟
+
+𝑦𝑟
+𝑗(𝑡)
+= 1
+𝑤𝑟
+min{𝑤𝑟−1,𝑁}
+∑︁
+𝑣=1
+(𝑤𝑟−𝑣)𝑦𝑟
+𝑗(𝑁−𝑣).
+By (i),
+0 ≤𝑃𝑟
+𝑗(𝑁) −U𝑟
+𝑗,𝐿𝑗(𝑁) ≤1
+𝑤𝑟
+𝑤𝑟−1
+∑︁
+𝑣=1
+(𝑤𝑟−𝑣) 𝑀
+˜𝑚𝑗
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+= 𝑀
+˜𝑚𝑗
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+𝑤𝑟−1
+2
+.
+Set 𝑁= ⌊𝑟𝜉⌋, divide by 𝑟, and take the supremum over 0 ≤𝜉≤𝑇. Since 𝑤𝑟/𝑟→0, this gives (64).
+(iii) For any integers 𝑁≥0 and 0 ≤ℎ≤𝐻kv, (i) gives
+0 ≤U𝑟
+𝑗,𝐿𝑗(𝑁) −U𝑟
+𝑗,𝐿𝑗([𝑁−ℎ]+) =
+𝑁−1
+∑︁
+𝑡=[𝑁−ℎ]+
+ΔU𝑟
+𝑗,𝐿𝑗(𝑡) ≤
+
+𝑁−[𝑁−ℎ]+ 𝑀
+˜𝑚𝑗
+≤ℎ𝑀
+˜𝑚𝑗
+≤𝐻kv
+𝑀
+˜𝑚𝑗
+.
+The stage-shift relations (35) and (36), together with zero initial cumulative controls and the convention of
+zero increments at negative times, give
+U𝑟
+𝑗,𝑘(𝑁) = U𝑟
+𝑗,𝐿𝑗
+ [𝑁−(𝐿𝑗−𝑘)]+,
+1 ≤𝑘≤𝐿𝑗,
+V𝑟
+𝑗,𝑘(𝑁) = U𝑟
+𝑗,𝐿𝑗
+ [𝑁−(𝐿𝑗+ 𝑜𝑗−1 −𝑘)]+,
+1 ≤𝑘≤𝑜𝑗−1.
+Apply the preceding bound with ℎ= 𝐿𝑗−𝑘and ℎ= 𝐿𝑗+ 𝑜𝑗−1 −𝑘, respectively; both delays lie between
+zero and 𝐻kv. Setting 𝑁= ⌊𝑟𝜉⌋, dividing by 𝑟, and taking the supremum over 0 ≤𝜉≤𝑇proves the two
+stated bounds.
+(iv) By the definitions of Δ𝑟and 𝑓𝑟, for 𝑁= ⌊𝑟𝜉⌋,
+𝑓𝑟(𝑁) =
+𝑁−1
+∑︁
+𝑡=0
+Δ𝑟(𝑡) = 𝑎𝑟
+pf
+𝑁−1
+∑︁
+𝑡=0
+𝑛𝑟
+pf(𝑡) + 𝑎𝑟
+kv
+𝑁−1
+∑︁
+𝑡=0
+𝑛𝑟
+kv(𝑡) + 𝑏𝑟𝑁.
+Substituting the expressions for 𝑛𝑟
+pf(𝑡) and 𝑛𝑟
+kv(𝑡) yields
+𝑓𝑟(𝑁) = 𝑎𝑟
+pf
+𝐽
+∑︁
+𝑗=1
+𝐿𝑗
+∑︁
+𝑘=1
+ℓ𝑗,𝑘U𝑟
+𝑗,𝑘(𝑁) + 𝑎𝑟
+kv
+𝐽
+∑︁
+𝑗=1
+𝐿𝑗
+∑︁
+𝑘=1
+
+𝑐chunk(𝐿𝑗−𝑘) + ℓ𝑗,𝑘
+
+U𝑟
+𝑗,𝑘(𝑁)
++ 𝑎𝑟
+kv
+𝐽
+∑︁
+𝑗=1
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+ 𝑜𝑗−𝑘)V𝑟
+𝑗,𝑘(𝑁) + 𝑏𝑟𝑁.
+Combining (ii) and (iii) by the triangle inequality gives
+U𝑟
+𝑗,𝑘(𝑁)−𝑃𝑟
+𝑗(𝑁)
+≤
+U𝑟
+𝑗,𝑘(𝑁)−U𝑟
+𝑗,𝐿𝑗(𝑁)
++
+U𝑟
+𝑗,𝐿𝑗(𝑁)−𝑃𝑟
+𝑗(𝑁)
+≤𝑀
+˜𝑚𝑗
+
+𝐻kv+ 𝑤𝑟
+2
+
+,
+1≤𝑘≤𝐿𝑗,
+V𝑟
+𝑗,𝑘(𝑁)−𝑃𝑟
+𝑗(𝑁)
+≤
+V𝑟
+𝑗,𝑘(𝑁)−U𝑟
+𝑗,𝐿𝑗(𝑁)
++
+U𝑟
+𝑗,𝐿𝑗(𝑁)−𝑃𝑟
+𝑗(𝑁)
+≤𝑀
+˜𝑚𝑗
+
+𝐻kv+ 𝑤𝑟
+2
+
+,
+1≤𝑘≤𝑜𝑗−1.
+41
+
+
+--- Page 42 ---
+Using Í𝐿𝑗
+𝑘=1 ℓ𝑗,𝑘= 𝑠𝑗and the identity for ˜𝑚𝑗in (31), we can write the clock difference as
+𝑓𝑟(𝑁)−
+𝐽
+∑︁
+𝑗=1
+(𝑎𝑟
+pf𝑠𝑗+𝑎𝑟
+kv ˜𝑚𝑗)𝑃𝑟
+𝑗(𝑁)−𝑏𝑟𝑁
+=
+𝐽
+∑︁
+𝑗=1
+ 
+𝑎𝑟
+pf
+𝐿𝑗
+∑︁
+𝑘=1
+ℓ𝑗,𝑘
+
+U𝑟
+𝑗,𝑘(𝑁)−𝑃𝑟
+𝑗(𝑁)
+
++𝑎𝑟
+kv
+𝐿𝑗
+∑︁
+𝑘=1
+[𝑐chunk(𝐿𝑗−𝑘)+ℓ𝑗,𝑘]
+
+U𝑟
+𝑗,𝑘(𝑁)−𝑃𝑟
+𝑗(𝑁)
+
++𝑎𝑟
+kv
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+𝑜𝑗−𝑘)
+
+V𝑟
+𝑗,𝑘(𝑁)−𝑃𝑟
+𝑗(𝑁)
+
+!
+.
+Applying the two bounds above to these differences yields
+sup
+0≤𝜉≤𝑇
+ 𝑓𝑟(𝑁)−
+𝐽
+∑︁
+𝑗=1
+(𝑎𝑟
+pf𝑠𝑗+𝑎𝑟
+kv ˜𝑚𝑗)𝑃𝑟
+𝑗(𝑁)−𝑏𝑟𝑁
+
+≤𝑀
+
+𝐻kv+ 𝑤𝑟
+2
+
+𝐽
+∑︁
+𝑗=1
+1
+˜𝑚𝑗
+"
+𝑎𝑟
+pf
+𝐿𝑗
+∑︁
+𝑘=1
+ℓ𝑗,𝑘+𝑎𝑟
+kv
+ 𝐿𝑗
+∑︁
+𝑘=1
+[𝑐chunk(𝐿𝑗−𝑘)+ℓ𝑗,𝑘]+
+𝑜𝑗−1
+∑︁
+𝑘=1
+(𝑠𝑗+𝑜𝑗−𝑘)
+!#
+= 𝑀
+
+𝐻kv+ 𝑤𝑟
+2
+
+𝐽
+∑︁
+𝑗=1
+𝑎𝑟
+pf𝑠𝑗
+˜𝑚𝑗
++𝑎𝑟
+kv
+
+−→0.
+The convergence follows because 𝑟𝑎𝑟
+pf and 𝑟𝑎𝑟
+kv are bounded by the scaling assumptions and (𝐻kv+𝑤𝑟)/𝑟→0.
+Moreover, (i) implies 0 ≤¯𝑃𝑟
+𝑗(𝜉) ≤𝑀𝑇/ ˜𝑚𝑗for 0 ≤𝜉≤𝑇. Since 𝑟𝑎𝑟
+pf →𝑎pf, we have
+sup
+0≤𝜉≤𝑇
+(𝑟𝑎𝑟
+pf −𝑎pf) ¯𝑃𝑟
+𝑗(𝜉)
+ ≤|𝑟𝑎𝑟
+pf −𝑎pf| 𝑀𝑇
+˜𝑚𝑗
+−→0.
+Similarly, 𝑟𝑎𝑟
+kv →𝑎kv gives
+sup
+0≤𝜉≤𝑇
+(𝑟𝑎𝑟
+kv −𝑎kv) ¯𝑃𝑟
+𝑗(𝜉)
+ ≤|𝑟𝑎𝑟
+kv −𝑎kv| 𝑀𝑇
+˜𝑚𝑗
+−→0.
+For the overhead term, 𝑁/𝑟≤𝑇and |𝑁/𝑟−𝜉| ≤1/𝑟imply
+sup
+0≤𝜉≤𝑇
+|𝑏𝑟𝑁−𝑏𝜉| =
+sup
+0≤𝜉≤𝑇
+(𝑟𝑏𝑟−𝑏) 𝑁
+𝑟+ 𝑏
+ 𝑁
+𝑟−𝜉
+ ≤𝑇|𝑟𝑏𝑟−𝑏| + 𝑏
+𝑟−→0,
+where the convergence follows from 𝑟𝑏𝑟→𝑏. Finally, combining the preceding estimates by the triangle
+inequality gives
+sup
+0≤𝜉≤𝑇
+
+¯𝑓𝑟(𝜉) −
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) ¯𝑃𝑟
+𝑗(𝜉) −𝑏𝜉
+
+≤sup
+0≤𝜉≤𝑇
+
+¯𝑓𝑟(𝜉) −
+𝐽
+∑︁
+𝑗=1
+(𝑎𝑟
+pf𝑠𝑗+ 𝑎𝑟
+kv ˜𝑚𝑗)𝑃𝑟
+𝑗(𝑁) −𝑏𝑟𝑁
++
+𝐽
+∑︁
+𝑗=1
+𝑠𝑗
+sup
+0≤𝜉≤𝑇
+(𝑟𝑎𝑟
+pf −𝑎pf) ¯𝑃𝑟
+𝑗(𝜉)
+
++
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+sup
+0≤𝜉≤𝑇
+(𝑟𝑎𝑟
+kv −𝑎kv) ¯𝑃𝑟
+𝑗(𝜉)
++ sup
+0≤𝜉≤𝑇
+|𝑏𝑟𝑁−𝑏𝜉| −→0.
+42
+
+
+--- Page 43 ---
+This proves (67).
+(v) For 0 ≤𝜉≤𝑇, the definition of b𝑃𝑟
+𝑗in (58) and the one-step bound on 𝑦𝑟
+𝑗in (i) give
+0 ≤b𝑃𝑟
+𝑗(𝜉) −¯𝑃𝑟
+𝑗(𝜉) = 𝑟𝜉−⌊𝑟𝜉⌋
+𝑟
+𝑦𝑟
+𝑗(⌊𝑟𝜉⌋) ≤𝑀
+𝑟˜𝑚𝑗
+.
+This proves the first estimate in (68). On each grid interval [𝑛/𝑟, (𝑛+ 1)/𝑟], the slope of b𝑃𝑟
+𝑗is 𝑦𝑟
+𝑗(𝑛), and
+0 ≤𝑦𝑟
+𝑗(𝑛) ≤𝑀
+˜𝑚𝑗. Consequently, for any 0 ≤𝜉1 ≤𝜉2 ≤𝑇,
+0 ≤b𝑃𝑟
+𝑗(𝜉2) −b𝑃𝑟
+𝑗(𝜉1) ≤𝑀
+˜𝑚𝑗
+(𝜉2 −𝜉1),
+which proves the second estimate.
+The definition of b𝑓𝑟in (59) now gives, for 0 ≤𝜉1 ≤𝜉2 ≤𝑇,
+ b𝑓𝑟(𝜉2)−b𝑓𝑟(𝜉1)
+≤
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+𝑎kv ˜𝑚𝑗)
+b𝑃𝑟
+𝑗(𝜉2)−b𝑃𝑟
+𝑗(𝜉1)
++𝑏|𝜉2−𝜉1|
+≤
+
+𝑏+𝑀
+𝐽
+∑︁
+𝑗=1
+𝑎pf𝑠𝑗
+˜𝑚𝑗
++𝑎kv
+
+|𝜉2−𝜉1| = 𝐿𝑓|𝜉2−𝜉1|.
+Finally, the definition of b𝑓𝑟in (59), the clock approximation in (67), and the interpolation error bound
+(68) give
+sup
+0≤𝜉≤𝑇
+ ¯𝑓𝑟(𝜉) −b𝑓𝑟(𝜉)
+ ≤
+sup
+0≤𝜉≤𝑇
+
+¯𝑓𝑟(𝜉) −
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) ¯𝑃𝑟
+𝑗(𝜉) −𝑏𝜉
+
++
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) sup
+0≤𝜉≤𝑇
+ ¯𝑃𝑟
+𝑗(𝜉) −b𝑃𝑟
+𝑗(𝜉)
+ →0.
+(vi) Since 0 ≤b𝑓𝑟(𝜉) ≤𝐿𝑓𝑇on [0,𝑇], the clock approximation in (70) implies that, for all sufficiently large 𝑟,
+0 ≤¯𝑓𝑟(𝜉) ≤𝐿𝑓𝑇+ 1,
+0 ≤𝜉≤𝑇.
+By the local boundedness of 𝜆𝑗,
+∫𝐿𝑓𝑇+1
+0
+𝜆𝑗(𝑠) 𝑑𝑠< ∞. Apply the functional law of large numbers for unit-rate
+Poisson processes [43, Corollary 3.2.1] on the cumulative-intensity interval
+h
+0,
+∫𝐿𝑓𝑇+1
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+i
+. We obtain
+sup
+0≤𝑢≤
+∫𝐿𝑓𝑇+1
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+
+𝑁𝑟
+𝑗(𝑟𝑢)
+𝑟
+−𝑢
+
+P−→0.
+Also, the local boundedness of the arrival rates gives, for all 𝑥, 𝑦∈[0, 𝐿𝑓𝑇+ 1],
+
+∫
+𝑥
+0
+𝜆𝑗(𝑠) 𝑑𝑠−
+∫
+𝑦
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+ ≤
+𝜆𝑗
+
+𝐿∞([0,𝐿𝑓𝑇+1]) |𝑥−𝑦|.
+(72)
+43
+
+
+--- Page 44 ---
+Both clocks take values in [0, 𝐿𝑓𝑇+ 1] for all sufficiently large 𝑟. Using the definitions of ¯𝐴𝑟
+𝑗and b𝐴𝑟
+𝑗, for
+0 ≤𝜉≤𝑇we have
+¯𝐴𝑟
+𝑗(𝜉)−b𝐴𝑟
+𝑗(𝜉) =
+𝑝𝑟
+𝑗,𝐿𝑗(0)
+𝑟
++ 1
+𝑟𝑁𝑟
+𝑗
+ 
+𝑟
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+!
+−𝑝𝑗,𝐿𝑗(0)−
+∫
+b𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+= 1
+𝑟𝑁𝑟
+𝑗
+ 
+𝑟
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+!
+−
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠+
+𝑝𝑟
+𝑗,𝐿𝑗(0)
+𝑟
+−𝑝𝑗,𝐿𝑗(0)
++
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠−
+∫
+b𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠.
+Therefore, the Lipschitz bound for 𝐴𝑗in (72) gives
+sup
+0≤𝜉≤𝑇
+| ¯𝐴𝑟
+𝑗(𝜉)−b𝐴𝑟
+𝑗(𝜉)|
+≤sup
+0≤𝜉≤𝑇
+
+1
+𝑟𝑁𝑟
+𝑗
+ 
+𝑟
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠)𝑑𝑠
+!
+−
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠)𝑑𝑠
++
+
+𝑝𝑟
+𝑗,𝐿𝑗(0)
+𝑟
+−𝑝𝑗,𝐿𝑗(0)
+
++ sup
+0≤𝜉≤𝑇
+
+∫
+¯𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠)𝑑𝑠−
+∫
+b𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠)𝑑𝑠
+
+≤
+sup
+0≤𝑢≤
+∫𝐿𝑓𝑇+1
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+
+𝑁𝑟
+𝑗(𝑟𝑢)
+𝑟
+−𝑢
++
+
+𝑝𝑟
+𝑗,𝐿𝑗(0)
+𝑟
+−𝑝𝑗,𝐿𝑗(0)
++∥𝜆𝑗∥𝐿∞([0,𝐿𝑓𝑇+1]) sup
+0≤𝜉≤𝑇
+| ¯𝑓𝑟(𝜉)−b𝑓𝑟(𝜉)|
+P−→0.
+Here the first term converges to zero by the Poisson estimate above, the second by the initial-condition
+convergence in Theorem 3, and the third by (v). This proves (71).
+□
+Lemma 4. Under the initial condition of Theorem 3, consider the smoothed 𝑐𝜇-inspired policy in Definition 5.
+Then the following statements hold.
+(i) Joint 𝐶-tightness. For every fixed 𝑇< ∞, the sequence
+n
+b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟, ¯𝐴𝑟
+1, . . . , ¯𝐴𝑟
+𝐽
+
+: 𝑟≥1
+o
+is
+𝐶-tight in 𝐷([0,𝑇], R2𝐽+1) equipped with the Skorokhod 𝐽1 topology; i.e., their joint laws are tight
+in this space, and every subsequential weak limit is in 𝐶([0,𝑇], R2𝐽+1) with probability one. Taking
+𝑇= 1, 2, . . . yields local joint 𝐶-tightness on [0, ∞).
+(ii) Skorokhod representation of subsequential limits. From every scale subsequence, one can extract a
+further subsequence and construct copies having the same joint laws on a new probability space such
+that there exist continuous paths X1, . . . , X𝐽, 𝑓for which, almost surely, uniformly on every compact
+interval,
+
+b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟, ¯𝐴𝑟
+1, . . . , ¯𝐴𝑟
+𝐽
+
+−→(X1, . . . , X𝐽, 𝑓, 𝐴1 ◦𝑓, . . . , 𝐴𝐽◦𝑓) .
+(73)
+(iii) Structural relations of subsequential limits. Every subsequential limit in (ii) satisfies X𝑗(0) = 0
+almost surely for 𝑗= 1, . . . , 𝐽. The function X𝑗is nonnegative and nondecreasing on [0, ∞). The
+processes X1, . . . , X𝐽and the real-time clock 𝑓satisfy the clock equation
+𝑓(𝜉) =
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗)X𝑗(𝜉) + 𝑏𝜉,
+𝜉≥0,
+(74)
+44
+
+
+--- Page 45 ---
+the queue nonnegativity constraints
+𝐴𝑗
+  𝑓(𝜉) −X𝑗(𝜉) ≥0,
+𝑗= 1, . . . , 𝐽,
+𝜉≥0,
+(75)
+and, for 0 ≤𝜉1 ≤𝜉2, the memory constraint
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+ X𝑗(𝜉2) −X𝑗(𝜉1) ≤𝑀(𝜉2 −𝜉1).
+(76)
+Proof.
+(i) Joint 𝐶-tightness. Fix 𝑇< ∞. To apply the Arzelà–Ascoli theorem, we first verify that b𝑃𝑟
+𝑗, b𝑓𝑟, and b𝐴𝑟
+𝑗,
+𝑗= 1, . . . , 𝐽, are uniformly bounded and Lipschitz continuous on [0,𝑇], with bounds and Lipschitz constants
+independent of 𝑟.
+Lemma 3(v) gives, for all 0 ≤𝜉, 𝜉1, 𝜉2 ≤𝑇,
+0 ≤b𝑃𝑟
+𝑗(𝜉) ≤𝑀𝑇
+˜𝑚𝑗
+,
+b𝑃𝑟
+𝑗(𝜉2) −b𝑃𝑟
+𝑗(𝜉1)
+ ≤𝑀
+˜𝑚𝑗
+|𝜉2 −𝜉1|,
+0 ≤b𝑓𝑟(𝜉) ≤𝐿𝑓𝑇,
+ b𝑓𝑟(𝜉2) −b𝑓𝑟(𝜉1)
+ ≤𝐿𝑓|𝜉2 −𝜉1|.
+Combining these estimates with the Lipschitz bound for 𝐴𝑗in (72) and the definition of b𝐴𝑟
+𝑗in (60) gives
+b𝐴𝑟
+𝑗(𝜉2) −b𝐴𝑟
+𝑗(𝜉1)
+ =
+
+∫
+b𝑓𝑟( 𝜉2)
+0
+𝜆𝑗(𝑠) 𝑑𝑠−
+∫
+b𝑓𝑟( 𝜉1)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+
+≤
+𝜆𝑗
+
+𝐿∞([0,𝐿𝑓𝑇+1])
+ b𝑓𝑟(𝜉2) −b𝑓𝑟(𝜉1)
+
+≤
+𝜆𝑗
+
+𝐿∞([0,𝐿𝑓𝑇+1]) 𝐿𝑓|𝜉2 −𝜉1|,
+0 ≤b𝐴𝑟
+𝑗(𝜉) = 𝑝𝑗,𝐿𝑗(0) +
+∫
+b𝑓𝑟( 𝜉)
+0
+𝜆𝑗(𝑠) 𝑑𝑠
+≤𝑝𝑗,𝐿𝑗(0) +
+𝜆𝑗
+
+𝐿∞([0,𝐿𝑓𝑇+1]) b𝑓𝑟(𝜉)
+≤𝑝𝑗,𝐿𝑗(0) +
+𝜆𝑗
+
+𝐿∞([0,𝐿𝑓𝑇+1]) 𝐿𝑓𝑇.
+Using the Euclidean norm on R2𝐽+1, define the constants
+𝜌𝑇:=
+" 𝐽
+∑︁
+𝑗=1
+ 𝑀𝑇
+˜𝑚𝑗
+2
++ (𝐿𝑓𝑇)2 +
+𝐽
+∑︁
+𝑗=1
+
+𝑝𝑗,𝐿𝑗(0) + ∥𝜆𝑗∥𝐿∞([0,𝐿𝑓𝑇+1]) 𝐿𝑓𝑇
+2
+#1/2
+,
+𝐿𝑇:=
+" 𝐽
+∑︁
+𝑗=1
+ 𝑀
+˜𝑚𝑗
+2
++ 𝐿2
+𝑓+
+𝐽
+∑︁
+𝑗=1
+
+∥𝜆𝑗∥𝐿∞([0,𝐿𝑓𝑇+1]) 𝐿𝑓
+2
+#1/2
+.
+Both constants are finite by the local boundedness of the arrival rates and 𝐽< ∞. Therefore, all sample paths
+of the continuous approximation vector
+bZ 𝑟:=
+
+b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟, b𝐴𝑟
+1, . . . , b𝐴𝑟
+𝐽
+
+belong to the deterministic set
+K𝑇:=
+(
+h ∈𝐶([0,𝑇], R2𝐽+1) : ∥h∥∞,𝑇≤𝜌𝑇, ∥h(𝜉2) −h(𝜉1)∥≤𝐿𝑇|𝜉2 −𝜉1|, ∀𝜉1, 𝜉2 ∈[0,𝑇]
+)
+.
+(77)
+45
+
+
+--- Page 46 ---
+The two inequalities defining K𝑇are preserved under uniform limits, so K𝑇is closed under uniform
+convergence.
+It is also uniformly bounded and equicontinuous.
+By the Arzelà–Ascoli theorem [33,
+Theorem 7.25], it is relatively compact in the uniform topology and is therefore compact there. Moreover,
+P
+
+bZ 𝑟∈K𝑇
+
+= 1,
+𝑟≥1.
+(78)
+Thus the family of laws {L(bZ 𝑟) : 𝑟≥1} is tight in 𝐶([0,𝑇], R2𝐽+1) under the uniform topology. Since the
+inclusion into 𝐷([0,𝑇], R2𝐽+1) with the 𝐽1 topology is continuous, {bZ 𝑟} is 𝐶-tight in 𝐷([0,𝑇], R2𝐽+1).
+Set Z𝑟:=
+
+b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟, ¯𝐴𝑟
+1, . . . , ¯𝐴𝑟
+𝐽
+
+. The vector bZ 𝑟approximates Z𝑟by replacing only the cumulative
+arrival coordinates ¯𝐴𝑟
+𝑗with their continuous approximations b𝐴𝑟
+𝑗. Hence,
+∥Z𝑟−bZ 𝑟∥∞,𝑇:=
+sup
+0≤𝜉≤𝑇
+∥Z𝑟(𝜉) −bZ 𝑟(𝜉)∥
+=
+sup
+0≤𝜉≤𝑇
+©­
+«
+𝐽
+∑︁
+𝑗=1
+ ¯𝐴𝑟
+𝑗(𝜉) −b𝐴𝑟
+𝑗(𝜉)
+
+2ª®
+¬
+1/2
+≤©­
+«
+𝐽
+∑︁
+𝑗=1
+"
+sup
+0≤𝜉≤𝑇
+ ¯𝐴𝑟
+𝑗(𝜉) −b𝐴𝑟
+𝑗(𝜉)
+
+#2
+ª®
+¬
+1/2
+P−→0,
+where the convergence follows from the approximation of ¯𝐴𝑟
+𝑗by b𝐴𝑟
+𝑗in (71) and 𝐽< ∞. Define ΔZ𝑟:= Z𝑟−bZ 𝑟.
+∥ΔZ𝑟∥∞,𝑇
+P−→0 implies that ΔZ𝑟converges weakly to the zero process and hence is tight. Since the zero
+process is continuous, {ΔZ𝑟} is 𝐶-tight. Both {bZ 𝑟} and {ΔZ𝑟} are therefore 𝐶-tight. Corollary VI.3.33(a) of
+Jacod and Shiryaev [22] gives that {Z𝑟= bZ 𝑟+ ΔZ𝑟} is jointly 𝐶-tight in 𝐷([0,𝑇], R2𝐽+1).
+Finally, apply the preceding argument successively on [0, 𝑚] for 𝑚= 1, 2, . . . , extract nested subsequences,
+and take a diagonal subsequence. This yields local joint 𝐶-tightness on [0, ∞).
+(ii) Skorokhod representation of subsequential limits. We prove the almost-sure convergence on compact
+intervals in (73) by first identifying the joint weak limit and then applying the Skorokhod representation
+theorem. Since {( b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟)} is jointly 𝐶-tight, every scale subsequence has a further subsequence,
+still indexed by 𝑟, along which
+
+b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟
+⇒(X1, . . . , X𝐽, 𝑓)
+in the local 𝐽1 topology, with continuous limit paths. The clock limit 𝑓is nonnegative because each b𝑓𝑟
+is nonnegative. Each 𝐴𝑗is locally Lipschitz, so the composition map 𝑔↦→𝐴𝑗◦𝑔is continuous under
+uniform convergence on compact intervals. Since 𝑓is continuous, local 𝐽1 convergence to 𝑓implies uniform
+convergence on compact intervals. The continuous mapping theorem and the definition of b𝐴𝑟
+𝑗in (60) therefore
+give
+bZ 𝑟⇒(X1, . . . , X𝐽, 𝑓, 𝐴1 ◦𝑓, . . . , 𝐴𝐽◦𝑓) .
+For every 𝑇< ∞, the error estimate in (i) gives ∥ΔZ𝑟∥∞,𝑇
+P−→0. Applying Lemma VI.3.31 of Jacod and
+Shiryaev [22] to the joint vector and the error ΔZ𝑟yields
+Z𝑟= bZ 𝑟+ ΔZ𝑟⇒(X1, . . . , X𝐽, 𝑓, 𝐴1 ◦𝑓, . . . , 𝐴𝐽◦𝑓) .
+Since 𝐷([0, ∞), R2𝐽+1) with the local 𝐽1 topology is Polish, the Skorokhod representation theorem [5,
+Theorem 6.7] provides copies on a common probability space, preserving the joint law of the coordinates for
+46
+
+
+--- Page 47 ---
+each 𝑟, that converge almost surely in local 𝐽1 to a copy of the displayed limit. Since that limit has continuous
+paths, the convergence is uniform on compact intervals [5, p. 124]. Retaining the original notation for these
+copies gives (73).
+(iii) Structural relations of subsequential limits. Work on a probability-one event where the uniform
+convergence in (73) and the prelimit path properties used below hold for the same-law copies.
+We first verify the path properties and the clock equation. For every 𝑟, the path b𝑃𝑟
+𝑗is nonnegative and
+nondecreasing and satisfies b𝑃𝑟
+𝑗(0) = 0. Uniform convergence on compact intervals in (73) therefore gives
+X𝑗(0) = 0.
+Recall the definition of b𝑓𝑟in (59):
+b𝑓𝑟(𝜉) =
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) b𝑃𝑟
+𝑗(𝜉) + 𝑏𝜉.
+For every 𝑇< ∞, the uniform convergence in (73) yields
+sup
+0≤𝜉≤𝑇
+ 𝑓(𝜉) −
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗)X𝑗(𝜉) −𝑏𝜉
+
+≤
+sup
+0≤𝜉≤𝑇
+| 𝑓(𝜉) −b𝑓𝑟(𝜉)| +
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) sup
+0≤𝜉≤𝑇
+| b𝑃𝑟
+𝑗(𝜉) −X𝑗(𝜉)| →0.
+Because 𝑇is arbitrary, (74) follows.
+Queue nonnegativity constraints. For the original prelimit processes, the cumulative planned-admission
+bound (55) gives
+b𝑃𝑟
+𝑗(𝑛/𝑟) =
+𝑃𝑟
+𝑗(𝑛)
+𝑟
+= 1
+𝑟
+𝑛−1
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) ≤1
+𝑟
+𝑛
+∑︁
+𝑢=0
+𝑦𝑟
+𝑗(𝑢) ≤1
+𝑟
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+𝑛−1
+∑︁
+𝑢=0
+𝜂𝑟
+𝑗(𝑢)
+#
+= ¯𝐴𝑟
+𝑗(𝑛/𝑟).
+Hence,
+0 ≤¯𝐴𝑟
+𝑗(𝑛/𝑟) −b𝑃𝑟
+𝑗(𝑛/𝑟),
+𝑛∈Z+.
+(79)
+This inequality is a joint path property of ( ¯𝐴𝑟
+𝑗, b𝑃𝑟
+𝑗) and therefore also holds almost surely for their same-law
+copies.
+Fix 𝑇< ∞. Since |⌊𝑟𝜉⌋/𝑟−𝜉| ≤1/𝑟, the uniform convergence in (73) and the continuity of 𝐴𝑗◦𝑓and
+X𝑗imply, uniformly over 0 ≤𝜉≤𝑇,
+¯𝐴𝑟
+𝑗
+ ⌊𝑟𝜉⌋/𝑟 −b𝑃𝑟
+𝑗
+ ⌊𝑟𝜉⌋/𝑟 −→𝐴𝑗
+  𝑓(𝜉) −X𝑗(𝜉).
+The left-hand side is nonnegative by (79); its limit is therefore nonnegative. Since 𝑇is arbitrary, (75) follows.
+We next verify the memory constraint (76). Summing the planning-budget bound (63) from 𝑛1 to 𝑛2 −1
+gives, for integers 0 ≤𝑛1 ≤𝑛2,
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗(𝑃𝑟
+𝑗(𝑛2) −𝑃𝑟
+𝑗(𝑛1)) =
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+𝑛2−1
+∑︁
+𝑡=𝑛1
+𝑦𝑟
+𝑗(𝑡) =
+𝑛2−1
+∑︁
+𝑡=𝑛1
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝑦𝑟
+𝑗(𝑡) ≤
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+(𝑛2 −𝑛1).
+After division by 𝑟and use of b𝑃𝑟
+𝑗(𝑛/𝑟) = 𝑃𝑟
+𝑗(𝑛)/𝑟, this becomes
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗
+h
+b𝑃𝑟
+𝑗
+𝑛2
+𝑟
+
+−b𝑃𝑟
+𝑗
+𝑛1
+𝑟
+i
+≤
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+𝑛2 −𝑛1
+𝑟
+.
+47
+
+
+--- Page 48 ---
+This is again a path property retained by the same-law copies. Given 0 ≤𝜉1 ≤𝜉2, take 𝑛𝑖= ⌊𝑟𝜉𝑖⌋. Then the
+uniform convergence in (73) and the continuity of X𝑗give
+b𝑃𝑟
+𝑗(𝑛𝑖/𝑟) −→X𝑗(𝜉𝑖),
+𝑖= 1, 2,
+while
+𝑛2 −𝑛1
+𝑟
+−→𝜉2 −𝜉1,
+𝑤𝑟
+𝑤𝑟+ 𝐻kv
+−→1.
+Passing to the limit in the preceding inequality proves (76).
+□
+Lemma 5 (Residual representation and uniqueness).
+Under the initial condition of Theorem 3, every subsequential limit obtained in Lemma 4 satisfies the following
+properties almost surely.
+(i) The clock 𝑓is a strictly increasing continuous bijection from [0, ∞) onto itself. Define
+𝑅0(𝑠) := 𝑠,
+𝑅𝑗
+  𝑓(𝜉) := 𝑓(𝜉) −
+𝑗
+∑︁
+ℓ=1
+𝜇−1
+ℓXℓ(𝜉),
+𝑗= 1, . . . , 𝐽.
+(80)
+Then each 𝑅𝑗, 𝑗= 0, . . . , 𝐽, is continuous, nonnegative, and nondecreasing, with 𝑅𝑗(0) = 0. Moreover,
+for 𝑗= 1, . . . , 𝐽,
+𝑅𝑗(𝑠) ≥𝑅𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠),
+𝑠≥0.
+(81)
+(ii) For every 𝑗= 1, . . . , 𝐽and 𝑠≥0,
+∫𝑠
+0
+h
+𝑅𝑗(𝑢) −𝑅𝑗−1(𝑢) + 𝜇−1
+𝑗𝐴𝑗(𝑢)
+i
+𝑑𝑅𝑗(𝑢) = 0.
+(82)
+(iii) The following identities hold:
+𝑅𝑗= 𝑅∗
+𝑗,
+𝑓= 𝑓∗,
+X𝑗= X∗
+𝑗,
+(83)
+where 𝑗= 0, . . . , 𝐽for 𝑅𝑗and 𝑗= 1, . . . , 𝐽for X𝑗. Consequently, every subsequential limit is the same
+deterministic target path.
+Proof. (i) Work on a probability-one event on which the conclusions of Lemma 4 and all prelimit path
+properties used below hold for the same-law copies. For 0 ≤𝜉1 < 𝜉2, the clock equation (74) and the
+monotonicity of the X𝑗give
+𝑓(𝜉2) −𝑓(𝜉1) =
+𝐽
+∑︁
+𝑗=1
+(𝑎pf𝑠𝑗+ 𝑎kv ˜𝑚𝑗) X𝑗(𝜉2) −X𝑗(𝜉1) + 𝑏(𝜉2 −𝜉1) ≥𝑏(𝜉2 −𝜉1) > 0,
+where the last inequality uses the standing assumption 𝑏> 0. Together with the continuity of 𝑓, 𝑓(0) = 0,
+and 𝑓(𝜉) ≥𝑏𝜉→∞, this shows that 𝑓is a continuous bijection onto [0, ∞) with a continuous inverse.
+The clock equation (74) and the definition of 𝑅𝑗in (80) give
+𝑅𝑗
+  𝑓(𝜉) =
+𝐽
+∑︁
+ℓ=𝑗+1
+(𝑎pf𝑠ℓ+𝑎kv ˜𝑚ℓ)Xℓ(𝜉)+𝑏𝜉−𝑏
+𝑀
+𝑗
+∑︁
+ℓ=1
+˜𝑚ℓXℓ(𝜉)
+=
+𝐽
+∑︁
+ℓ=𝑗+1
+
+𝑎pf𝑠ℓ+𝑎kv ˜𝑚ℓ+ 𝑏
+𝑀˜𝑚ℓ
+
+Xℓ(𝜉)+𝑏𝜉−𝑏
+𝑀
+𝐽
+∑︁
+ℓ= 𝑗+1
+˜𝑚ℓXℓ(𝜉)−𝑏
+𝑀
+𝑗
+∑︁
+ℓ=1
+˜𝑚ℓXℓ(𝜉)
+=
+𝐽
+∑︁
+ℓ=𝑗+1
+𝜇−1
+ℓXℓ(𝜉)+ 𝑏
+𝑀
+ 
+𝑀𝜉−
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓXℓ(𝜉)
+!
+.
+(84)
+48
+
+
+--- Page 49 ---
+By Lemma 4, each Xℓis continuous, nonnegative, and nondecreasing, with Xℓ(0) = 0. The function
+𝜉↦−→𝑀𝜉−Í𝐽
+ℓ=1 ˜𝑚ℓXℓ(𝜉) is also continuous and equals zero at 𝜉= 0. The memory constraint (76) shows
+that it is nonnegative and nondecreasing. Thus the representation (84) gives these same properties for 𝑅𝑗◦𝑓.
+Since 𝑓−1 is continuous and increasing with 𝑓−1(0) = 0, they also hold for 𝑅𝑗= (𝑅𝑗◦𝑓) ◦𝑓−1.
+Finally, the definition of 𝑅𝑗in (80) and the queue nonnegativity constraint (75) give
+𝑅𝑗
+  𝑓(𝜉) −𝑅𝑗−1
+  𝑓(𝜉) + 𝜇−1
+𝑗𝐴𝑗
+  𝑓(𝜉) = 𝜇−1
+𝑗
+ 𝐴𝑗
+  𝑓(𝜉) −X𝑗(𝜉) ≥0.
+Setting 𝜉= 𝑓−1(𝑠) proves (81).
+(ii) We prove the complementarity relation (82) by showing that 𝑅𝑗is constant on intervals where the class-𝑗
+waiting-queue length is positive. At every GPU step 𝑡, the cumulative planned-admission bound (55) gives
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+∑︁
+𝑢<𝑡
+𝜂𝑟
+𝑗(𝑢) −
+∑︁
+𝑢<𝑡
+𝑦𝑟
+𝑗(𝑢) ≥𝑦𝑟
+𝑗(𝑡) ≥0.
+The planning-budget bound (63) gives
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+−
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) ≥
+𝐽
+∑︁
+ℓ= 𝑗
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) ≥0.
+Thus the positive parts in the planning rule (33) can be removed:
+𝑦𝑟
+𝑗(𝑡) = min
+(
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+∑︁
+𝑢<𝑡
+𝜂𝑟
+𝑗(𝑢) −
+∑︁
+𝑢<𝑡
+𝑦𝑟
+𝑗(𝑢), ˜𝑚−1
+𝑗
+"
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+−
+𝑗−1
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡)
+#)
+.
+Applying the identity  𝑎−min{𝑎, 𝑏}  𝑏−min{𝑎, 𝑏} = 0 (valid for 𝑎, 𝑏≥0) to the two arguments of the
+minimum and multiplying by ˜𝑚𝑗gives
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+∑︁
+𝑢<𝑡
+𝜂𝑟
+𝑗(𝑢) −
+∑︁
+𝑢≤𝑡
+𝑦𝑟
+𝑗(𝑢)
+# "
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+−
+𝑗
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡)
+#
+= 0.
+(85)
+The first factor in (85) is the number of class-𝑗requests that remain without an admission plan after
+planning at step 𝑡. After fluid scaling, it becomes
+1
+𝑟
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+∑︁
+𝑢<𝑡
+𝜂𝑟
+𝑗(𝑢) −
+∑︁
+𝑢≤𝑡
+𝑦𝑟
+𝑗(𝑢)
+#
+= ¯𝐴𝑟
+𝑗(𝑡/𝑟) −b𝑃𝑟
+𝑗((𝑡+ 1)/𝑟).
+For every 𝑇< ∞,
+max
+0≤𝑡≤⌊𝑟𝑇⌋
+
+1
+𝑟
+"
+𝑝𝑟
+𝑗,𝐿𝑗(0) +
+∑︁
+𝑢<𝑡
+𝜂𝑟
+𝑗(𝑢) −
+∑︁
+𝑢≤𝑡
+𝑦𝑟
+𝑗(𝑢)
+#
+−
+"
+𝐴𝑗
+
+𝑓
+ 𝑡
+𝑟
+
+−X𝑗
+ 𝑡
+𝑟
+#
+=
+max
+0≤𝑡≤⌊𝑟𝑇⌋
+
+¯𝐴𝑟
+𝑗
+ 𝑡
+𝑟
+
+−𝐴𝑗
+
+𝑓
+ 𝑡
+𝑟
+
+−
+"
+b𝑃𝑟
+𝑗
+𝑡+ 1
+𝑟
+
+−X𝑗
+𝑡+ 1
+𝑟
+#
+−
+"
+X𝑗
+𝑡+ 1
+𝑟
+
+−X𝑗
+ 𝑡
+𝑟
+#
+≤
+sup
+0≤𝜉≤𝑇
+| ¯𝐴𝑟
+𝑗(𝜉) −𝐴𝑗( 𝑓(𝜉))| +
+sup
+0≤𝜉≤𝑇+1
+| b𝑃𝑟
+𝑗(𝜉) −X𝑗(𝜉)| +
+sup
+0≤𝑥,𝑦≤𝑇+1
+|𝑥−𝑦|≤1
+𝑟
+|X𝑗(𝑥) −X𝑗(𝑦)| −→0.
+(86)
+Here the first two terms vanish by the uniform convergence in (73), and the last by uniform continuity of X𝑗
+on [0,𝑇+ 1]. Let [𝑢, 𝑣], with 𝑢< 𝑣, be a compact interval contained in
+
+𝜉≥0 : 𝐴𝑗
+  𝑓(𝜉) −X𝑗(𝜉) > 0
+	
+.
+49
+
+
+--- Page 50 ---
+Since 𝐴𝑗◦𝑓−X𝑗is continuous and strictly positive on the compact interval [𝑢, 𝑣], there exists 𝛿> 0 such
+that
+𝐴𝑗
+  𝑓(𝜉) −X𝑗(𝜉) ≥2𝛿,
+𝜉∈[𝑢, 𝑣].
+By (86) with 𝑇= 𝑣, choose 𝑟0 so that the maximum error in (86) is less than 𝛿and ⌈𝑟𝑢⌉< ⌊𝑟𝑣⌋for every
+𝑟≥𝑟0. Then, for 𝑡= ⌈𝑟𝑢⌉, . . . , ⌊𝑟𝑣⌋−1,
+¯𝐴𝑟
+𝑗(𝑡/𝑟) −b𝑃𝑟
+𝑗((𝑡+ 1)/𝑟) > 𝐴𝑗( 𝑓(𝑡/𝑟)) −X𝑗(𝑡/𝑟) −𝛿≥𝛿> 0.
+Thus the first factor in (85) is strictly positive. Its second factor must be zero, giving
+𝑗
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) =
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+.
+(87)
+The planning-budget bound (63) now implies
+0 ≤
+𝐽
+∑︁
+ℓ=𝑗+1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) =
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡) −
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+≤0.
+Since ˜𝑚ℓ> 0 and 𝑦𝑟
+ℓ(𝑡) ≥0, every term in the first sum is zero, so 𝑦𝑟
+ℓ(𝑡) = 0 for ℓ> 𝑗.
+For ℓ> 𝑗, summing over 𝑡= ⌈𝑟𝑢⌉, . . . , ⌊𝑟𝑣⌋−1 and using the definition of 𝑃𝑟
+ℓgives
+0 = 1
+𝑟
+⌊𝑟𝑣⌋−1
+∑︁
+𝑡=⌈𝑟𝑢⌉
+𝑦𝑟
+ℓ(𝑡) =
+𝑃𝑟
+ℓ(⌊𝑟𝑣⌋) −𝑃𝑟
+ℓ(⌈𝑟𝑢⌉)
+𝑟
+= b𝑃𝑟
+ℓ(⌊𝑟𝑣⌋/𝑟) −b𝑃𝑟
+ℓ(⌈𝑟𝑢⌉/𝑟).
+Here we used b𝑃𝑟
+ℓ(𝑛/𝑟) = 𝑃𝑟
+ℓ(𝑛)/𝑟at grid points. Since 𝑦𝑟
+ℓ(𝑡) = 0 for ℓ> 𝑗, summing both sides of the
+full-budget equality (87) over the same GPU steps and dividing by 𝑟gives
+𝑤𝑟𝑀
+𝑤𝑟+ 𝐻kv
+⌊𝑟𝑣⌋−⌈𝑟𝑢⌉
+𝑟
+= 1
+𝑟
+⌊𝑟𝑣⌋−1
+∑︁
+𝑡=⌈𝑟𝑢⌉
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ𝑦𝑟
+ℓ(𝑡)
+= 1
+𝑟
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ
+⌊𝑟𝑣⌋−1
+∑︁
+𝑡=⌈𝑟𝑢⌉
+𝑦𝑟
+ℓ(𝑡)
+=
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ
+𝑃𝑟
+ℓ(⌊𝑟𝑣⌋) −𝑃𝑟
+ℓ(⌈𝑟𝑢⌉)
+𝑟
+=
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ
+h
+b𝑃𝑟
+ℓ(⌊𝑟𝑣⌋/𝑟) −b𝑃𝑟
+ℓ(⌈𝑟𝑢⌉/𝑟)
+i
+.
+The convergence of the grid endpoints to 𝑢and 𝑣, the limit 𝑤𝑟/(𝑤𝑟+ 𝐻kv) →1, the uniform convergence of
+b𝑃𝑟
+ℓto Xℓin (73), and the continuity of Xℓtogether give
+Xℓ(𝑣) −Xℓ(𝑢) = 0
+(ℓ> 𝑗),
+and
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ
+ Xℓ(𝑣) −Xℓ(𝑢) = 𝑀(𝑣−𝑢).
+Substituting these equalities into the representation of 𝑅𝑗◦𝑓in (84) gives
+𝑅𝑗
+  𝑓(𝑣) −𝑅𝑗
+  𝑓(𝑢) =
+𝐽
+∑︁
+ℓ=𝑗+1
+𝜇−1
+ℓ
+ Xℓ(𝑣) −Xℓ(𝑢) + 𝑏
+𝑀
+"
+𝑀(𝑣−𝑢) −
+𝐽
+∑︁
+ℓ=1
+˜𝑚ℓ
+ Xℓ(𝑣) −Xℓ(𝑢)
+#
+= 0.
+50
+
+
+--- Page 51 ---
+Since [𝑢, 𝑣] is arbitrary and 𝑓is a homeomorphism, the preceding equality implies that the Lebesgue–
+Stieltjes measure 𝑑𝑅𝑗satisfies
+𝑑𝑅𝑗
+
+𝑠≥0 : 𝐴𝑗(𝑠) −X𝑗
+  𝑓−1(𝑠) > 0
+	
+= 0.
+The definition of 𝑅𝑗in (80) gives
+𝑅𝑗(𝑠) −𝑅𝑗−1(𝑠) + 𝜇−1
+𝑗𝐴𝑗(𝑠) = 𝜇−1
+𝑗
+
+𝐴𝑗(𝑠) −X𝑗
+  𝑓−1(𝑠)
+≥0.
+The integrand in (82) is therefore zero 𝑑𝑅𝑗-almost everywhere, so for every 𝑠≥0,
+∫𝑠
+0
+h
+𝑅𝑗(𝑢) −𝑅𝑗−1(𝑢) + 𝜇−1
+𝑗𝐴𝑗(𝑢)
+i
+𝑑𝑅𝑗(𝑢) = 0.
+(iii) For fixed 𝑗, the function 𝑅𝑗−1 −𝜇−1
+𝑗𝐴𝑗is continuous. By (i), 𝑅𝑗is continuous and nondecreasing, with
+𝑅𝑗(0) = 0, and
+𝑅𝑗(𝑠) ≥𝑅𝑗−1(𝑠) −𝜇−1
+𝑗𝐴𝑗(𝑠),
+𝑠≥0.
+By (ii), for every 𝑠≥0,
+∫𝑠
+0
+h
+𝑅𝑗(𝑢) −𝑅𝑗−1(𝑢) + 𝜇−1
+𝑗𝐴𝑗(𝑢)
+i
+𝑑𝑅𝑗(𝑢) = 0.
+The one-dimensional reflection characterization [42, Theorem 14.2.3], applied on each compact interval,
+therefore yields
+𝑅𝑗(𝑠) = sup
+0≤𝑢≤𝑠
+h
+𝑅𝑗−1(𝑢) −𝜇−1
+𝑗𝐴𝑗(𝑢)
+i+
+.
+The base case is 𝑅0 = 𝑅∗
+0 because both are the identity function. If 𝑅𝑗−1 = 𝑅∗
+𝑗−1, the preceding display is
+exactly the recursion defining 𝑅∗
+𝑗in (20). Induction gives
+𝑅𝑗(𝑠) = 𝑅∗
+𝑗(𝑠),
+𝑗= 0, . . . , 𝐽,
+𝑠≥0.
+(88)
+Substituting the definitions of 𝑅𝑗−1 and 𝑅𝑗from (80) gives
+𝑅𝑗−1
+  𝑓(𝜉) −𝑅𝑗
+  𝑓(𝜉) =
+"
+𝑓(𝜉) −
+𝑗−1
+∑︁
+ℓ=1
+𝜇−1
+ℓXℓ(𝜉)
+#
+−
+"
+𝑓(𝜉) −
+𝑗
+∑︁
+ℓ=1
+𝜇−1
+ℓXℓ(𝜉)
+#
+= 𝜇−1
+𝑗X𝑗(𝜉).
+Multiplying by 𝜇𝑗yields
+X𝑗(𝜉) = 𝜇𝑗
+
+𝑅𝑗−1
+  𝑓(𝜉) −𝑅𝑗
+  𝑓(𝜉)
+.
+(89)
+Taking 𝑗= 𝐽in the representation of 𝑅𝑗◦𝑓in (84) gives
+𝜉= 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗X𝑗(𝜉) + 1
+𝑏𝑅𝐽
+  𝑓(𝜉).
+The definition of 𝐹in (21), the identification 𝑅∗
+𝑗= 𝑅𝑗in (88), and the representation of X𝑗in (89) give
+𝐹  𝑓(𝜉) = 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝜇𝑗
+h
+𝑅∗
+𝑗−1
+  𝑓(𝜉) −𝑅∗
+𝑗
+  𝑓(𝜉)i
++ 1
+𝑏𝑅∗
+𝐽
+  𝑓(𝜉)
+= 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗𝜇𝑗
+
+𝑅𝑗−1
+  𝑓(𝜉) −𝑅𝑗
+  𝑓(𝜉)
++ 1
+𝑏𝑅𝐽
+  𝑓(𝜉)
+= 1
+𝑀
+𝐽
+∑︁
+𝑗=1
+˜𝑚𝑗X𝑗(𝜉) + 1
+𝑏𝑅𝐽
+  𝑓(𝜉)
+= 𝜉,
+𝜉≥0.
+(90)
+51
+
+
+--- Page 52 ---
+By (i), 𝑓is a homeomorphism of [0, ∞) onto itself. Hence (90) implies 𝐹= 𝑓−1. In particular, the
+generalized inverse in (22) is the ordinary inverse, and therefore 𝑓∗= 𝐹−1 = 𝑓. Finally, comparing the
+representation of X𝑗in (89) with the definition of X∗
+𝑗in (23) gives X𝑗= X∗
+𝑗for every 𝑗.
+□
+Proof of Theorem 3. Fix 𝑇< ∞. By Lemma 4, every scale subsequence has a further weakly convergent
+subsequence. Lemmas 4 and 5 show that the  b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟 coordinates of every such limit equal the
+deterministic path  X∗
+1, . . . , X∗
+𝐽, 𝑓∗. Hence
+
+b𝑃𝑟
+1, . . . , b𝑃𝑟
+𝐽, b𝑓𝑟
+𝑑
+−−−−−−→
+local 𝐽1
+ X∗
+1, . . . , X∗
+𝐽, 𝑓∗ .
+Weak convergence to a deterministic path is convergence in probability, and at a continuous limit local 𝐽1
+convergence strengthens to uniform convergence on compact intervals [5, p. 124]. Therefore
+sup
+0≤𝜉≤𝑇
+ b𝑓𝑟(𝜉) −𝑓∗(𝜉)
+ +
+𝐽
+∑︁
+𝑗=1
+sup
+0≤𝜉≤𝑇
+b𝑃𝑟
+𝑗(𝜉) −X∗
+𝑗(𝜉)
+
+P−→0.
+(91)
+By the clock approximation in (70) and the uniform convergence of b𝑓𝑟to 𝑓∗in (91),
+sup
+0≤𝜉≤𝑇
+ ¯𝑓𝑟(𝜉) −𝑓∗(𝜉)
+ ≤
+sup
+0≤𝜉≤𝑇
+ ¯𝑓𝑟(𝜉) −b𝑓𝑟(𝜉)
+ + sup
+0≤𝜉≤𝑇
+ b𝑓𝑟(𝜉) −𝑓∗(𝜉)
+
+P−→0.
+This proves (39).
+For each class 𝑗, the bound on the difference between fluid-scaled cumulative planned admissions and
+fluid-scaled cumulative admissions in (64), the interpolation error bound (68), and the uniform convergence
+of b𝑃𝑟
+𝑗to X∗
+𝑗in (91) give
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+
+≤
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) −¯𝑃𝑟
+𝑗(𝜉)
+ + sup
+0≤𝜉≤𝑇
+ ¯𝑃𝑟
+𝑗(𝜉) −b𝑃𝑟
+𝑗(𝜉)
+ + sup
+0≤𝜉≤𝑇
+b𝑃𝑟
+𝑗(𝜉) −X∗
+𝑗(𝜉)
+
+P−→0.
+This is the 𝑘= 𝐿𝑗case of (37). For 𝑘= 1, . . . , 𝐿𝑗, the prefill-stage delay bound (65) gives
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+ ≤
+sup
+0≤𝜉≤𝑇
+
+U𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)
+𝑟
++ sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+
+P−→0.
+Similarly, for 𝑘= 1, . . . , 𝑜𝑗−1, the decode-stage delay bound (66) gives
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟V𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+ ≤
+sup
+0≤𝜉≤𝑇
+
+V𝑟
+𝑗,𝑘(⌊𝑟𝜉⌋) −U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)
+𝑟
++ sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+
+P−→0.
+This proves (37) and (38).
+Finally, we prove convergence of the system states. The fluid states satisfy 𝑝𝜋∗
+𝑗,𝑘(𝜉) = 0 for 𝑘= 1, . . . , 𝐿𝑗−1
+and 𝑑𝜋∗
+𝑗,𝑘(𝜉) = 0 for 𝑘= 1, . . . , 𝑜𝑗−1. By (8), we therefore obtain
+sup
+0≤𝜉≤𝑇
+ ¯𝑝𝑟
+𝑗,𝑘(𝜉) −𝑝𝜋∗
+𝑗,𝑘(𝜉)
+
+P−→0,
+𝑘= 1, . . . , 𝐿𝑗−1,
+sup
+0≤𝜉≤𝑇
+ ¯𝑑𝑟
+𝑗,𝑘(𝜉) −𝑑𝜋∗
+𝑗,𝑘(𝜉)
+
+P−→0,
+𝑘= 1, . . . , 𝑜𝑗−1.
+52
+
+
+--- Page 53 ---
+It remains to prove (40) for 𝑘= 𝐿𝑗. By definition,
+1
+𝑟𝑝𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) = ¯𝐴𝑟
+𝑗(𝜉) −1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋)
+and
+𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉) = 𝐴𝑗( 𝑓∗(𝜉)) −X∗
+𝑗(𝜉).
+By (73) and Lemma 5, every subsequential limit of ¯𝐴𝑟
+𝑗equals the deterministic path 𝐴𝑗◦𝑓∗. Hence,
+sup
+0≤𝜉≤𝑇
+ ¯𝐴𝑟
+𝑗(𝜉) −𝐴𝑗( 𝑓∗(𝜉))
+
+P−→0.
+Combining this with the convergence of U𝑟
+𝑗,𝐿𝑗/𝑟to X∗
+𝑗in (37), we obtain
+sup
+0≤𝜉≤𝑇
+
+1
+𝑟𝑝𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) −𝑝𝜋∗
+𝑗,𝐿𝑗(𝜉)
+ ≤
+sup
+0≤𝜉≤𝑇
+ ¯𝐴𝑟
+𝑗(𝜉) −𝐴𝑗( 𝑓∗(𝜉))
+ + sup
+0≤𝜉≤𝑇
+
+1
+𝑟U𝑟
+𝑗,𝐿𝑗(⌊𝑟𝜉⌋) −X∗
+𝑗(𝜉)
+
+P−→0.
+This proves the convergence of all prefill and decode states in (40) and (41).
+□
+53

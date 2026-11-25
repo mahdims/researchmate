@@ -1,0 +1,901 @@
+--- Page 1 ---
+Layer-wise CPU-GPU Scheduling for LLM
+Inference on Memory-Limited Consumer GPUs
+Naoto Sugiura1, Yuta Tokusashi2, and Hiroki Matsutani1
+1 Keio University, 3-14-1, Hiyoshi, Yokohama, Japan 223-8522
+{nsugiura, matutani}@arc.ics.keio.ac.jp
+2 SoftBank Corp., 1-7-1 Kaigan, Minato-ku, Tokyo, Japan, 105-7529
+yuta.tokusashi@g.softbank.co.jp
+Abstract. As large language model inference environments expand to-
+ward consumer devices, it remains challenging to efficiently run models
+that exceed GPU memory capacity in single-GPU settings. The latency
+of transferring weights that do not fit in GPU memory accounts for about
+98% of inference time and remains a major obstacle. In this paper, we
+focus on the fact that during the decode phase, layer computation time
+on the CPU can be shorter than weight transfer time, presenting an op-
+portunity to hide weight transfers by utilizing this computation time.
+Therefore, we propose a method to hide transfer latency by executing
+certain layers on the CPU during the decode phase while asynchronously
+transferring the next layer’s weights to the GPU in the background of
+that computation. To realize this scheduling, we formulate the placement
+of CPU/GPU computation and weight transfers as a latency minimiza-
+tion problem and perform optimization using an approximation model
+with relaxed temporal constraints. Evaluation results confirm that in a
+consumer desktop environment, our approach accelerates OPT-30B in-
+ference by 3.5× compared to HuggingFace Accelerate and 6.3× compared
+to DeepSpeed Zero-Inference.
+Keywords: Large language model · GPU · Scheduling.
+1
+Introduction
+As the social implementation of large language models (LLMs) accelerates, the
+environment for their inference is expanding from traditional, resource-rich cloud
+infrastructures to resource-constrained consumer devices, such as smartphones
+and personal computers (PCs). Market forecasts indicate that AI-powered PCs
+will account for 54.7% of the PC market by 2026, while AI-powered desktops
+are expected to reach a 42.1% share in the same year [2]. The growth of local
+execution on PCs enables reduced response times and power consumption while
+decreasing cloud dependency and enhancing data protection [2, 14]. Moreover,
+another forecast suggests that the adoption of on-device AI, which does not rely
+entirely on the cloud, will be driven primarily by privacy concerns [1]. Beyond
+consumer PCs, LLMs are also anticipated to be integrated into fields such as
+arXiv:2611.01393v1  [cs.DC]  1 Nov 2026
+
+
+--- Page 2 ---
+2
+N. Sugirua et al.
+robotics [16] and autonomous driving [15]. Against this backdrop, LLM inference
+on edge and consumer devices is becoming increasingly important.
+LLMs are utilized in a wide range of applications, including document gen-
+eration, summarization, translation, and coding assistance. In particular, local
+inference on consumer devices is frequently employed for interactive applications,
+such as chatbots, which generate responses by sequentially producing tokens for
+each request. While some operational strategies aim for high throughput via
+batching [8, 7], this paper primarily assumes a local interactive setting with low
+concurrency. Key characteristics of this setting are that the effective batch size
+tends to be 1 and that minimizing latency, which directly affects user experience,
+is crucial [18].
+However, LLM inference demands substantial computational resources and
+memory capacity, presenting significant barriers to execution on resource-constrained
+consumer devices. For instance, the OPT-30B [17] model requires over 60 GiB of
+memory in FP16 format, which far exceeds the 32 GiB capacity of the RTX 5090,
+a state-of-the-art consumer-grade GPU. When LLM weights cannot fit within
+the GPU memory in a single-GPU environment, frameworks such as Hugging-
+Face Accelerate [3] typically place weights in host memory and transfer them
+to the GPU sequentially during computation. However, in this approach, weight
+transfer time dominates the total latency. For example, when using OPT-30B,
+transfer overhead accounts for approximately 98% of the total execution time
+during the decoding phase, creating a severe performance bottleneck.
+One direction for addressing this problem is model compression, such as
+quantization [13]. However, some models still remain too large to fit in GPU
+memory, and aggressive compression can degrade accuracy. Another direction is
+offloaded inference, where weights and KV caches are placed on the host side.
+Prior work has proposed methods that reduce transfer stalls through schedul-
+ing that reuses weights across batches [8], as well as through overlapping data
+transfers with computation and coordinating execution with the CPU [18, 7, 6].
+FlexGen is based on a simple overlap between GPU computation and data trans-
+fer, with only limited use of CPU computation [8]. As a result, prior work reports
+that exposed PCIe transfer time still accounts for approximately 96–98% of the
+total execution time [6]. Reducing latency in offloaded inference therefore hinges
+on how effectively transfer time can be hidden. Park and Egger [7] hide transfers
+by executing part of the intra-layer weights on the CPU and thereby accelerate
+throughput-oriented inference, whereas our paper differs in that it targets the
+reduction of exposed transfers during batch-size-1 decoding under offloading.
+HeteGen exploits CPU-side computation through CPU-GPU tensor parallelism,
+but its effectiveness depends on CPU computational capability. FlexInfer [6]
+presents a framework that uses an estimator to select different execution policies
+for prefill and decode, but its choices are limited to CPU-only execution, GPU
+execution with transfers from host memory, and a static split called SplitGen, in
+which only the portion of weights that fits on the GPU is executed on the GPU
+and the remainder is executed on the CPU. It does not address the direction of
+hiding transfers behind CPU computation.
+
+
+--- Page 3 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+3
+In this paper, we propose layer placement and scheduling techniques to min-
+imize exposed transfer time for offload inference in a single-GPU environment,
+specifically targeting decoding with a batch size of 1. Our key observation is that
+the per-layer computation time on the CPU may be shorter than the weight
+transfer time during the decoding process. In this case, CPU computation is not
+merely an alternative execution target but can serve as a planned computation
+window for hiding transfers. Based on this observation, we assign each layer to
+one of three modes: execution on the CPU, residency on the GPU, or placement
+in host memory with transfer to the GPU at execution time followed by GPU
+computation, which we call the stream mode. We then construct a latency model
+based on the computation time and transfer time of each mode. We further intro-
+duce an approximation model that relaxes the temporal constraints of transfers
+and reduce the complex scheduling optimization to a ratio determination prob-
+lem, thereby synthesizing an execution plan from offline measurements, namely
+per-layer computation time and transfer time. At runtime, transfer for stream
+execution blocks is hidden behind CPU computation blocks, thereby minimizing
+inference latency.
+In summary, this work offers the following contributions:
+– We conduct an extensive analysis of LLM inference in consumer-grade desk-
+top environments and quantitatively characterize the workload properties.
+– We formulate the latency minimization problem for LLM inference in single-
+GPU environments as an optimization problem involving the placement of
+GPU residency, CPU computation, and stream computation.
+– To accelerate LLM inference on consumer desktops, we propose a method
+that minimizes latency by efficiently overlapping CPU computation with
+weight transfers.
+– Our evaluation demonstrates that for OPT-30B, the proposed method achieves
+an inference speedup of 3.5× compared to Hugging Face Accelerate [3] and
+6.3× compared to DeepSpeed ZeRO-Inference [4].
+2
+Background and motivation
+2.1
+LLM inference
+LLMs are composed of multiple Transformer layers [11] and generate text by
+repeatedly predicting the next token. This inference process can be broadly
+divided into two stages, prefill and decode. First, the stage that processes the
+entire input prompt at once is called prefill. In this stage, the Key and Value
+tensors produced by the attention computation in each layer are accumulated as
+a KV cache, and the first token is predicted. After that, the stage that generates
+new tokens one by one while referring to and updating the KV cache is called
+decode. Whereas prefill benefits from the parallel processing capability of GPUs,
+decode is inherently sequential, and the latency of each step directly affects user-
+perceived response time.
+Within each layer, multi-head attention (MHA) and a multi-layer percep-
+tron (MLP) are mainly executed in sequence. MHA is responsible for extracting
+
+
+--- Page 4 ---
+4
+N. Sugirua et al.
+0%
+20%
+40%
+60%
+80%
+100%
+64
+256
+1024
+64
+256
+1024
+OPT-30B
+OPT-66B
+Ratio
+Prompt length
+Transfer
+GPU compute
+(a) Prefill.
+0%
+20%
+40%
+60%
+80%
+100%
+32
+64
+128
+32
+64
+128
+OPT-30B
+OPT-66B
+Ratio
+Output length
+Transfer
+GPU compute
+(b) Decode (Prompt length: 256).
+Fig. 1: Execution time breakdown per phase. (Batch size: 1, Type: FP16)
+0
+2
+4
+6
+8
+64
+256
+1024
+GPU compute time [ms]
+Prompt length
+Prefill
+Decode
+(a) OPT-30B.
+0
+5
+10
+15
+64
+256
+1024
+GPU compute time [ms]
+Prompt length
+Prefill
+Decode
+(b) OPT-66B.
+Fig. 2: GPU computation time per layer for each phase.
+contextual information by combining Values according to the similarity between
+Queries and Keys. In decode, the KV cache is reused to avoid recomputing past
+Keys and Values, but the amount of memory access in attention increases as the
+sequence length grows. The subsequent MLP applies two linear transformations
+and an activation function to the output of attention, enabling more advanced
+information transformation.
+2.2
+Performance analysis
+In LLM inference, workload characteristics vary with runtime parameters such
+as the phase and the input and output lengths. In this section, we analyze
+the performance of LLM inference in a single-GPU setting where the model
+weights do not fully fit in GPU memory. The hardware configuration follows
+Section 5.1. In this paper, we assume batch size 1 as the primary use case for
+LLM inference on consumer PCs. HuggingFace Accelerate [3] places the portion
+of weights that fits in GPU memory on the GPU and keeps the remaining weights
+in host memory, transferring them to the GPU on demand during execution.
+In this approach, computation and transfer are serialized, so weight transfer
+time directly contributes to end-to-end latency. As shown in Figure 1, transfers
+account for most of the latency, indicating that host-to-GPU transfer becomes
+the bottleneck when the full set of weights cannot reside in GPU memory on a
+single GPU. During prefill, transfers account for 86–98% of the execution time for
+OPT-30B. As the prompt length increases, the transfer fraction decreases, but it
+remains substantial. During decode, transfers account for 98% of the execution
+
+
+--- Page 5 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+5
+50
+500
+5000
+64
+256
+1024
+CPU compute time [ms]
+Prompt length
+4 thread
+8 thread
+16 thread
+(a) OPT-30B. Prefill.
+10
+20
+30
+40
+64
+256
+1024
+CPU compute time [ms]
+Sequence length
+4 thread
+8 thread
+16 thread
+(b) OPT-30B. Decode.
+50
+500
+5000
+64
+256
+1024
+CPU compute time [ms]
+Prompt length
+4 thread
+8 thread
+16 thread
+(c) OPT-66B. Prefill.
+20
+30
+40
+50
+60
+64
+256
+1024
+CPU compute time [ms]
+Sequence length
+4 thread
+8 thread
+16 thread
+(d) OPT-66B. Decode.
+Fig. 3: CPU computation time per layer for each phase.
+Table 1: Weight transfer time per layer over PCIe for OPT models (Pinned vs.
+Pageable memory).
+DMA Type OPT-30B OPT-66B
+Pinned
+28.2 ms
+47 ms
+Pageable
+79.8 ms
+129.9 ms
+time and remain constant regardless of the generation length. OPT-66B exhibits
+the same trend.
+Because host-to-GPU transfers are slower than GPU computation, recent
+work has proposed cooperative execution with CPU computation [7, 18, 6]. How-
+ever, some studies primarily evaluate server-class CPUs equipped with matrix
+extensions such as Intel Advanced Matrix Extensions (AMX). While some eval-
+uations include environments with desktop CPUs, there are limited reports
+that quantify the relationship among GPU computation, CPU computation,
+and transfer time in the batch-size-1 decode setting that we primarily target.
+Therefore, we conduct layer-level profiling in a consumer desktop environment.
+Figure 2 and Figure 3 show per-layer computation times on the GPU and
+CPU, respectively. For the CPU, we also report results across different thread
+counts. Table 1 reports transfer time from host memory to GPU memory. Com-
+paring GPU and CPU computation times, the GPU is more than 100× faster.
+This gap is especially pronounced in the compute-intensive prefill phase, where
+the GPU can be more than 1000× faster. Since prefill is compute-intensive,
+CPU execution can be accelerated by increasing the number of threads. How-
+ever, in many cases, CPU execution remains slower than the sum of transfer
+time and GPU computation time, indicating that transferring weights to the
+
+
+--- Page 6 ---
+6
+N. Sugirua et al.
+GPU and computing there is more efficient than computing on the CPU. In
+decode, increasing the thread count provides limited benefit. Nevertheless, com-
+paring transfer time and CPU time shows that CPU computation is faster than
+transfer in the decode phase. This indicates room for speedup by overlapping
+CPU computation with transfers. OPT-66B has more parameters per layer than
+OPT-30B, which increases latency, but the overall trends remain the same.
+2.3
+Motivation
+GPUs accelerate LLM inference through their high matrix computation capa-
+bility. However, in a single-GPU environment where all model weights cannot
+reside in GPU memory, a practical design is to offload weights to host memory
+and transfer them to the GPU on demand. In this setting, inference latency
+is dominated by weight transfer time. As shown by the measurements in Sec-
+tion 2.2, during decode, per-layer CPU computation time can be shorter than
+weight transfer time, which suggests an opportunity to use CPU computation
+as a planned computation window for hiding transfers.
+However, to actually reduce exposed transfers, it is necessary to jointly de-
+cide at the layer level which layers should be assigned to the CPU to create
+hiding windows and when the weights of other layers should be transferred. As
+discussed in Section 1, this design space has not been sufficiently explored in
+prior work. In this paper, we aim to minimize the inference latency of one de-
+code step by selecting, for each layer, among CPU execution, GPU residency,
+and transferred GPU execution, and by using the layers executed on the CPU
+as hiding intervals for weight transfers. However, how to optimally assign these
+placements to individual layers is not straightforward.
+3
+Problem formulation
+3.1
+Analytical model
+In a single LLM decode step (one-token generation), each layer i ∈{1, . . . , N}
+is executed serially. We formulate the latency by focusing on the fact that each
+layer can adopt one of the following three execution modes.
+– cpu: Execute on the CPU. The computation time of layer i is ci.
+– resident: Execute on the GPU, and the weights are resident on the GPU.
+The computation time of layer i is gi, and no weight transfer is required.
+– stream: Execute on the GPU, but the weights are transferred on demand.
+The computation time of layer i is gi, and a transfer time wi is required.
+The latency is determined once the execution mode mi ∈{cpu, resident, stream}
+is selected for each layer. Since both resident and stream modes utilize the GPU
+for computation, we define an indicator variable ui that represents whether layer
+i is computed on the GPU as ui = 1[mi̸ = cpu]. Because the layers are processed
+serially, the total latency L for one decode step is expressed as the sum of the
+following four terms.
+
+
+--- Page 7 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+7
+1. Total computation time of layers executed on the CPU: Tcpu(m) = PN
+i=1(1−
+ui)ci
+2. Total computation time of layers executed on the GPU: Tgpu(m) = PN
+i=1 uigi
+3. Exposed transfer time (stall): Weight transfers for stream layers can proceed
+in parallel with computation, but any portion that cannot be fully hidden
+by computation appears as waiting time. We define this as Tstall(m) ≥0.
+4. Activation transfer (CPU-GPU switching): Each time the execution device
+switches between adjacent layers, an activation transfer cost a is incurred.
+Let the number of switches be B(m) = PN−1
+i=1 |ui−ui+1|, then the activation
+transfer time is aB(m).
+Based on these components, the latency L for a single decode step is repre-
+sented by the following equation.
+L(m) = Tcpu(m) + Tgpu(m) + Tstall(m) + aB(m)
+(1)
+The objective of this paper is to select m to minimize L(m) while satisfying the
+GPU memory capacity constraints.
+3.2
+Approximation via transfer-computation balancing
+The stall term Tstall(m) depends on detailed temporal conditions, including when
+each transfer starts, which computation interval it overlaps with, and whether
+the transfer finishes before the corresponding layer is executed. Directly mod-
+eling these conditions leads to a complicated analysis. Therefore, rather than
+tracking the fine-grained timing of each individual transfer, we introduce an ap-
+proximation model that focuses on the relation between the total time required
+for transfers and the total amount of computation time available to hide them.
+In this approximation, transfers are treated as if they can be flexibly assigned
+across computation intervals, and the individual deadline constraints of each
+transfer are relaxed. Under this approximation, the stall term is interpreted as
+the portion of the total transfer time that remains exposed even after overlap
+with computation. We also assume that CPU computation and weight transfer
+to the GPU can proceed independently and can fully overlap.
+First, the total transfer time required for layers executed in stream mode
+is expressed as W(m) = PN
+i=1[mi = stream] wi. Similarly, the total amount of
+computation time that can potentially hide transfers is expressed as C(m) =
+Tcpu(m) + Tgpu(m). In the approximation model, we assume that the exposed
+stall is the portion of the total transfer time W(m) that cannot be hidden within
+the computation time C(m), which yields
+Tstall(m) ≈max(0, W(m) −C(m)).
+(2)
+Furthermore, since a is sufficiently small compared with the other terms, we
+ignore it in the following analysis. In our experimental environment, a is only
+0.005 ms. The latency in the previous subsection can then be approximated as
+L(m) ≈C(m) + max(0, W(m) −C(m))
+= max(C(m), W(m)).
+(3)
+
+
+--- Page 8 ---
+8
+N. Sugirua et al.
+LLM Model
+Profiler
+Latency per layer
+CPU
+30 ms
+HtoD
+60 ms
+Planner
+Execution mode & transfer schedule
+Layer
+Mode
+Transfer
+1
+Resident
+2
+CPU
+Layer 4
+3
+CPU
+Layer 4
+4
+Stream
+Inference module
+L4
+GPU
+PCIe
+CPU
+L2
+L3
+L1
+L4
+L2
+L3
+L1
+Tokeni
+Tokeni+1
+Fig. 4: Overview of proposed method.
+That is, the latency is determined by whichever is larger, the total computation
+time C(m) or the total transfer time W(m). In general, in offloaded inference
+on a single GPU, transfer time is much larger than computation time, that is,
+wi ≫gi. Therefore, in the standard approach that executes all layers on the
+GPU, we typically have W(m) > C(m), and transfer becomes the bottleneck.
+To mitigate this bottleneck, it is effective to intentionally increase C(m) by
+executing some layers on the slower CPU, thereby hiding the transfer cost of the
+remaining stream layers within that computation time.
+Based on this idea, we next consider the optimal execution block while re-
+specting the GPU memory capacity limit. To efficiently overlap CPU compu-
+tation with weight transfer, it is desirable to form an execution block in which
+the weights of y stream layers are transferred asynchronously to the GPU while
+x layers are computed on the CPU. If the computation time is approximately
+uniform across layers, the increase in total computation time caused by assigning
+a layer to the CPU can be approximated by the average ¯
+∆= E[ci −gi] and the
+increase in total transfer time caused by assigning a layer to stream mode can
+be approximated by the average ¯w = E[wi]. Here, the GPU computation time gi
+is much smaller than both the CPU computation time ci and the transfer time
+wi, that is, gi ≪ci, wi. Thus, in practice, we can approximate C(m) ≈Tcpu(m).
+Moreover, we have
+¯
+∆≈E[ci] = ¯c. Under these approximations, minimizing
+max(C(m), W(m)) becomes equivalent to balancing Tcpu(m) and W(m). Hence,
+a desirable ratio satisfies ¯cx ≈¯wy. Therefore, under the integer constraint, we
+solve
+min
+x,y∈Z |¯c x −¯w y|
+(4)
+and use the resulting ratio x : y to allocate non-resident layers between cpu and
+stream modes.
+4
+Proposed method
+In this section, we describe how to construct an execution plan based on the
+formulation in Section 3 and how to run inference accordingly. Figure 4 provides
+an overview. First, our method obtains per-layer CPU computation time and
+transfer time via offline profiling. Then, it determines the execution mode for
+each layer, and the inference module runs inference following the resulting plan.
+
+
+--- Page 9 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+9
+Layer1
+GPU
+PCIe
+CPU
+Layer2
+Layer3
+(a) On-demand loading
+L3
+GPU
+PCIe
+CPU
+L1
+L2
+(b) CPU-assisted transfer hiding
+Fig. 5: Comparison of on-demand loading and CPU-assisted transfer hiding
+4.1
+Execution plan construction
+We next construct the execution plan by assigning each layer to resident, CPU, or
+stream execution. To obtain x and y that satisfy Eq. 4, the average computation
+time per layer ¯c and the average transfer time per layer ¯w are required. In
+our method, we use values collected through offline profiling to compute the
+numbers of layers x and y that form the optimal execution block. Using these
+profiled values, Algorithm 1 performs a continued-fraction search to find integer
+values of x and y that minimize |¯cx −¯wy| under the constraint x + y ≤N.
+Next, we determine the number of resident layers, denoted by nresident. Let
+K be the effective GPU memory capacity, that is, the maximum number of
+layers that can be used for weight placement after excluding the space required
+for the KV cache and temporary activation buffers. In the inference process of
+our method, an additional temporary space is required to transfer and retain
+the weights of y layers as a batch, which we call the stream buffer. Therefore,
+to maximize the number of resident layers while satisfying the GPU memory
+capacity constraint, nresident is uniquely determined as nresident = K −y, which
+is obtained by subtracting the y layers reserved for the stream buffer from the
+effective capacity K.
+Among the total N layers, the remaining N −nresident layers that cannot
+reside on the GPU are partitioned into blocks with the computed ratio of x
+to y. At runtime, these blocks are scheduled so that CPU computation and
+stream execution are processed alternately and in parallel. As shown in Figure 5,
+this reduces inference latency compared with an on-demand loading scheme. As
+a result, the method fully utilizes precious GPU memory for resident layers
+while using only the minimum required stream buffer, enabling inference that
+completely hides transfer latency.
+4.2
+Inference procedure
+We then describe how inference is executed under this plan. At runtime, the
+resident layers are first transferred to the GPU. During inference, layers are
+processed in order, and each layer is executed on either the CPU or the GPU
+according to the plan. For stream layers that are executed on the GPU, asyn-
+chronous transfer is initiated immediately before the computation of the first
+CPU layer in the execution block. At this point, the transfer proceeds in parallel
+with the computation of the CPU layers. After the transfer completes, the loca-
+tion of the weights referenced by the corresponding layer is switched to the GPU
+side, and the computation is performed when that layer is reached. Activations
+
+
+--- Page 10 ---
+10
+N. Sugirua et al.
+Algorithm 1 Continued-fraction search under a sum constraint
+Require: Positive integers ¯c, ¯w, n
+Ensure: Integer pair (x, y)̸ = (0, 0) minimizing |¯cx −¯wy|
+1: (x⋆, y⋆) ←(¯c < ¯w)?(1, 0) : (0, 1)
+2: δ⋆←|¯cx⋆−¯wy⋆|
+3: (pprev, qprev) ←(1, 0), (pcurr, qcurr) ←(⌊¯c/ ¯w⌋, 1), (u, v) ←(¯c, ¯w)
+4: while true do
+5:
+if qcurr + pcurr ≤n then
+6:
+δ ←|¯cqcurr −¯wpcurr|
+7:
+if δ < δ⋆then
+8:
+(x⋆, y⋆, δ⋆) ←(qcurr, pcurr, δ)
+9:
+if δ⋆= 0 then
+10:
+break
+11:
+else
+12:
+k ←
+n −(qprev + pprev)
+qcurr + pcurr
+
+13:
+if k > 0 then
+14:
+(ˆx, ˆy) ←(qprev + kqcurr, pprev + kpcurr)
+15:
+ˆδ ←|¯cˆx −¯wˆy|
+16:
+if ˆδ < δ⋆then
+17:
+(x⋆, y⋆, δ⋆) ←(ˆx, ˆy, ˆδ)
+18:
+break
+19:
+r ←u mod v
+20:
+if r = 0 then
+21:
+break
+22:
+(u, v) ←(v, r)
+23:
+α ←⌊u/v⌋
+24:
+(pnext, qnext) ←(αpcurr + pprev, αqcurr + qprev)
+25:
+(pprev, qprev) ←(pcurr, qcurr)
+26:
+(pcurr, qcurr) ←(pnext, qnext)
+27: return (x⋆, y⋆)
+are moved to the required device only when the computation device changes
+between adjacent layers.
+In prefill, the KV cache for past tokens does not yet exist, so auxiliary inputs
+such as positional information and attention masks are prepared only once at
+the beginning of the forward pass and then reused across layers. This reuse is
+possible because these auxiliary inputs do not change across layers for the same
+input sequence, and it avoids the cost of regenerating them for each layer. As
+shown by the analysis in Section 2.2, CPU computation is slower in the prefill
+phase, so transferring the weights to the GPU and executing there is faster.
+Therefore, in the prefill phase, even layers assigned to the CPU are transferred
+to the GPU and executed there.
+In decode, tokens are generated one by one while retaining the KV cache for
+past tokens. Since the plan divides layers between the CPU and the GPU, the KV
+cache is also placed according to the execution device of each layer. Specifically,
+
+
+--- Page 11 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+11
+The KV cache of CPU-executed layers is placed on the host side, while that of all
+other layers is placed on the GPU. With FP16 and batch size 1, the maximum
+KV cache size per layer is 56 MiB for OPT-30B and 72 MiB for OPT-66B, so
+its memory impact is small compared with that of the weights. After that, the
+layers are processed sequentially at each step, and inference proceeds in the same
+manner while inserting transfers of weights and activations when needed. At each
+step, the completion of weight transfers and computation is synchronized with
+CUDA events, which preserves the dependencies among transfer, computation,
+switching of weight references, and reuse of temporary buffers.
+4.3
+Implementation details
+Our method is implemented on top of HuggingFace Transformers [12]. To min-
+imize transfer latency, we use pinned memory. The weights of stream-targeted
+layers are packed into contiguous memory regions and kept on the host side in
+page-locked memory. These weights are then transferred asynchronously to a
+temporary buffer on the GPU, after which the storage location of the weights
+referenced by the target layer is switched to the GPU side and computation is
+performed. After computation, the reference is switched back to the host side,
+and the temporary buffer on the GPU is overwritten and reused. Therefore, along
+this path, no weight transfer is performed from the GPU back to the host.
+5
+Evaluation
+5.1
+Setup
+Because our method does not use compression or approximation and therefore
+causes no accuracy degradation, we evaluate only performance. As performance
+metrics, we use end-to-end latency and energy consumption. The evaluation is
+conducted on a system equipped with an NVIDIA RTX 5090 with 32 GiB of
+memory and an Intel Core Ultra 7 265F @ 2.40 GHz with 128 GiB of memory.
+The GPU and the host are connected via PCIe Gen5 ×16. Experiments are
+conducted using NVIDIA CUDA 12.4.131. CPU computation is configured to
+use 8 threads. Although the Core Ultra 7 includes an NPU, it is not used in this
+paper. We use OPT-30B and OPT-66B [17] and Llama2-70B [10] as the target
+models. FP16 is used as the data type. We evaluate the models with prompt
+lengths of 256 and 1024, while fixing the decode length to 32. As baselines, we use
+Hugging Face Accelerate [3], DeepSpeed Zero-Inference [4], and two policies from
+FlexInfer, namely CPU-only and SplitGen. CPU-only executes all computation
+on the CPU. SplitGen executes the portion of weights that fit in GPU memory
+on the GPU, while executing the remaining portion on the CPU.
+5.2
+Inference performance
+Figure 6 shows the end-to-end latency of each method for OPT-30B, OPT-66B,
+and Llama2-70B with prompt lengths of 256 and 1024. For OPT-30B with a 256-
+token prompt, the proposed method is 3.5×, 6.3×, 2.8×, and 1.5× faster than
+
+
+--- Page 12 ---
+12
+N. Sugirua et al.
+0
+50
+100
+150
+DeepSpeed
+Accelerate
+CPU-only
+SplitGen
+Proposed
+E2E latency [s]
+256
+1024
+(a) OPT-30B.
+0
+200
+400
+600
+Accelerate
+CPU-only
+SplitGen
+Proposed
+E2E latency [s]
+256
+1024
+(b) OPT-66B.
+0
+200
+400
+600
+800
+Accelerate
+CPU-only
+SplitGen
+Proposed
+E2E latency [s]
+256
+1024
+(c) Llama2-70B.
+Fig. 6: End-to-end latency comparison with prompt lengths of 256 and 1024.
+DeepSpeed is omitted for OPT-66B and Llama2-70B because of out of memory.
+Accelerate, DeepSpeed, CPU-only, and SplitGen, respectively. For OPT-66B, the
+proposed method is 3.5× faster than Accelerate, 6.1× faster than CPU-only, and
+1.4× faster than SplitGen. For Llama2-70B, the proposed method incurs 22%
+higher latency than SplitGen when the prompt length is 256. This is because
+Llama2-70B itself is large, and pinned memory further increases pressure on host
+memory. On-demand loading methods such as Accelerate and DeepSpeed process
+all layers on the GPU, so latency varies little with changes in prompt length. Sim-
+ilarly, because the proposed method also uses on-demand loading for the prefill
+stage, the difference in latency due to prompt length is small. In contrast, CPU-
+only and SplitGen perform the prefill on the CPU, which leads to a significant
+difference based on prompt length. In the CPU-only method, latency increases
+as the model size grows because the computational load increases. While transfer
+time is a major bottleneck for Accelerate and DeepSpeed, the proposed method
+achieves higher speeds by utilizing CPU computational resources and performing
+computation in parallel with data transfer.
+0%
+20%
+40%
+60%
+80%
+100%
+OPT-30B
+OPT-66B Llama2-70B
+GPU
+CPU
+Exposed Tx
+Others
+Fig. 7: Breakdown of
+execution time. Tx de-
+notes transfer.
+Figure 7 shows the execution time breakdown of the
+proposed method with a 256-token prompt. For OPT-
+30B and OPT-66B, the ratio of exposed transfers is min-
+imal, as 99.6% and 99.8% of the transfers are hidden by
+computation, respectively. In contrast, almost all trans-
+fers are exposed for Llama2-70B. The plan is made us-
+ing average computation and transfer times. However,
+host memory pressure makes these times unstable, so
+the execution does not follow the plan as expected. A
+potential countermeasure is to adopt worst-case mea-
+surements during the profiling phase. The major overhead of our method is
+execution plan construction. However, this takes only 3.2 seconds, and because
+the plan is reusable, its impact on overall performance is negligible.
+5.3
+Energy consumption
+0
+10
+20
+30
+DeepSpeed
+Accelerate
+CPU-only
+SplitGen
+Proposed
+Total Energy 
+consumption [J]
+Fig. 8: Energy consumption.
+The total energy consumption was calculated by
+integrating the power values sampled at 1 Hz us-
+ing a watt-hour meter during the inference pe-
+riod. Figure 8 shows the energy consumption for
+a single inference of OPT-30B with a 1024-token
+
+
+--- Page 13 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+13
+prompt and 32-token output. The proposed method achieves the lowest total en-
+ergy consumption, outperforming DeepSpeed, Accelerate, CPU-only, and Split-
+Gen by 4.9×, 3.1×, 4.6×, and 2.7×, respectively, primarily due to its shorter
+inference time. The proposed method and SplitGen, both of which perform com-
+putation on both the CPU and GPU, exhibit higher average power consumption,
+at 273 W and 262 W, respectively. In contrast, the average power consumption
+is 219 W for Accelerate, 199 W for DeepSpeed, and 193 W for CPU-only. How-
+ever, because DeepSpeed and CPU-only have longer execution times, their total
+energy consumption is higher.
+6
+Related work
+FlexGen [8] proposes a zig-zag scheduling that reuses weights across batches to
+maximize throughput. Park and Egger [7] reduce single-layer latency by using
+dynamic programming to split each layer into three segments, with the first and
+third executed on the CPU and the second on the GPU. These approaches target
+batch-oriented workloads and focus on throughput-oriented inference accelera-
+tion. HeteGen [18] overlaps CPU computation, transfer, and GPU computation
+through heterogeneous tensor parallelism, but relies on substantial CPU com-
+pute capability. FlexInfer [6] adapts execution to runtime conditions by choosing
+among CPU-only, on-demand GPU execution, and SplitGen, but does not use
+CPU execution as a transfer-hiding window. Relatedly, KVPR [5] and Shad-
+owKV [9] target KV-cache offloading for long-context inference. In contrast, our
+work targets batch size 1 decode with weight offloading and minimizes exposed
+transfer time through layer-wise placement into CPU, resident GPU, and stream
+modes.
+7
+Conclusion
+In this paper, we aimed to minimize LLM inference latency in resource-constrained
+single-GPU environments and proposed an optimization method for placing
+GPU computation, CPU computation, and stream-based computation. In con-
+ventional offloading methods, weight transfer over PCIe has been a bottleneck.
+Our method addresses this issue by executing some layers on the CPU and asyn-
+chronously transferring weights during that computation time, thereby realizing
+execution blocks that hide transfer latency. Our evaluation on a consumer desk-
+top equipped with an RTX 5090 showed that, for OPT-30B, our method achieved
+a 3.5× speedup and 3.1× lower energy consumption than HuggingFace Accel-
+erate. These results indicate that our method is effective for the growing use of
+personal-use LLM inference in resource-constrained single-GPU environments.
+References
+1. Generative ai 2025: Assessing opportunities and disruptions in an evolving trillion-
+dollar-plus market. https://assets.bbhub.io/professional/sites/41/Generative-AI-
+Outlook.pdf (2024), accessed: 2026-03-04
+
+
+--- Page 14 ---
+14
+N. Sugirua et al.
+2. Gartner says ai pcs will represent 31% of worldwide pc market by the end of
+2025. https://www.gartner.com/en/newsroom/press-releases/2025-08-28-gartner-
+says-artificial-intelligence-pcs-will-represent-31-percent-of-worldwide-pc-market-
+by-the-end-of-2025 (2025), accessed: 2026-03-04
+3. Huggingface accelerate. https://github.com/huggingface/accelerate (2025), ac-
+cessed: 2026-2-16
+4. Aminabadi, R.Y., Rajbhandari, S., Awan, A.A., Li, C., Li, D., Zheng, E., Ruwase,
+O., Smith, S., Zhang, M., Rasley, J., et al.: Deepspeed-inference: enabling efficient
+inference of transformer models at unprecedented scale. In: SC22: International
+Conference for High Performance Computing, Networking, Storage and Analysis.
+pp. 1–15. IEEE (2022)
+5. Jiang, C., Gao, L., Zarch, H.E., Annavaram, M.: Kvpr: Efficient llm inference
+with i/o-aware kv cache partial recomputation. In: Findings of the Association for
+Computational Linguistics: ACL 2025. pp. 19474–19488 (2025)
+6. Na, S., Jeong, G., Ahn, B.H., Jezghani, A., Young, J., Hughes, C.J., Krishna, T.,
+Kim, H.: Flexinfer: Flexible llm inference with cpu computations. Proceedings of
+Machine Learning and Systems 7 (2025)
+7. Park, D., Egger, B.: Improving throughput-oriented llm inference with cpu com-
+putations. In: Proceedings of the 2024 International Conference on Parallel Archi-
+tectures and Compilation Techniques. pp. 233–245 (2024)
+8. Sheng, Y., Zheng, L., Yuan, B., Li, Z., Ryabinin, M., Chen, B., Liang, P., Ré, C.,
+Stoica, I., Zhang, C.: Flexgen: High-throughput generative inference of large lan-
+guage models with a single gpu. In: International Conference on Machine Learning.
+pp. 31094–31116. PMLR (2023)
+9. Sun, H., Chang, L.W., Bao, W., Zheng, S., Zheng, N., Liu, X., Dong, H., Chi, Y.,
+Chen, B.: Shadowkv: Kv cache in shadows for high-throughput long-context llm
+inference. arXiv preprint arXiv:2410.21465 (2024)
+10. Touvron, H., Martin, L., Stone, K., Albert, P., Almahairi, A., Babaei, Y., Bash-
+lykov, N., Batra, S., Bhargava, P., Bhosale, S., et al.: Llama 2: Open foundation
+and fine-tuned chat models. arXiv preprint arXiv:2307.09288 (2023)
+11. Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A.N., Kaiser,
+Ł., Polosukhin, I.: Attention is all you need. Advances in neural information pro-
+cessing systems 30 (2017)
+12. Wolf, T., Debut, L., Sanh, V., Chaumond, J., Delangue, C., Moi, A., Cistac, P.,
+Rault, T., Louf, R., Funtowicz, M., et al.: Huggingface’s transformers: State-of-
+the-art natural language processing. arXiv preprint arXiv:1910.03771 (2019)
+13. Xiao, G., Lin, J., Seznec, M., Wu, H., Demouth, J., Han, S.: Smoothquant: Accurate
+and efficient post-training quantization for large language models. In: International
+conference on machine learning. pp. 38087–38099. PMLR (2023)
+14. Xu, J., Li, Z., Chen, W., Wang, Q., Gao, X., Cai, Q., Ling, Z.: On-device language
+models: A comprehensive review. arXiv preprint arXiv:2409.00088 (2024)
+15. Yang, Z., Jia, X., Li, H., Yan, J.: Llm4drive: A survey of large language models for
+autonomous driving. arXiv preprint arXiv:2311.01043 (2023)
+16. Zeng, F., Gan, W., Wang, Y., Liu, N., Yu, P.S.: Large language models for robotics:
+A survey. arXiv preprint arXiv:2311.07226 (2023)
+17. Zhang, S., Roller, S., Goyal, N., Artetxe, M., Chen, M., Chen, S., Dewan, C., Diab,
+M., Li, X., Lin, X.V., et al.: Opt: Open pre-trained transformer language models.
+arXiv preprint arXiv:2205.01068 (2022)
+18. Zhao, X., Jia, B., Zhou, H., Liu, Z., Cheng, S., You, Y.: Hetegen: Efficient heteroge-
+neous parallel inference for large language models on resource-constrained devices.
+Proceedings of Machine Learning and Systems 6, 162–172 (2024)
+
+
+--- Page 15 ---
+A Layer-wise CPU-GPU LLM Scheduling for Consumer GPUs
+15
+This preprint has not undergone peer review (when applicable) or any post-submission
+improvements or corrections. The Version of Record of this contribution is published in
+Euro-Par 2026: Parallel Processing, and is available online at https://doi.org/10.1007/978-
+3-032-35251-4_21.

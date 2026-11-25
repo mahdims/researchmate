@@ -1,0 +1,2778 @@
+--- Page 1 ---
+preprint
+8 November 2026
+Spot Markets for AI Inference
+Dynamic Capacity Allocation and Pricing on a Shared Accelerator Fleet
+Quanyan Zhu
+Tandon School of Engineering, New York University, Brooklyn, NY, USA
+qz494@nyu.edu
+abstract
+Inference providers size their accelerator fleets for the interactive peak and sell spare capacity through fixed
+discounts, such as batch tiers at half price. However, inference differs from conventional cloud capacity in four
+respects: capacity depends on the latency tier through batching, moving weights between models is slow and
+costly, spot demand can wait until its deadline, and power can bind. In this paper, we develop a framework for
+dynamic capacity allocation and pricing of AI inference on a shared accelerator fleet. We consider a provider
+that serves several models under a power cap and sells each model in an interactive tier with a speed promise
+and in a spot tier for preemptible work with a deadline. In each period, the provider chooses how many replicas
+of each model to keep loaded and what spot price to quote. We show that one interactive token displaces
+a fixed number 𝜌𝑚> 1 of spot tokens, and that the optimal spot price lies midway between the interactive
+price and the effective cost of capacity in the deadline window, which is close to the prevailing half price only
+when the fleet is slack. We further show that a spot tier raises the optimal reliability of the interactive tier,
+and that placement should follow persistent demand shifts while prices absorb transients. Building on these
+results, we design a model predictive controller based on a linear program with explicit approximation bounds,
+which solves each period in milliseconds. Numerical experiments on a simulated week with a measured daily
+demand profile, a flash crowd, and a grid curtailment show that the controller raises profit by 7.4% over fixed
+half-price practice, captures 93% of the gain available with perfect forecasts, keeps the interactive promise
+through both events, and leaves spot buyers better off.
+Keywords: AI inference; spot pricing; capacity allocation; accelerator fleets; batching; model predictive
+control; power caps
+1 Introduction
+Generative AI is increasingly delivered as a metered service. When a person, an application, or
+an autonomous agent submits a request to a foundation model, the model produces its response
+one token at a time on a fleet of specialized accelerators, and the provider charges for the tokens
+consumed [10, 49]. As foundation models become embedded in search, software development,
+customer service, and multi-step agentic workflows, the production of tokens, known as inference,
+has emerged as a central economic activity of the AI industry. Inference is also intensive in both
+1
+arXiv:2611.11215v1  [eess.SY]  8 Nov 2026
+
+
+--- Page 2 ---
+quanyan zhu
+Spot Markets for AI Inference
+capital and energy. The accelerators that perform inference are among the most expensive assets
+in computing, and the data centers that house them have become a rapidly growing source of
+electricity demand [17, 37]. Therefore, the allocation and pricing of inference capacity is not only
+an engineering question of throughput and latency but also an economic question about the use of a
+scarce, costly, and perishable resource.
+Inference capacity differs from a conventional commodity in three respects. First, it is perishable.
+An accelerator-hour that is not used to generate tokens cannot be stored and sold later, and hence
+idle capacity is a cost that is never recovered. Second, it is slow to reconfigure. To serve a model,
+a provider must load the model’s weights, often tens to hundreds of gigabytes, onto one or more
+accelerators, which takes from seconds to minutes and interrupts production on those accelerators
+[13]. Third, the quantity of capacity depends on the quality of service that it delivers. Serving
+systems process many requests together in a batch [19, 45], and a larger batch produces more tokens
+per second in total but fewer for each request [30]. As a result, a provider that promises interactive
+users a fast stream of tokens must keep its batches small and accept a lower throughput than the
+same hardware could deliver for work that can tolerate delay.
+These properties shape how inference is provisioned and sold today. Interactive demand follows
+the working day of its users. Since weights cannot be loaded quickly enough to meet a sudden
+surge, providers size their fleets for the busiest hour with a margin for forecast error. Consequently, a
+substantial part of the fleet idles for much of the day. The major providers have responded by selling
+deferrable work at a discount. Batch interfaces complete requests within a day at half the standard
+price, flex tiers offer lower prices in exchange for slower or less reliable service, and some providers
+have charged less in off-peak hours [4, 9, 15, 26, 27]. One important feature shared by these offers
+is that their prices are fixed. In other words, the prices do not respond to whether the fleet is busy or
+idle, and access is rationed through rate limits and queues rather than through prices.
+At the same time, the conditions under which inference capacity is supplied are becoming more
+variable. The release of a new model can raise demand for it sharply within hours. Agents, evaluation
+suites, and data pipelines generate large volumes of work that can wait minutes or hours for an
+answer. Moreover, data centers are increasingly constrained by their connections to the power grid,
+and grid operators are asking large loads to reduce consumption at short notice [17, 25]. A fixed
+discount cannot respond to any of these conditions. When the fleet is slack, a fixed discount may
+be close to the right price. When the fleet is tight, however, it leaves the scarcity value of capacity
+unpriced, and when the grid is stressed, it provides no signal that would move flexible work to other
+hours. Nevertheless, a dynamic alternative is not straightforward to design. The provider must decide
+which models to keep loaded and at what price to sell spare capacity before it observes the next
+period’s interactive load, and it must honor the deadlines of the work that it has already accepted.
+Infrastructure clouds faced a related problem when they began to sell idle virtual machines. Spot
+instances, introduced in 2009, offered spare capacity at a price that varied with its availability [1, 3],
+and a body of work has studied how a data-center operator can adapt its capacity, and in spot markets
+also its prices, to changing demand [18, 21, 46]. However, inference differs from virtual machines in
+ways that change the structure of the control problem. Two of these differences have been noted
+above. The capacity of a replica depends on the latency tier that it serves, and moving accelerators
+between models is slow and costly, even though dividing a model’s replicas between tiers is a free
+setting of the batch scheduler. Two further differences arise from the nature of demand and supply.
+Spot work has a deadline rather than a start time, so demand can wait while capacity cannot. In
+addition, power, not only the number of accelerators, can limit production. Section 2 explains each
+of these features in more detail.
+2
+
+
+--- Page 3 ---
+quanyan zhu
+Spot Markets for AI Inference
+In this paper, we develop a framework for dynamic capacity allocation and pricing of AI inference
+on a shared accelerator fleet. We consider a provider that serves several models under a power cap
+and sells each model in two tiers: an interactive tier, at a posted price with a guaranteed decode
+speed, and a spot tier, for preemptible work that must be completed within a deadline, at a price
+that the provider may revise every period. In each period, the provider decides how many replicas
+of each model to keep loaded and what spot price to quote before the period’s interactive load is
+realized. The resulting problem is a constrained stochastic control problem with two time scales, a
+queue with deadlines, and coupling across models through the shared fleet and the power cap. We
+first study simplified versions of the problem that admit closed-form characterizations, and we then
+solve the full problem by model predictive control. Figure 1 illustrates the setting and its translation
+into control-theoretic terms.
+The contributions of this paper are fourfold. First, we show that continuous batching induces a
+latency exchange rate between the two tiers. At the margin, one interactive token per second displaces
+𝜌𝑚> 1 spot tokens per second, where 𝜌𝑚is the ratio of a replica’s full-load throughputs at the two
+tiers’ batch caps (Lemma 1). This result converts the latency premium of interactive service into a
+linear capacity constraint that can be priced.
+Second, we characterize optimal spot prices. On a shared fleet, the optimal spot price lies midway
+between the interactive price and the full marginal cost of a spot token, which includes the shadow
+rents of the fleet and of power. These rents are determined by water-filling across models, and hence
+a demand surge on one model raises the spot prices of all models (Proposition 1). When the fleet is
+slack, the rule reproduces the half-price discount observed in practice, and a fixed discount loses
+little. When the fleet is tight, however, a fixed discount forgoes the scarcity rent (Proposition 2).
+When work can be deferred, the relevant cost is that of the cheapest capacity within the deadline
+window (Theorem 1).
+Third, we establish two structural results on reliability and placement. A spot tier acts as a salvage
+market for the safety capacity of the interactive tier and therefore raises the optimal reliability of
+interactive service (Theorem 2). Moreover, placement exhibits an inaction band determined by the
+round-trip cost of loading and unloading a model. In other words, transient shocks are absorbed by
+prices, and only persistent shifts justify moving weights (Theorem 3).
+Fourth, we design a model predictive controller that embeds these results. A piecewise-linear
+approximation of revenue, tangent cuts on the expected interactive overflow, and a cumulative
+representation of deadlines reduce each period’s planning problem to a linear program with explicit
+approximation bounds (Lemmas 2 and 3). The program solves in about 7 milliseconds (Section 6).
+We evaluate the controller on a simulated week of a 512-accelerator fleet serving three models,
+with a daily demand profile measured on a public inference marketplace, a flash crowd triggered by
+a model launch, and a curtailment requested by the grid operator (Section 7). Relative to a strong
+version of current practice, the controller raises profit by 7.4% and captures 93% of the gain available
+to a controller with perfect forecasts. It keeps the interactive speed promise through both events,
+serves more spot work, and increases the surplus of spot buyers. Note that the sources of the gain
+differ across regimes. On ordinary days, the gain comes mainly from prices, whereas during the two
+events it comes from reallocating accelerators and power across models. Collectively, these results
+suggest that a spot tier with dynamic prices is more than a channel for selling idle capacity. It also
+serves as an instrument for managing the reliability of interactive service, absorbing demand shocks,
+and offering flexibility to the power grid.
+The rest of the paper is organized as follows. Section 2 describes how inference capacity is
+produced and sold and states the problem. Section 3 reviews related work. Section 4 presents
+3
+
+
+--- Page 4 ---
+quanyan zhu
+Spot Markets for AI Inference
+the model, and Section 5 characterizes optimal policies in simplified settings. Section 6 develops
+the model predictive controller, and Section 7 reports the numerical study. Section 8 discusses
+implications and limitations, and Section 9 concludes the paper. Proofs are collected in Appendix A.
+2 Background and problem statement
+In this section, we describe how inference capacity is produced and sold, explain why a substantial
+part of it idles, and identify the features that distinguish its allocation from that of conventional cloud
+capacity. We conclude the section with a statement of the problem studied in the rest of the paper.
+Figure 1 summarizes the setting pictorially and restates the problem in the vocabulary of stochastic
+control for readers who are familiar with the methods but new to AI inference.
+Production of inference. A provider serves a model by loading a copy of its weights, called a replica,
+onto one or more accelerators. A small dense model may fit on a single accelerator, whereas a large
+mixture-of-experts model may span eight or more. A request is processed in two phases. In the
+prefill phase, the replica reads the prompt and builds a key–value cache that summarizes it. In the
+decode phase, it generates the response one token at a time, and each token requires a pass through
+the whole model. Note that, for the batch sizes used in interactive service, a decode step is limited
+by memory bandwidth rather than arithmetic, since it must read the weights and the caches of all
+sequences in progress [30]. Therefore, serving systems process many sequences together so that one
+pass over the weights advances every sequence in the batch by one token. With continuous batching,
+sequences join and leave the batch at every step [45], and paged memory management allows the
+caches of many sequences to share the accelerator’s memory [19]. A larger batch raises the total
+throughput of a replica but slows every sequence in it, since each step takes longer. In other words,
+the batch size is an operating point on a trade-off between throughput and latency, and it is bounded
+above by the memory available for caches. Section 4.1 formalizes this trade-off.
+Fleet sizing for the peak. Interactive demand follows the working day of its users. On one public
+inference marketplace, the hourly token volume over 30 days has a peak-to-trough ratio of 2.6 across
+the hours of the day [32]. Since weights cannot be loaded quickly enough to meet a surge, a provider
+must keep enough replicas loaded to serve interactive traffic at its busiest hour with a margin for
+forecast error. A fleet sized for the peak of this profile runs at 69% utilization on average, and at
+63% with a 10% safety margin. In the fleet simulated in Section 7, mean interactive load occupies
+49% of the accelerators on average, ranging between 33% and 68% over the day. The remaining
+accelerators represent capacity that the provider has already paid for. Note that accelerators are
+expensive to own or lease, and an accelerator-hour that is not used cannot be recovered later.
+Fixed discounts for spare capacity. The major providers sell deferral through batch interfaces that
+complete work within a day at half the standard price [4, 15, 26]. Some providers also sell flex tiers,
+which may be slower or unavailable at busy times, and priority tiers, which cost more [5, 27]. One
+provider has charged lower prices in off-peak hours [9]. Across the tiered endpoints listed on one
+large model router on 31 October 2026, the median flex price is 0.50 of the standard price of the
+same model and provider, the median priority price is 2.00, and the median batch price is 0.50 [28].
+These ratios are round numbers set by policy. They do not change when the fleet is busy or idle, and
+batch tiers ration access with rate limits and queues rather than with prices. Moreover, secondary
+venues on which inference capacity is resold quote prices well below list [31, 41]. This situation
+resembles the early market for cloud capacity before spot instances priced spare virtual machines
+according to their availability [1, 3].
+4
+
+
+--- Page 5 ---
+quanyan zhu
+Spot Markets for AI Inference
+1
+Two kinds of customers
+Ü
+Chat users
+(interactive tier)
+7 want answers
+within seconds
+U pay the full price 𝜋
+ç
+Patient jobs
+(spot tier)
+Ý can wait up to a
+deadline (here
+2 hours)
+U pay a lower
+price 𝑝𝑡
+Both are served by the same chips.
+2
+How the chips write answers
+An AI model loaded on the chips writes one word per step, for a
+whole group of requests at once. Each block below is one word.
+small group:
+3 chat users
+big group:
+8 patient jobs
+each answer fast
+18 words in total
+each answer slower
+32 words in total
+time
+Bigger groups make more words in total, but every answer
+comes out slower. Chat users need small groups, so each chat
+word takes the room of about 1.8 patient-job words.
+3
+The daily rhythm: chips bought for the busiest hour sit idle at night
+all the chips the provider owns
+A
+B
+jobs wait
+price of patient jobs
+midnight
+6 am
+noon
+6 pm
+midnight
+chat users
+patient jobs
+idle chips: money wasted
+A Quiet night: many idle chips.
+A low price fills them with
+patient jobs.
+B Busy afternoon: no free chips.
+A higher price makes patient
+jobs wait for a quieter hour.
+- - - fixed half price, as today
+4
+The provider’s two levers, and one limit
+Lever 1, slow: which AI model
+sits on which chips
+A
+A
+B
+B
+C
+B
+Â
+C
+Moving a model to other chips means copying
+its huge files (gigabytes) first: minutes offline,
+plus a cost.
+Lever 2, fast: the price
+of patient jobs
+U 𝑝𝑡↕
+Can change every 15 minutes,
+at no cost. A higher price
+means fewer jobs now.
+The limit: electric power
+W
+cap
+The chips run on electricity. The
+grid can ask the facility to use
+less, at short notice.
+5
+Every 15 minutes, the provider decides
+4 Look
+waiting jobs, demand
+forecasts, and power
+ Decide
+which model on which
+chips, and the price
+Ô Serve
+chat users first; patient
+jobs fill the rest
+15 minutes later: repeat
+ Goal
+most profit, fast chat,
+every job on time
+In control terms: the state is the chips in place and the job queue (𝑛𝑡−1, 𝑞𝑡); the controls are the placement 𝑛𝑡
+and the price 𝑝𝑡; the disturbances are chat load 𝑅𝑡, patient-job demand Λ𝑡, and the power cap 𝑊𝑡; the objective is
+expected profit (Section 4).
+Figure 1. An overview of the provider’s problem in five steps, intended for readers who are new to AI inference.
+In the figure, “words” refer to tokens and “chips” refer to accelerators. Panels 2 and 3 use illustrative numbers,
+and Section 4 presents the formal model.
+5
+
+
+--- Page 6 ---
+quanyan zhu
+Spot Markets for AI Inference
+Distinctive features of inference capacity. Dynamic pricing of spare capacity is well established for
+virtual machines. However, four features of inference change the control problem.
+1. Capacity depends on the service tier. A replica’s throughput rises with its batch size, and the latency
+promise of the interactive tier caps the batch. Hence, the same replica produces more spot tokens
+than interactive tokens, and one interactive token displaces 𝜌𝑚> 1 spot tokens (Lemma 1). In
+contrast, a virtual machine is a fixed unit of capacity regardless of what it is sold as.
+2. Placement is slow and costly, while splitting between tiers is free. Moving an accelerator from one
+model to another requires loading tens to hundreds of gigabytes of weights, which takes seconds
+for a small model and minutes for a large one [13]. In contrast, dividing a model’s replicas
+between interactive and spot work is a setting of the batch scheduler [19, 45]. As a result, the
+control problem has two time scales.
+3. Demand can be stored, but capacity cannot. Spot work has a deadline rather than a start time, and
+hence admitted work waits in a backlog. The backlog is a state variable, and the right price for
+spot work in the current period depends on the capacity that will be free before its deadline.
+4. Power, not only accelerators, can bind. Inference facilities are increasingly limited by their grid
+connections, and grid operators are asking large loads to curtail at short notice [17, 25, 37].
+Spot work is the part of the load that can be curtailed without breaking a promise, as long as its
+deadlines can still be met.
+The problem
+Consider a provider that serves several models on one fleet of accelerators under a power cap. The
+provider sells each model in an interactive tier, at a posted price with a speed promise, and in a spot
+tier, for preemptible work with a deadline, at a price that it may change every period. In every period, it
+chooses how many replicas of each model to keep loaded and what spot price to quote before it knows the
+period’s interactive load. The problem is to determine how the provider should set placement and prices
+to maximize profit, keep the interactive promise, and meet spot deadlines, when loading a model takes
+time and money, spot work can wait, and power may be curtailed.
+Significance of the problem. The problem is important for three reasons. First, the stakes are large.
+Accelerator fleets are among the most expensive assets in computing, and hence a few percentage
+points of their utilization represent substantial value. Second, the problem is becoming more
+pressing. Much of the work that agents and data pipelines generate, such as evaluations, synthetic
+data, document processing, and overnight agent runs, does not need an answer within seconds. In
+addition, data centers are becoming the loads that grid operators ask to flex [17, 25]. Third, a spot
+price that reflects the scarcity of capacity carries information beyond a single transaction. It tells
+buyers when flexible work is cheap to run, informs the facility of how much load it can shed when
+the grid is stressed, and provides a reference price on which forward contracts, capacity reservations,
+and other instruments for inference capacity can be written. In contrast, a fixed discount conveys
+none of this information.
+3 Related work
+In this section, we review related work on cloud spot markets, language-model serving, revenue
+management, electricity markets, model predictive control, and AI economics.
+6
+
+
+--- Page 7 ---
+quanyan zhu
+Spot Markets for AI Inference
+Spot markets for cloud capacity. Spot instances sell the idle capacity of an infrastructure cloud
+at a price that varies with its availability. Agmon Ben-Yehuda et al. [1] have found that early spot
+prices were not always set by an open market, and Amazon Web Services later replaced bidding
+with smoothed prices [3]. On the provider’s side, our previous work [46] has formulated capacity
+allocation and pricing for the spot markets of an infrastructure cloud as a constrained optimal control
+problem solved by model predictive control, and Zhang et al. [47] have studied dynamic service
+placement across data centers with reconfiguration costs. We adopt the receding-horizon architecture
+of this line of work but change the plant: capacity depends on the service tier through batching,
+demand can wait in a backlog with deadlines, capacity changes have explicit costs, and power is a
+constraint. Our provider sets prices openly as a monopolist of its own spare capacity, and Remark 1
+gives its competitive ask. On the buyer’s side of a spot market, Miao et al. [24] serve language models
+on preemptible instances.
+Serving language models. Continuous batching [45], paged key–value caches [19], chunked prefill
+[2], and disaggregated prefill and decode [29, 48] raise the throughput of a replica and make the
+throughput–latency trade-off explicit, as analyzed by Pope et al. [30]. Our batching law and the
+exchange rate 𝜌𝑚summarize this trade-off for the controller. AlpaServe [20] places models on a
+shared cluster to exploit statistical multiplexing, and ServerlessLLM [13] reduces the cost of loading
+a model. These systems decide placement for a given demand. In contrast, we add prices and a
+deferrable tier, and we treat loading time and cost as frictions whose economic effect is characterized
+by Theorem 3.
+Revenue management and peak-load pricing. Selling a perishable capacity to price-sensitive
+demand is the problem of revenue management [14, 40]. One key difference in our setting is that
+the capacity regenerates every period, its size is a decision, and it is shared across products at a rate
+that depends on the product. Peak-load pricing [8, 38] explains why the price of capacity should rise
+when it is scarce. Proposition 1 is a monopoly version with several products sharing one plant, and
+Theorem 1 adds storable demand. The backfill theorem is a newsvendor result [6] in which the spot
+tier serves as the salvage market for safety capacity.
+Electricity markets and data-center flexibility. Spot pricing of electricity over space and time
+[7, 39, 44] provides the model for pricing a non-storable good from a constrained network. Data
+centers can shift workload in time to follow electricity prices or carbon intensity [33, 34, 43] and
+reduce their demand during grid peaks [22]. Dynamic right-sizing turns servers off when load is
+low and faces the same switching costs as our placement problem [21]. Lookahead control of data
+centers goes back at least to Kusic et al. [18]. Our contribution to this line of work is to price the
+flexibility. The spot tier is the curtailable part of the load, and its price tells buyers when curtailment
+is likely.
+Model predictive control. Receding-horizon control of constrained systems has a mature theory
+[23, 35]. We use it as a practical method and do not claim stability or optimality guarantees for
+the closed loop. Instead, the numerical study measures how close it comes to a controller with
+perfect forecasts. Note that the inaction bands of Theorem 3 are the discrete-time analog of those in
+investment under adjustment costs [11, 12].
+The economics of AI inference. Demirer et al. [10] document the pricing, supply, and demand of
+language-model inference, and in Zhu [49], we have studied the economics of tokens, computation,
+and pricing in foundation models. These studies take the provider’s capacity and costs as given or
+focus on posted prices. In contrast, this paper takes the provider’s side. We derive the cost of capacity
+7
+
+
+--- Page 8 ---
+quanyan zhu
+Spot Markets for AI Inference
+from the fleet, its batching, and its power supply, and we show what spot price a provider should
+quote as a result.
+4 The model
+In this section, we present the model of the fleet, the demand, and the dynamics, and we formulate
+the provider’s control problem. We divide time into control periods 𝑡= 0, 1, . . . of length Δ seconds,
+and we set Δ = 15 minutes in the numerical study. Within a period, the set of loaded replicas is fixed,
+but the scheduler can change, at every decode step, which sequences share a batch. Therefore, the
+model has two layers: a slow layer of placement, decided at the start of each period, and a fast layer
+of batching inside the period, which we summarize by its throughput.
+Placement and batching correspond to layers 2 and 3 of Fig. 2, which places them within a
+broader view of the provider’s operations, from the hardware at the bottom to the buyers at the top.
+Capacity is built up from the accelerators through the deployments, the serving engine, and the
+queues, and it is sold as products and tiers to buyers whose demand responds to price and latency.
+For each layer, the figure indicates its time scale and the elements of the model that represent it.
+Two features of the figure deserve emphasis. First, changing a deployment, which requires loading
+weights and warming caches, is a transition within layer 2 rather than a layer of its own; the model
+captures it through the loading time 𝐿𝑚and the costs 𝜅±
+𝑚. Second, the controller acts on only two
+layers, the placement and the spot price, and it observes the others.
+4.1 Fleet, models, and batching
+Consider a provider that operates a fleet of 𝐺identical accelerators in one facility with a power cap of
+𝑊𝑡kilowatts. The provider serves a set M = {1, . . . , 𝑀} of models. A replica of model 𝑚refers to one
+loaded copy of its weights, and it occupies 𝑔𝑚accelerators (e.g., one accelerator for a small dense
+model and eight for a large mixture-of-experts model).
+Decode. We adopt a first-order model of memory-bound decode [30]. In each step, a replica reads
+its weights once and the key–value cache of every sequence in its batch. Hence, a decode step of a
+replica that holds a batch of 𝑏sequences takes
+𝜏𝑚(𝑏) = 𝜏0,𝑚+ 𝜏1,𝑚𝑏,
+0 ≤𝑏≤𝐵𝑚,
+(1)
+where 𝜏0,𝑚denotes the time to stream the weights, 𝜏1,𝑚the per-sequence cost of attention and cache
+traffic, and 𝐵𝑚the largest batch whose key–value caches fit in memory. Since every sequence in the
+batch advances one token per step, each stream runs at 1/𝜏𝑚(𝑏) tokens per second, and the replica
+produces 𝜃𝑚(𝑏) = 𝑏/𝜏𝑚(𝑏) tokens per second. Note that the throughput 𝜃𝑚is increasing and concave
+in 𝑏.
+Two tiers. The provider sells two service tiers for each model.
+(1) The interactive tier promises every stream a decode speed of at least 𝑠I
+𝑚tokens per second. It is
+sold at a posted price 𝜋𝑚per token, and its demand is exogenous in the short run.
+(2) The spot tier promises completion within a deadline and a much lower speed floor 𝑠S < 𝑠I
+𝑚(or
+none). Spot work is preemptible, i.e., the provider may pause it at any step. Its price 𝑝𝑚,𝑡is set
+every period.
+8
+
+
+--- Page 9 ---
+quanyan zhu
+Spot Markets for AI Inference
+²
+6
+Demand
+seconds to days
+Buyers respond to price and
+latency, and they may switch
+between models.
+interactive load 𝑅𝑚,𝑡
+spot: Λ𝑚,𝑡(1 −𝑝/𝜋𝑚)+
+switching: not modeled
+V
+5
+Products and tiers
+posted price: months;
+spot price: 15 min
+Models of several sizes and
+grades, each sold in an
+interactive and a spot tier.
+models 𝑚∈M
+interactive: 𝜋𝑚, floor 𝑠I
+𝑚
+spot: 𝑝𝑚,𝑡, deadline 𝐷
+=
+4
+Queues and
+deferred work
+minutes to hours
+Interactive requests go first;
+spot work waits but must
+finish by its deadline.
+served 𝑌𝑚,𝑡and 𝑥𝑚,𝑡
+backlog 𝑞𝑚,𝑡(FIFO)
+deadlines: Lemma 2
+Ô
+3
+Serving engine
+milliseconds
+Continuous batching, with a
+measured throughput for
+each model on its hardware.
+step time 𝜏𝑚(𝑏)
+throughputs 𝜃I
+𝑚and 𝜃S
+𝑚
+𝜌𝑚= 𝜃S
+𝑚/𝜃I
+𝑚(Lemma 1)
+á
+2
+Deployments
+minutes
+Replicas of each model on 𝑔𝑚
+accelerators; a change loads
+weights and warms caches.
+replicas 𝑛𝑚,𝑡
+fleet: Í
+𝑚𝑔𝑚𝑛𝑚,𝑡≤𝐺
+load time 𝐿𝑚, costs 𝜅±
+𝑚
+>
+1
+Hardware and
+power
+fleet: years; cap: hours
+Identical accelerators in one
+facility, under a power cap
+that the grid may lower.
+𝐺accelerators
+power cap 𝑊𝑡, price 𝑒𝑡
+power draw 𝑤0 and 𝑤1
+Layer (time scale)
+What happens there
+In the model
+Controller, every 15 min
+capacity is built up
+demand reaches down
+forecasts the demand:
+ˆ𝑟𝑚,𝑡, 𝜎𝑚,𝑡, and ˆΛ𝑚,𝑡
+fast lever: posts the
+spot price 𝑝𝑚,𝑡
+observes the backlog
+and its deadlines
+uses the measured
+throughputs as
+parameters
+slow lever: sets the
+placement 𝑛𝑚,𝑡
+reads the announced
+cap 𝑊𝑡and price 𝑒𝑡
+Figure 2. A layered view of inference supply and demand, from the hardware at the bottom to the buyers
+at the top. Capacity is built up through the four supply layers (gray), and demand reaches down from the
+two market layers (orange). Each layer is labeled with its time scale and with the elements of the model that
+represent it. The controller of Section 6 acts on two layers, through the placement (the slow lever) and the
+spot price (the fast lever), and it observes the others. Changing a deployment is a transition within layer 2
+rather than a layer of its own, and switching between models in layer 6 lies outside the scope of the model.
+The speed floors cap the batch. A replica that holds any interactive stream can run batches of at most
+𝑏I
+𝑚= min{𝐵𝑚, (1/𝑠I
+𝑚−𝜏0,𝑚)/𝜏1,𝑚} sequences, whereas a replica that holds only spot work can run
+batches of up to 𝑏S
+𝑚= min{𝐵𝑚, (1/𝑠S −𝜏0,𝑚)/𝜏1,𝑚}. We write
+𝜃I
+𝑚= 𝜃𝑚(𝑏I
+𝑚),
+𝜃S
+𝑚= 𝜃𝑚(𝑏S
+𝑚),
+𝜌𝑚= 𝜃S
+𝑚/𝜃I
+𝑚≥1
+for the full-load throughputs of a replica in the two modes and their ratio. We assume that 𝑠I
+𝑚< 1/𝜏0,𝑚
+so that interactive service is feasible.
+Lemma 1 (Co-batching and the latency exchange rate). Assume that replicas are divisible. Let 𝑛> 0
+replicas of model 𝑚carry an interactive load of 𝑟∈[0, 𝜃I
+𝑚𝑛] tokens per second. Then, the largest spot
+throughput compatible with the interactive speed floor is
+𝜅𝑚(𝑛, 𝑟) = 𝜃S
+𝑚𝑛−𝜌𝑚𝑟.
+(2)
+It is attained by running 𝑟/𝜃I
+𝑚replicas at batch 𝑏I
+𝑚with interactive streams only and the remaining 𝑛−𝑟/𝜃I
+𝑚
+replicas at batch 𝑏S
+𝑚with spot streams only. With whole replicas, running 𝑘= ⌈𝑟/𝜃I
+𝑚⌉replicas at batch
+𝑏I
+𝑚and filling their spare slots with spot streams yields a spot throughput of at least 𝜅𝑚(𝑛, 𝑟) −(𝜃S
+𝑚−𝜃I
+𝑚).
+Proof. See Appendix A.2.
+Lemma 1 converts the latency premium of interactive service into an exchange rate between the
+tiers. In other words, at the margin, one interactive token per second displaces 𝜌𝑚spot tokens per
+9
+
+
+--- Page 10 ---
+quanyan zhu
+Spot Markets for AI Inference
+0
+50
+100
+150
+200
+250
+batch size b (sequences)
+0.2
+0.5
+1
+2
+5
+10
+20
+k tokens/s per accelerator
+(a) Throughput per accelerator
+0
+20
+40
+60
+80
+interactive load r (thousand tokens/s)
+0
+25
+50
+75
+100
+125
+spot capacity (thousand tokens/s)
+(b) 20 medium replicas
+Small (g = 1)
+Medium (g = 2)
+Large (g = 8)
+one-for-one (wrong)
+whole replicas
+θSn −ρr (Lemma 1)
+Figure 3. Batching and the latency exchange rate. (a) Decode throughput per accelerator, 𝜃𝑚(𝑏)/𝑔𝑚, of the
+three models of Table 1. Circles mark the interactive batch cap 𝑏I
+𝑚set by the speed floor, and squares mark the
+spot batch cap 𝑏S
+𝑚set by memory. (b) Spot capacity of 20 medium replicas as their interactive load 𝑟grows.
+The line 𝜃S𝑛−𝜌𝑟of Lemma 1 is attainable with whole replicas up to the sawtooth shown. A one-for-one rule,
+which treats an interactive token as displacing one spot token, overstates the largest interactive load that the
+replicas can carry by 34%.
+second. When neither batch cap is set by memory, 𝜌𝑚= (1 −𝜏0,𝑚𝑠S)/(1 −𝜏0,𝑚𝑠I
+𝑚). In the calibration
+of Section 7, the spot batch is set by memory, and 𝜌𝑚is 1.24, 1.51, and 1.40 for the small, medium,
+and large models, respectively (Table 1 and Fig. 3). The lemma also shows that the split of a model’s
+replicas between the tiers costs nothing to change. This split is a scheduler setting rather than a
+placement decision, and hence the controller can leave it to the batch scheduler inside the period.
+4.2 Demand
+Interactive load. Let 𝑅𝑚,𝑡denote the average rate, in tokens per second, at which interactive traffic
+for model 𝑚arrives during period 𝑡. This rate is random, and the provider forecasts it with mean ˆ𝑟𝑚,𝑡
+and standard deviation 𝜎𝑚,𝑡(Section 6.1). Each interactive token that is served earns 𝜋𝑚. A token
+that cannot be served at the promised speed is lost and incurs a penalty 𝛽𝑚in service credits and
+goodwill.
+Spot demand. In period 𝑡, a population of spot buyers for model 𝑚would buy Λ𝑚,𝑡tokens of work
+at a price of zero. Their valuations per token are uniform on [0, 𝜋𝑚], so that no buyer pays more for
+deferrable service than the interactive price at which it could buy immediate service. At spot price 𝑝,
+the work admitted is
+𝑎𝑚,𝑡= Λ𝑚,𝑡(1 −𝑝/𝜋𝑚)+,
+equivalently
+𝑝= 𝜋𝑚(1 −𝑎𝑚,𝑡/Λ𝑚,𝑡).
+(3)
+Linear demand is a common choice in the pricing of cloud capacity [46]. It keeps the pricing rules
+in closed form, and its slope 𝛼𝑚,𝑡= Λ𝑚,𝑡/𝜋𝑚scales with the size of the buyer population. Note that
+spot revenue 𝑎𝜋𝑚(1 −𝑎/Λ𝑚,𝑡) is a concave quadratic in the admitted volume, while every constraint
+of the model is linear in it. Therefore, we optimize over admissions and recover the price from the
+demand curve.
+10
+
+
+--- Page 11 ---
+quanyan zhu
+Spot Markets for AI Inference
+Deadlines. Work admitted in period 𝑡must be completed by the end of period 𝑡+ 𝐷−1. Work
+that misses its deadline expires, its price is refunded, and the provider pays a penalty 𝛾𝑚per token.
+This convention matches current batch interfaces, which do not charge for requests that expire [26].
+While admitted work waits, the provider incurs a small holding cost ℎ𝑚per token per period, which
+captures the buyers’ preference for earlier completion and breaks ties in favor of serving early. The
+deadline 𝐷is a contract term. For example, 𝐷= 1 corresponds to a spot tier with no deferral, 𝐷= 8
+(two hours) is in the range of current flex tiers, and 𝐷= 96 (a day) corresponds to a batch tier.
+4.3 Dynamics, power, and costs
+Placement. Let 𝑛𝑚,𝑡≥0 denote the number of replicas of model 𝑚loaded in period 𝑡. These replicas
+must fit in the fleet:
+Í
+𝑚𝑔𝑚𝑛𝑚,𝑡≤𝐺.
+(4)
+Loading a replica takes 𝐿𝑚seconds of weight transfer and warm-up, during which its accelerators
+produce nothing. Let 𝑢𝑚,𝑡= (𝑛𝑚,𝑡−𝑛𝑚,𝑡−1)+ denote the loads and 𝑣𝑚,𝑡= (𝑛𝑚,𝑡−1 −𝑛𝑚,𝑡)+ the unloads.
+Then, the replicas that are effective in period 𝑡are
+˜𝑛𝑚,𝑡= 𝑛𝑚,𝑡−ℓ𝑚𝑢𝑚,𝑡,
+ℓ𝑚= 𝐿𝑚/Δ.
+(5)
+Each load also incurs a direct cost 𝜅+
+𝑚, and each unload incurs a cost 𝜅−
+𝑚for the in-flight sequences
+that it drains and the caches that it discards. Accelerators that hold no model are parked.
+Service. Interactive traffic has priority. The provider serves 𝑌𝑚,𝑡= min{𝑅𝑚,𝑡, 𝜃I
+𝑚˜𝑛𝑚,𝑡} tokens per
+second, and the overflow 𝑂𝑚,𝑡= 𝑅𝑚,𝑡−𝑌𝑚,𝑡is lost. By Lemma 1, the remaining spot capacity of the
+period is
+𝐾𝑚,𝑡= Δ  𝜃S
+𝑚˜𝑛𝑚,𝑡−𝜌𝑚𝑌𝑚,𝑡
+ tokens.
+(6)
+Spot work is served in first-in-first-out order. Let 𝑞𝑚,𝑡denote the backlog at the start of period 𝑡,
+𝑥𝑚,𝑡≤𝐾𝑚,𝑡the spot work served, and 𝑧𝑚,𝑡the work that expires. Then,
+𝑞𝑚,𝑡+1 = 𝑞𝑚,𝑡+ 𝑎𝑚,𝑡−𝑥𝑚,𝑡−𝑧𝑚,𝑡.
+(7)
+Since all spot work of model 𝑚has the same relative deadline, first-in-first-out is also earliest-
+deadline-first. This property allows us to write the deadlines as linear constraints on cumulative
+service (Lemma 2).
+Power and energy. A loaded but idle accelerator draws 𝑤0 kW, a parked accelerator draws 𝑤park < 𝑤0,
+and decode at full load adds 𝑤1. Power rises in proportion to the share of a replica’s capacity in use,
+and hence the facility draws
+Ω𝑡= 𝑤park𝐺+
+∑︁
+𝑚
+𝑔𝑚
+h
+(𝑤0 −𝑤park) 𝑛𝑚,𝑡+ 𝑤1𝑌𝑚,𝑡
+𝜃I
+𝑚
++ 𝑥𝑚,𝑡
+Δ𝜃S
+𝑚
+i
+≤𝑊𝑡.
+(8)
+Note that a replica at full load draws 𝑔𝑚(𝑤0 + 𝑤1) in either mode. Electricity costs 𝑒𝑡dollars per kWh.
+Both the price 𝑒𝑡and the cap 𝑊𝑡may change at short notice (e.g., when the grid operator calls a
+demand-response event).
+11
+
+
+--- Page 12 ---
+quanyan zhu
+Spot Markets for AI Inference
+Controller (MPC)
+forecasts ˆ𝑟, 𝜎, ˆΛ; solves
+an LP over 𝐻periods;
+applies the first step
+Fleet
+𝐺accelerators,
+power cap 𝑊𝑡
+replicas 𝑛𝑚,𝑡,
+loads cost ℓ𝑚, 𝜅±
+𝑚
+Batch scheduler
+interactive first
+at batch ≤𝑏I
+𝑚;
+spot fills the rest (Lemma 1)
+Interactive buyers
+load 𝑅𝑚,𝑡at price 𝜋𝑚
+speed floor 𝑠I
+𝑚
+Spot buyers
+admit 𝑎𝑚,𝑡at price 𝑝𝑚,𝑡
+deadline 𝐷periods
+Spot backlog
+FIFO queue 𝑞𝑚,𝑡
+with deadlines
+placement 𝑛𝑡
+spot prices 𝑝𝑡
+served 𝑥𝑚,𝑡
+state
+Figure 4. The control loop. Once a period, the controller chooses how many replicas of each model to keep
+loaded and what spot price to quote. Within the period, the batch scheduler serves interactive traffic first and
+fills the remaining capacity with spot work.
+Profit. The profit of period 𝑡is given by
+𝐽𝑡=
+∑︁
+𝑚
+h
+Δ𝜋𝑚𝑌𝑚,𝑡+𝑝𝑚,𝑡𝑎𝑚,𝑡−refunds𝑚,𝑡−𝛾𝑚𝑧𝑚,𝑡−Δ𝛽𝑚𝑂𝑚,𝑡−ℎ𝑚𝑞𝑚,𝑡+1−𝜅+
+𝑚𝑢𝑚,𝑡−𝜅−
+𝑚𝑣𝑚,𝑡
+i
+−
+Δ
+3600 𝑒𝑡Ω𝑡, (9)
+where refunds are the prices paid for the expiring work 𝑧𝑚,𝑡. Since accelerators are owned or leased
+for much longer than a period, their cost is sunk and does not appear in (9). Instead, it enters the
+analysis through the shadow price of the fleet constraint (4).
+4.4 The control problem
+At the start of period 𝑡, the provider knows the history up to 𝑡−1, namely, past loads, the backlog with
+its deadlines, and the replicas in place. It also knows the announced electricity prices and power caps.
+The provider then chooses the placement 𝑛𝑡= (𝑛𝑚,𝑡)𝑚and the spot prices 𝑝𝑡= (𝑝𝑚,𝑡)𝑚. Afterwards,
+interactive load 𝑅𝑡and the spot intercepts Λ𝑡are realized, interactive traffic is served, and the spot
+backlog is served within the remaining capacity and power. The provider’s problem is formulated as
+max
+non-anticipative (𝑛𝑡,𝑝𝑡) 𝔼
+h𝑇−1
+∑︁
+𝑡=0
+𝐽𝑡
+i
+subject to (3)–(8).
+(P)
+Figure 4 illustrates the feedback loop. Problem (P) is a constrained stochastic control problem. Its
+state, which includes the replicas, the backlog by deadline, and the forecast state, is too large for
+exact dynamic programming. Moreover, its controls interact through the shared fleet and power cap,
+and its dynamics have two time scales. Therefore, Section 5 first studies deterministic and one-period
+versions of the problem to learn what optimal policies look like, and Section 6 then solves (P) by
+model predictive control.
+5 Structure of optimal policies
+In this section, we study four simplified versions of (P). Each version isolates one feature of the
+inference setting, namely, a shared fleet whose capacity depends on the tier, storable demand, random
+12
+
+
+--- Page 13 ---
+quanyan zhu
+Spot Markets for AI Inference
+interactive load, and costly placement. The results explain the behavior of the controller of Section 6,
+and they provide the provider with pricing rules that can be published.
+Throughout this section, we let 𝜆𝑒
+𝑡= 𝑒𝑡Δ/3600 denote the cost of drawing one kW for one period,
+and we let
+ˆ𝑤= 𝑤0 −𝑤park + 𝑤1
+denote the power that a fully loaded accelerator draws in excess of a parked one.
+5.1 One period: shadow prices of a shared fleet
+Consider a single period in which interactive load 𝑅𝑚and the spot intercept Λ𝑚are known, spot work
+must be served within the period (𝐷= 1), and the previous placement does not matter (no loading
+cost). The provider chooses placement and spot admissions by solving
+max
+𝑛,𝑎≥0
+∑︁
+𝑚
+h
+𝑎𝑚𝜋𝑚
+
+1 −𝑎𝑚
+Λ𝑚
+
+−𝜆𝑒
+𝑔𝑚(𝑤0 −𝑤park)𝑛𝑚+ 𝑤1𝑔𝑚
+ 𝑅𝑚
+𝜃I
+𝑚
++ 𝑎𝑚
+Δ𝜃S
+𝑚
+i
+s.t. 𝑎𝑚≤Δ(𝜃S
+𝑚𝑛𝑚−𝜌𝑚𝑅𝑚) (𝑚∈M),
+∑︁
+𝑚
+𝑔𝑚𝑛𝑚≤𝐺[𝜈],
+Ω ≤𝑊[𝜂].
+(10)
+We assume that interactive load alone fits, i.e., Í
+𝑚𝑔𝑚𝑅𝑚/𝜃I
+𝑚≤𝐺, and that the power it draws, with
+every replica it needs loaded, is at most 𝑊. For each model, we define the full marginal cost of a spot
+token as
+MC𝑚(𝜈, 𝜂) =
+𝑔𝑚
+
+𝜈+ (𝜆𝑒+ 𝜂) ˆ𝑤
+
+Δ 𝜃S
+𝑚
+.
+(11)
+In other words, this quantity is the cost of one replica-period, which consists of the fleet’s shadow
+rent 𝜈per accelerator plus the energy and the shadow price of power at full load, divided by the spot
+tokens that the replica-period produces.
+Proposition 1 (Spot prices on a shared fleet). Problem (10) has an optimal solution with multipliers
+𝜈≥0 for the fleet and 𝜂≥0 for power such that:
+(i) Spot prices. Model 𝑚sells spot work if and only if MC𝑚< 𝜋𝑚, and then its spot price and volume
+are
+𝑝𝑚= 1
+2
+ 𝜋𝑚+ MC𝑚
+
+,
+𝑎𝑚= 1
+2Λ𝑚
+ 1 −MC𝑚/𝜋𝑚
+
+.
+(12)
+(ii) Interactive opportunity cost. At the margin, an interactive token costs 𝜌𝑚MC𝑚. For every model
+with 𝑅𝑚> 0, −Δ𝜌𝑚MC𝑚is a supergradient of the optimal profit with respect to 𝑅𝑚: one more
+token per second of interactive load reduces the period’s profit by at least Δ𝜌𝑚MC𝑚, and by exactly
+that wherever the optimal profit is differentiable in 𝑅𝑚.
+(iii) Water-filling. Suppose that the power cap is slack at the solution described here, so that 𝜂= 0. Let
+𝑁(𝜈) =
+∑︁
+𝑚
+𝑔𝑚
+h 𝑅𝑚
+𝜃I
+𝑚
++
+Λ𝑚
+2Δ𝜃S
+𝑚
+
+1 −MC𝑚(𝜈, 0)
+𝜋𝑚
++i
+denote the number of accelerators that the provider would use at shadow rent 𝜈. Then, 𝜈= 0 if
+𝑁(0) ≤𝐺; otherwise, 𝜈is the unique solution of 𝑁(𝜈) = 𝐺.
+(iv) Spillovers. When 𝜂= 0, 𝜈is nondecreasing in every 𝑅𝑚′ and Λ𝑚′. Hence, every model’s spot price
+is nondecreasing, and its spot volume nonincreasing, in the interactive load and spot demand of
+every other model.
+13
+
+
+--- Page 14 ---
+quanyan zhu
+Spot Markets for AI Inference
+(v) Slack fleet. If neither the fleet nor power binds, 𝑝𝑚= 1
+2𝜋𝑚+ 1
+2𝑔𝑚𝜆𝑒ˆ𝑤/(Δ𝜃S
+𝑚): half the interactive
+price, plus half the energy cost of a spot token.
+Proof. See Appendix A.3.
+Part (v) offers an interpretation of current practice. When the fleet is slack, the monopoly price
+for spare capacity is half the interactive price, up to a negligible energy term (Table 1). This is
+exactly the 50% discount that current batch tiers charge [4, 15, 26]. Note that the result depends
+on the assumption that valuations are uniform up to the interactive price, and hence it should not
+be interpreted as a structural law. Nevertheless, it does indicate where a fixed half-price rule goes
+wrong, namely, when the fleet is tight. In this case, 𝜈> 0, and the optimal spot price rises above
+half the interactive price by 1
+2𝑔𝑚𝜈/(Δ𝜃S
+𝑚). Part (iv) shows that this happens for every model at once
+since the models share the fleet. For example, a launch-day surge on the large model raises the spot
+price of the small one, even though no small-model buyer has changed its behavior. Virtual machine
+types in a cloud spot market share a data center in the same way. One key difference is that the rate
+at which one virtual machine type displaces another is fixed by the machine size, whereas here it
+depends on the latency tier through 𝜌𝑚. Therefore, part (ii) also gives the provider a pricing floor for
+its interactive tier, i.e., 𝜋𝑚≥𝜌𝑚MC𝑚.
+Proposition 2 (What a fixed discount loses). Fix one model and one period, and let 𝑐denote the
+marginal cost of a spot token, including any shadow price of capacity at the optimum. Let 𝑝∗denote the
+optimal spot price and ¯𝑝any other price.
+(i) If capacity binds at neither price, the loss from charging ¯𝑝is Λ
+𝜋(¯𝑝−𝑝∗)2. Over periods 𝑡= 1, . . . , 𝑇
+in which this holds, a fixed price ¯𝑝loses Í
+𝑡𝛼𝑡(¯𝑝−𝑝∗
+𝑡)2 ≥ Í
+𝑡𝛼𝑡
+ Var𝛼(𝑝∗), where 𝛼𝑡= Λ𝑡/𝜋and
+Var𝛼is the 𝛼-weighted variance of the optimal price path.
+(ii) If capacity 𝐾binds at the optimum, so that 𝑝∗is the market-clearing price, a lower price ¯𝑝< 𝑝∗
+with admissions rationed to 𝐾loses (𝑝∗−¯𝑝) 𝐾, i.e., the whole scarcity rent on the gap.
+Proof. See Appendix A.4.
+Therefore, the loss from a fixed discount is second order in slack periods and first order in tight
+periods. In other words, a half-price rule is close to optimal when there is spare capacity, whereas
+in tight periods it gives up the full scarcity rent while rate limits ration access. Figure 5 illustrates
+both regimes on the calibrated fleet. The same asymmetry underlies the classical case for peak-load
+pricing [8, 38], and it has been noted for flat-rate charging of cloud capacity, which is inefficient
+both when demand is far below capacity and when it exceeds capacity [46].
+5.2 Deferral: prices follow the cheapest capacity in the window
+Spot demand can be stored since work can wait until its deadline, whereas capacity cannot. To
+understand the effect of this asymmetry on prices, we fix the placement of one model so that spot
+capacities 𝐾𝑡are given for 𝑡= 0, . . . , 𝑇−1, and we assume that demand is known. The provider solves
+max
+𝑎,𝑥≥0
+∑︁
+𝑡
+h
+𝑎𝑡𝜋
+
+1 −𝑎𝑡
+Λ𝑡
+
+−𝑐𝑡𝑥𝑡−ℎ𝑞𝑡+1
+i
+s.t. 𝑥𝑡≤𝐾𝑡[𝜇𝑡], (7) with 𝑧≡0, deadline 𝐷,
+(13)
+where 𝑐𝑡is the energy cost of a spot token, 𝑞0 = 0, and all work must be served by its deadline. Let
+W𝑡= {𝑡, . . . , min(𝑡+ 𝐷, 𝑇) −1} denote the service window of work admitted in period 𝑡.
+14
+
+
+--- Page 15 ---
+quanyan zhu
+Spot Markets for AI Inference
+0
+6
+12
+18
+24
+hour (UTC)
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+1.50
+ν ($ per accelerator-hour)
+(a) Shadow rent of the fleet
+0
+6
+12
+18
+24
+hour (UTC)
+0.45
+0.50
+0.55
+0.60
+0.65
+0.70
+spot price / interactive price
+(b) Optimal spot prices
+1.0
+1.2
+1.4
+1.6
+large-model load factor
+0.60
+0.65
+0.70
+0.75
+0.80
+0.85
+spot price / interactive price
+(c) Spillover at the peak hour
+Small
+Medium
+Large
+half price
+Figure 5. One-period spot prices on a shared fleet (Proposition 1), computed for each hour of a Monday at
+mean demand, with 𝐷= 1 and no switching costs. (a) The shadow rent 𝜈of the fleet is zero except in the 4
+evening hours in which the fleet binds, and it peaks at $1.51 per accelerator-hour at 22 : 00 UTC. (b) Optimal
+spot prices are half the interactive price when the fleet is slack, and they rise to 0.60 of it for the large model
+at the peak. Over the day, a fixed half price gives up 1.8% of the optimal spot profit, and 100% of it in the tight
+hours. (c) Spillover. At the peak hour, scaling the interactive load of the large model alone raises the spot price
+of every model. At 1.5 times its load, the spot prices of the small and medium models rise by 31% and 31%.
+Theorem 1 (Deferral pricing). Problem (13) has an optimal solution with capacity multipliers 𝜇𝑡≥0
+such that, with the effective cost
+𝐶𝑡= min
+𝜏∈W𝑡
+
+𝑐𝜏+ 𝜇𝜏+ ℎ(𝜏−𝑡)
+
+,
+(14)
+(i) every period with 𝑎𝑡> 0 has spot price 𝑝𝑡= 1
+2 (𝜋+ 𝐶𝑡), and every period with 𝑎𝑡= 0 has 𝐶𝑡≥𝜋;
+(ii) work admitted in period 𝑡can be scheduled so that it is served only in periods that attain the
+minimum in (14);
+(iii) if capacity is slack in some period 𝜏∈W𝑡(𝜇𝜏= 0), then 𝑝𝑡≤1
+2
+ 𝜋+ 𝑐𝜏+ ℎ(𝜏−𝑡);
+(iv) optimal profit is nondecreasing in 𝐷.
+Proof. See Appendix A.6.
+Theorem 1 shows that a buyer who accepts a 𝐷-period deadline buys the cheapest capacity in its
+window, valued at the shadow price of that later period plus the cost of waiting for it, and that the
+provider passes half of the saving on in the price. With 𝐷= 1, 𝐶𝑡= 𝑐𝑡+ 𝜇𝑡, and the spot price follows
+the current scarcity, as in Proposition 1. With a longer deadline, a peak-hour price is capped by an
+off-peak cost (part iii, Fig. 6). In other words, deferral flattens spot prices and moves the scarcity
+rent from peak periods to the slack periods that absorb the deferred work. Hence, a deadline is a
+product attribute with a price. A buyer who is willing to wait buys capacity that would otherwise
+idle, and the provider shares the saving through a lower price for longer deadlines.
+5.3 Backfill: spot work makes reliability cheaper
+Placement is chosen before interactive load is known since weights take time to load. Therefore, a
+provider that wants interactive streams to meet their speed floor must hold safety capacity, which
+15
+
+
+--- Page 16 ---
+quanyan zhu
+Spot Markets for AI Inference
+0
+6
+12
+18
+24
+hour (UTC)
+0
+100
+200
+300
+million tokens per period
+(a) Capacity and demand
+spot capacity
+demand at half price
+0
+6
+12
+18
+24
+hour (UTC)
+0.50
+0.55
+0.60
+0.65
+0.70
+0.75
+spot price / interactive price
+(b) Spot price
+0
+6
+12
+18
+24
+hour (UTC)
+0
+100
+200
+300
+spot work served (million tokens)
+(c) Spot work served
+D = 1
+D = 4
+D = 16
+Figure 6. Deferral pricing (Theorem 1) for the medium model with its placement fixed at the best static level,
+on a day on which spot demand is 30% above its mean. (a) Spot capacity left by interactive traffic, and spot
+demand at half price. The two move in opposite directions. (b) Optimal spot prices for deadlines of 𝐷= 1, 4,
+and 16 periods (15 minutes, one hour, and four hours). The peak price falls from 0.78 to 0.68 and 0.53 of the
+interactive price. In every period with sales, the computed price equals 1
+2 (𝜋+ 𝐶𝑡) to within 0.5 of a price tick
+𝜋/𝐾. (c) Spot work served. A longer deadline moves work out of the night-time trough of capacity into the
+following hours.
+idles unless it is put to other use. Spot work provides such a use. Consider one model in one period
+with interactive load 𝑅drawn from a continuous distribution 𝐹, ¯𝐹= 1 −𝐹. The provider chooses 𝑛
+replicas at cost 𝑘> 0 each (the fleet’s shadow rent plus static energy), serves min(𝑅, 𝜃I𝑛) interactive
+tokens per second, and sells the spot capacity left over by Lemma 1, which is worth 𝑣≥0 per token
+at the margin. Its expected profit is given by
+Φ(𝑛) = Δ
+h
+(𝜋+ 𝛽) 𝔼min(𝑅, 𝜃I𝑛) −𝛽𝔼𝑅+ 𝑣𝜃S 𝔼
+
+𝑛−𝑅
+𝜃I
++i
+−𝑘𝑛.
+(15)
+Theorem 2 (Spot backfill raises the optimal service level). Assume that 𝜌𝑣< 𝜋+ 𝛽(an interactive
+token is worth more than the spot capacity it displaces) and 𝑘< Δ𝜃I(𝜋+ 𝛽). Then Φ is concave, and:
+(i) if Δ𝜃S𝑣≥𝑘, Φ is nondecreasing, i.e., spot work alone pays for the replica, and 𝑛is set by the fleet;
+(ii) otherwise, the optimal 𝑛∗satisfies the critical-fractile condition
+ℙ 𝑅> 𝜃I𝑛∗ = 𝜛(𝑣) := 𝑘/(Δ𝜃I) −𝜌𝑣
+(𝜋+ 𝛽) −𝜌𝑣;
+(16)
+(iii) 𝜛(𝑣) is strictly decreasing in 𝑣. The optimal probability of missing the interactive speed floor falls
+as spot capacity becomes more valuable. Without a spot market (𝑣= 0), it is the newsvendor
+fractile 𝑘/(Δ𝜃I(𝜋+ 𝛽));
+(iv) if 𝑅∼𝑁(ˆ𝑟, 𝜎2), then 𝑛∗= (ˆ𝑟+𝑧∗𝜎)/𝜃I with 𝑧∗= Φ−1
+𝑁(1−𝜛(𝑣)), where Φ𝑁and 𝜙𝑁are the standard
+normal distribution and density functions. The expected spot capacity is Δ𝜌𝜎 𝑧∗Φ𝑁(𝑧∗) + 𝜙𝑁(𝑧∗),
+which grows with the volatility 𝜎of interactive load.
+Proof. See Appendix A.7.
+16
+
+
+--- Page 17 ---
+quanyan zhu
+Spot Markets for AI Inference
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+spot value v / break-even value ̄v
+0
+2
+4
+6
+8
+optimal overflow probability (%)
+(a) Spot backfill raises reliability
+0
+5
+10
+15
+20
+25
+30
+volatility of interactive load σ/̂r (%)
+0
+20
+40
+60
+80
+100
+expected spot capacity (% of ̂r)
+(b) Safety capacity sold as spot (large)
+v = 0̄v (z * = 1.42)
+v = 0.5̄v (z * = 1.75)
+v = 0.9̄v (z * = 2.40)
+Small
+Medium
+Large
+Figure 7. Spot backfill (Theorem 2) with replicas costed at $2.50 per accelerator-hour. (a) Optimal probability
+that interactive load overflows the placement, against the value 𝑣of spot capacity relative to the break-even
+value ¯𝑣= 𝑘/(Δ𝜃S) at which spot work alone pays for a replica. Without a spot market, the optimal overflow
+probabilities are 5.8%, 6.9%, and 7.7%; at 𝑣= ¯𝑣/2, they fall to 3.0%, 3.6%, and 4.0%. (b) Expected spot
+capacity created by the safety margin of the large model, as a share of its mean interactive load, against the
+volatility of that load.
+The economics are those of the classic newsvendor [6], but the salvage value of unused capacity
+is now provided by the spot market. When the spot market is liquid (𝑣high), safety capacity is cheap
+to hold since whatever the interactive tier does not use is sold. Therefore, a provider with a spot tier
+should promise, and deliver, better interactive service than one without (Fig. 7a). Amazon’s spot
+instances sell the unused part of a fleet sized for on-demand and reserved customers in the same
+way [1]. One key difference for inference is that the unused capacity is mostly the safety margin
+of the interactive tier, and its size grows with the volatility of interactive demand (part iv). This is
+the mechanism by which the controller of Section 6 sizes placements, since its expected-overflow
+constraints embed (16).
+5.4 Placement: pricing transients and placing trends
+Moving accelerators between models is slow and costly, whereas changing a spot price is instant
+and free. To isolate this trade-off, we decompose (P) by pricing the shared fleet. Given rents for
+accelerators and power, the value of holding 𝑛replicas of model 𝑚in period 𝑡is a function 𝑉𝑡(𝑛),
+defined as the optimal value of that period’s pricing and service problem net of the rents. This function
+is concave in 𝑛since that problem is a concave program in which 𝑛enters only through linear terms
+(Lemma A.1 in Appendix A.1). The placement problem of one model is then given by
+max
+𝑛0,...,𝑛𝑇−1
+𝑇−1
+∑︁
+𝑡=0
+h
+𝑉𝑡(𝑛𝑡) −𝜅+(𝑛𝑡−𝑛𝑡−1)+ −𝜅−(𝑛𝑡−1 −𝑛𝑡)+i
+,
+𝑛−1 given.
+(17)
+Theorem 3 (Placement hysteresis). Let each 𝑉𝑡: ℝ→ℝbe concave.
+(i) For any optimal plan 𝑛∗, there are supergradients 𝑤𝑡∈𝜕𝑉𝑡(𝑛∗
+𝑡) such that the continuation value
+𝜉𝑡= Í𝑇−1
+𝑠=𝑡𝑤𝑠satisfies 𝜉𝑡∈[−𝜅−, 𝜅+] for all 𝑡, with 𝜉𝑡= 𝜅+ whenever 𝑛∗
+𝑡> 𝑛∗
+𝑡−1 and 𝜉𝑡= −𝜅−
+whenever 𝑛∗
+𝑡< 𝑛∗
+𝑡−1.
+17
+
+
+--- Page 18 ---
+quanyan zhu
+Spot Markets for AI Inference
+0
+1
+2
+3
+4
+5
+6
+duration of the surge (hours)
+0
+10
+20
+30
+40
+50
+extra accelerators loaded
+(a) Placement responds to long surges
+0
+1
+2
+3
+4
+5
+6
+duration of the surge (hours)
+0.50
+0.55
+0.60
+0.65
+0.70
+0.75
+peak spot price / interactive price
+(b) Price absorbs short ones
+round-trip cost $12 per replica
+round-trip cost $120 per replica
+round-trip cost $480 per replica
+Figure 8. Pricing of transients and placement of trends (Theorem 3). Spot demand for the large model rises
+2.5-fold at 13 : 00 UTC for a duration between 15 minutes and six hours, and the controller of Section 6 plans
+one day with perfect forecasts. (a) Accelerators loaded for the large model beyond the plan without the surge.
+(b) Peak spot price of the large model during the surge. With a round-trip switching cost of $12, $120, and
+$480 per replica, the controller first moves at least half a replica for surges of 1.5, 3, and 6 hours, respectively.
+Shorter surges are absorbed by the price alone, which peaks at up to 0.62, 0.68, and 0.78 of the interactive
+price.
+(ii) Consequently, if a replica is loaded in period 𝑡1 and the next change is an unload in period 𝑡2, then
+Í𝑡2−1
+𝑠=𝑡1 𝑤𝑠= 𝜅+ + 𝜅−, i.e., the marginal replica earns exactly its round-trip switching cost over its
+tenure. Over any window [𝑡1, 𝑡2),
+Í𝑡2−1
+𝑠=𝑡1 𝑤𝑠
+ ≤𝜅+ + 𝜅−.
+(iii) (Spike absorption.) Let ¯𝑛maximize a concave 𝑉, 𝑛−1 = ¯𝑛, and 𝑉𝑡= 𝑉except on a set 𝑆of 𝑑
+periods, on which the value of replicas beyond ¯𝑛rises by at most 𝛿≥0 each: 𝑉𝑡(𝑛) −𝑉𝑡(¯𝑛) ≤
+𝑉(𝑛) −𝑉(¯𝑛) + 𝛿(𝑛−¯𝑛)+ for all 𝑛. If 𝑑𝛿≤𝜅+, the constant plan 𝑛𝑡≡¯𝑛is optimal. If plans must
+end at ¯𝑛, the same holds whenever 𝑑𝛿≤𝜅+ + 𝜅−.
+Proof. See Appendix A.8.
+Part (iii) provides the operational rule, and Fig. 8 illustrates it. A transient that raises the marginal
+value of an extra replica by 𝛿per period for 𝑑periods is not worth a reload when 𝑑𝛿is below the
+round-trip cost. In this case, the provider absorbs the transient with the fast lever. The spot price
+rises (Proposition 1(iv)), spot work is preempted and deferred within its deadline (Theorem 1), and
+interactive traffic keeps its speed. Only persistent shifts, such as a regional daily cycle or a launch
+that lasts for hours, justify moving weights. For large models, whose weights take minutes to load
+and whose replicas span many accelerators, 𝜅± is large, and the band of inaction is wide. Note
+that modeling switching through explicit load and unload costs, rather than a quadratic penalty
+on capacity changes, yields the inaction bands familiar from investment under adjustment costs
+[11, 12].
+Remark 1 (Price-taking providers). Suppose that the provider sells spot capacity on a competitive
+exchange, where it can sell up to ¯𝐴𝑡tokens at a price 𝑝ex
+𝑡
+that it does not control. The revenue term
+𝑎𝑡𝜋(1 −𝑎𝑡/Λ𝑡) of (13) then becomes 𝑝ex
+𝑡𝑎𝑡, with 𝑎𝑡≤¯𝐴𝑡. At an optimum, with 𝐶𝑡defined by (14) at
+the optimal multipliers, the provider sells the full depth ¯𝐴𝑡when 𝑝ex
+𝑡
+> 𝐶𝑡and nothing when 𝑝ex
+𝑡
+< 𝐶𝑡.
+Therefore, it behaves as a seller whose ask equals its effective cost 𝐶𝑡, with no markup. The monopoly
+markup 1
+2 (𝜋−𝐶𝑡) in Proposition 1 and Theorem 1 is thus what market power adds to this ask.
+18
+
+
+--- Page 19 ---
+quanyan zhu
+Spot Markets for AI Inference
+Proof. See Appendix A.9.
+6 Model predictive control
+In this section, we develop the model predictive controller. The controller applies the receding-horizon
+principle of model predictive control [23, 35], which has been used to manage data centers and
+cloud capacity [18, 46]. At the start of every period, the controller forecasts demand over the next 𝐻
+periods, solves a deterministic program over that horizon, applies the first period’s placement and
+prices, and repeats the procedure one period later with new information. Three features distinguish
+the program from those used for virtual machine capacity. First, the program has to handle a queue
+with deadlines. Second, the random interactive load enters through its expected overflow rather
+than its mean. Third, capacity changes carry explicit costs rather than a quadratic penalty. All
+three features can be expressed with linear constraints, and hence each period’s problem is a linear
+program that solves in milliseconds.
+6.1 Forecasts
+For 𝑘= 0, . . . , 𝐻−1 steps ahead, the controller requires forecasts ˆ𝑟𝑚,𝑡+𝑘and 𝜎𝑚,𝑡+𝑘of the mean and
+standard deviation of interactive load, a forecast ˆΛ𝑚,𝑡+𝑘of the spot intercept, and the electricity prices
+and power caps that the grid operator has announced. In the numerical study, interactive load is a
+seasonal profile ¯𝑅𝑚,𝑡times a multiplicative deviation, i.e., 𝑅𝑚,𝑡= ¯𝑅𝑚,𝑡(1 + 𝜖𝑚,𝑡), where 𝜖is a first-order
+autoregression with coefficient 𝜙and stationary standard deviation 𝜍. The controller estimates the
+current deviation from the last observed load and forecasts
+ˆ𝑟𝑚,𝑡+𝑘= ¯𝑅𝑚,𝑡+𝑘
+ 1 + 𝜙𝑘+1ˆ𝜖𝑚,𝑡−1
+
+,
+𝜎𝑚,𝑡+𝑘= ¯𝑅𝑚,𝑡+𝑘𝜍
+√︁
+1 −𝜙2
+ 𝑘
+∑︁
+𝑖=0
+𝜙2𝑖1/2
+.
+(18)
+As a result, a flash crowd, which the seasonal profile does not contain, enters the forecast as a
+deviation that is expected to decay at rate 𝜙. The controller learns about a grid event when the
+operator announces it, which is 2 hours ahead in the study. Note that any forecaster can replace (18)
+since the program below needs only the means and standard deviations.
+6.2 The planning program
+Fix the current period 𝑡and index the horizon by 𝑘= 0, . . . , 𝐻−1. We write ˆ𝑟𝑚,𝑘for ˆ𝑟𝑚,𝑡+𝑘, and
+similarly for the other forecasts. For every model and step, the decision variables are the replicas
+𝑛𝑚,𝑘, loads 𝑢𝑚,𝑘, and unloads 𝑣𝑚,𝑘; the expected interactive service 𝑦𝑚,𝑘and overflow 𝑜𝑚,𝑘in tokens
+per second; the spot admissions 𝑎𝑚,𝑘, service 𝑥𝑚,𝑘, and expiries 𝑧𝑚,𝑘in tokens; and a power shortfall
+𝜔𝑘that keeps the program feasible when an announced cap cannot be met. The effective replicas are
+˜𝑛𝑚,𝑘= 𝑛𝑚,𝑘−ℓ𝑚𝑢𝑚,𝑘as in (5).
+Spot revenue. Note that revenue 𝑎𝜋𝑚(1 −𝑎/ˆΛ) is concave in admissions. We split the admissions
+into 𝐾segments of width ˆΛ/𝐾, 𝑎= Í𝐾
+𝑗=1 𝑎𝑗with 0 ≤𝑎𝑗≤ˆΛ/𝐾, and credit segment 𝑗with its average
+marginal revenue
+ˆΠ𝐾(𝑎) = max
+n 𝐾
+∑︁
+𝑗=1
+𝜋𝑚
+
+1 −2𝑗−1
+𝐾
+
+𝑎𝑗:
+∑︁
+𝑗
+𝑎𝑗= 𝑎, 0 ≤𝑎𝑗≤ˆΛ/𝐾
+o
+.
+(19)
+Since the marginal revenues decrease in 𝑗, the linear program fills the segments in order, and no
+integer variables are needed.
+19
+
+
+--- Page 20 ---
+quanyan zhu
+Spot Markets for AI Inference
+Interactive service. Placement is chosen before interactive load is known. The cost of too few
+replicas is captured by the expected overflow 𝔼(𝑅−𝜃I˜𝑛)+, which, for normal forecast errors, equals
+𝜎𝐿 (𝜃I˜𝑛−ˆ𝑟)/𝜎, where 𝐿(𝑧) = 𝜙𝑁(𝑧) −𝑧 1 −Φ𝑁(𝑧) is the standard normal loss function. Since 𝐿
+is convex and decreasing, the expected overflow is bounded below by its tangents. With a grid
+𝑧1 < · · · < 𝑧23 of 23 points from −2.5 to 3, the program requires
+𝑜𝑚,𝑘≥𝜎𝑚,𝑘𝐿(𝑧𝑖) − 1 −Φ𝑁(𝑧𝑖)  𝜃I
+𝑚˜𝑛𝑚,𝑘−ˆ𝑟𝑚,𝑘−𝜎𝑚,𝑘𝑧𝑖
+
+,
+𝑖= 1, . . . , 23,
+(20)
+together with 𝑜𝑚,𝑘≥ˆ𝑟𝑚,𝑘−𝑦𝑚,𝑘, 0 ≤𝑦𝑚,𝑘≤ˆ𝑟𝑚,𝑘, and 𝑦𝑚,𝑘≤𝜃I
+𝑚˜𝑛𝑚,𝑘. At the optimum, 𝑦𝑚,𝑘= ˆ𝑟𝑚,𝑘−𝑜𝑚,𝑘
+is the expected interactive service 𝔼min(𝑅, 𝜃I˜𝑛), which is what the spot tier inherits.
+The program. With 𝜆𝑒
+𝑘= 𝑒𝑘Δ/3600 and the backlog 𝑞𝑚,𝑘+1 = 𝑞𝑚,0 + Í
+𝑗≤𝑘(𝑎𝑚,𝑗−𝑥𝑚,𝑗−𝑧𝑚,𝑗), the
+controller solves
+max
+𝐻−1
+∑︁
+𝑘=0
+n∑︁
+𝑚
+h
+ˆΠ𝐾(𝑎𝑚,𝑘) −Δ(𝜋𝑚+ 𝛽𝑚) 𝑜𝑚,𝑘−(𝜋𝑚+ 𝛾𝑚) 𝑧𝑚,𝑘−ℎ𝑚𝑞𝑚,𝑘+1
+−𝜅+
+𝑚𝑢𝑚,𝑘−𝜅−
+𝑚𝑣𝑚,𝑘
+i
+−𝜆𝑒
+𝑘Ω𝑘−𝑐𝜔𝜔𝑘
+o
+s.t. 𝑥𝑚,𝑘≤Δ 𝜃S
+𝑚˜𝑛𝑚,𝑘−𝜌𝑚𝑦𝑚,𝑘
+
+[𝜇𝑚,𝑘],
+Í
+𝑚𝑔𝑚𝑛𝑚,𝑘≤𝐺
+[𝜈𝑘],
+Ω𝑘≤𝑊𝑘+ 𝜔𝑘
+[𝜂𝑘],
+𝑢𝑚,𝑘≥𝑛𝑚,𝑘−𝑛𝑚,𝑘−1,
+𝑣𝑚,𝑘≥𝑛𝑚,𝑘−1 −𝑛𝑚,𝑘,
+(20) and the interactive bounds,
+Í
+𝑗≤𝑘(𝑥𝑚,𝑗+ 𝑧𝑚,𝑗) ≥𝑑𝑚,𝑘+ Í
+𝑗≤𝑘−𝐷+1 𝑎𝑚,𝑗,
+Í
+𝑗≤𝑘(𝑥𝑚,𝑗+ 𝑧𝑚,𝑗) ≤𝑞𝑚,0 + Í
+𝑗≤𝑘𝑎𝑚,𝑗,
+𝑞𝑚,𝐻= 0,
+all variables ≥0,
+(21)
+where Ω𝑘is the power (8) with 𝑌replaced by 𝑦, 𝑛𝑚,−1 is the current placement, 𝑑𝑚,𝑘is the part of
+the current backlog that falls due by step 𝑘, and 𝑐𝜔is a large penalty for drawing more than the cap.
+The objective is the expected profit (9) with the exogenous interactive revenue Δ𝜋𝑚ˆ𝑟𝑚,𝑘dropped. In
+this objective, each token of overflow loses its price and incurs its penalty. Similarly, expired work
+loses its price, which is refunded, and incurs its penalty. The last three lines of constraints represent
+the deadlines, the availability of work, and a terminal condition that the horizon end with an empty
+backlog, which prevents the controller from pushing work beyond the horizon.
+Lemma 2 (Deadlines as cumulative constraints). Fix one model, admissions 𝑎0, . . . , 𝑎𝐻−1, and an
+initial backlog in which 𝑑𝑘units fall due by step 𝑘. Serve the backlog in first-in-first-out order. A sequence
+of service and expiry (𝑥𝑘+ 𝑧𝑘)𝑘is feasible and completes every unit by its deadline if and only if, for every
+𝑘, cumulative service lies between the work due and the work available:
+𝑑𝑘+
+∑︁
+𝑗≤𝑘−𝐷+1
+𝑎𝑗≤
+∑︁
+𝑗≤𝑘
+(𝑥𝑗+ 𝑧𝑗) ≤𝑞0 +
+∑︁
+𝑗≤𝑘
+𝑎𝑗.
+Proof. See Appendix A.5.
+Lemma 2 uses the fact that all spot work of a model has the same relative deadline so that
+first-in-first-out order is also earliest-deadline-first order. With heterogeneous deadlines, the same
+constraints hold for each deadline class, and the controller would need one queue per class.
+Lemma 3 (Approximation error).
+(i) ˆΠ𝐾is the piecewise-linear interpolation of Π(𝑎) = 𝜋𝑎(1−𝑎/ˆΛ)
+at the points 𝑎= 𝑗ˆΛ/𝐾, and 0 ≤Π(𝑎) −ˆΠ𝐾(𝑎) ≤𝜋ˆΛ/(4𝐾2) on [0, ˆΛ]. The error is at most 1/𝐾2
+of the largest revenue 𝜋ˆΛ/4, which is 0.062% for 𝐾= 40.
+20
+
+
+--- Page 21 ---
+quanyan zhu
+Spot Markets for AI Inference
+Algorithm 1 Receding-horizon placement and pricing
+Require: horizon 𝐻, segments 𝐾, cut grid 𝑧1, . . . , 𝑧23, current placement 𝑛−1
+1: for each period 𝑡= 0, 1, . . . do
+2:
+observe last period’s interactive load and the backlog 𝑞𝑚,0 with its deadlines 𝑑𝑚,𝑘
+3:
+update forecasts ˆ𝑟, 𝜎, ˆΛ by (18); read announced 𝑒𝑘and 𝑊𝑘
+4:
+solve the linear program (21); obtain 𝑛𝑚,0, 𝑎𝑚,0 and the multipliers 𝜇, 𝜈, 𝜂
+5:
+𝑛𝑚,𝑡←whole-replica rounding of 𝑛𝑚,0; start loads and unloads
+6:
+post spot prices 𝑝𝑚,𝑡←𝜋𝑚
+ 1 −𝑎𝑚,0/ˆΛ𝑚,0
+
+7:
+during the period: serve interactive traffic first; serve the spot backlog first-in-first-out with
+the remaining capacity (6) and power; expire overdue work
+8: end for
+(ii) The right-hand side of (20), maximized over 𝑖, is at most the expected overflow and equals it at
+the grid points. Between grid points 𝑧𝑖< 𝑧𝑖+1, the gap is at most 𝜎(𝑧𝑖+1 −𝑧𝑖)2𝜙𝑁(0)/4, and for the
+grid used it is at most 0.0031 𝜎on the grid’s range.
+Proof. See Appendix A.10.
+Therefore, the program slightly understates spot revenue and slightly understates the risk of
+interactive overflow. Neither error matters at the resolution of the study. The planned price is
+obtained from the demand curve at the planned admissions, i.e., 𝑝𝑚,𝑡= 𝜋𝑚(1 −𝑎𝑚,0/ˆΛ𝑚,0). Since the
+optimal admissions usually sit at a breakpoint of ˆΠ𝐾, prices move in ticks of 𝜋𝑚/𝐾, which is 2.5% of
+the interactive price for 𝐾= 40.
+6.3 The control loop
+Algorithm 1 summarizes the closed loop. Two steps convert the plan into actions. First, the planned
+replicas are rounded to whole numbers, rounding to the nearest integer where the fleet allows and
+down otherwise. Second, the planned price is posted, and buyers decide how much work to submit
+at that price. The program learns what buyers actually submitted only in the next period, when
+the realized admissions appear in the backlog. Therefore, any gap between planned and realized
+demand is absorbed by the queue and corrected by the next plan through feedback.
+Relation to the structural results of Section 5. The program (21) contains the four simplified
+problems of Section 5 as special cases, and its optimality conditions reproduce their rules. For one
+step with 𝐷= 1 and no switching costs, the program reduces to (10), up to the approximations of
+Lemma 3, and hence its spot prices are 1
+2 (𝜋𝑚+ MC𝑚) with the shadow rent 𝜈𝑘and power price 𝜂𝑘of
+that step (Proposition 1). With longer deadlines, the cumulative constraints of Lemma 2 allow work
+to move to the cheapest step in its window, and prices follow the effective cost 𝐶𝑡of Theorem 1. The
+cuts (20) set the interactive safety margin at the critical fractile of Theorem 2, with the spot tier as
+salvage value. In particular, at the optimum, the slope 1 −Φ𝑁(𝑧) of the active cut balances the cost
+of a replica against the value of its spot capacity. Moreover, the load and unload costs produce the
+inaction band of Theorem 3. The multipliers 𝜇𝑚,𝑘, 𝜈𝑘, and 𝜂𝑘are also useful outputs in their own
+right. For example, 𝜌𝑚MC𝑚is a floor for interactive prices, and the effective cost 𝐶𝑡is the provider’s
+competitive ask on an exchange (Remark 1).
+Size and speed. With 𝑀models and horizon 𝐻, the program has (8 + 𝐾)𝑀𝐻+ 𝐻variables, which
+amounts to 2, 320 for 𝑀= 3, 𝐻= 16, and 𝐾= 40, and about 30𝑀𝐻constraints, most of which are
+21
+
+
+--- Page 22 ---
+quanyan zhu
+Spot Markets for AI Inference
+Table 1. Models in the numerical study. 𝑔: accelerators per replica. 𝜏0, 𝜏1: decode-step parameters of (1),
+in milliseconds. 𝐵: memory cap on the batch. 𝑠I: interactive speed floor (tokens per second per stream). 𝑏I:
+interactive batch cap. 𝜃I, 𝜃S: replica throughput at full load in the interactive and spot modes, thousand tokens
+per second, with a spot speed floor of 𝑠S = 10. 𝜌= 𝜃S/𝜃I. 𝐿: load time in seconds. 𝜋: interactive price, dollars
+per million tokens.
+Model
+𝑔
+𝜏0
+𝜏1
+𝐵
+𝑠I
+𝑏I
+𝜃I
+𝜃S
+𝜌
+𝐿
+𝜋
+Small
+1
+4
+0.045
+256
+100
+133
+13.33
+16.49
+1.24
+30
+0.15
+Medium
+2
+10
+0.120
+256
+50
+83
+4.17
+6.29
+1.51
+90
+0.80
+Large
+8
+20
+0.100
+256
+30
+133
+4.00
+5.61
+1.40
+300
+3.00
+cuts. HiGHS [16] solves it in about 7 milliseconds on a laptop, compared with a control period of 15
+minutes. Fleets with tens of models and horizons of a day should remain well within the period since
+the program grows only linearly in both. In contrast, the cost of exact dynamic programming grows
+exponentially with the number of models and the length of the deadline.
+7 Numerical study
+In this section, we evaluate how much a provider gains from dynamic placement and pricing, where
+the gain comes from, and how it depends on forecasts, switching costs, and contract terms. All
+numbers come from the scripts listed in Appendix C.
+7.1 Setup
+Fleet and models. Consider a provider that runs 𝐺= 512 accelerators under a nominal power cap
+of 380 kW and serves three models (Table 1). The small model fits on one accelerator, the medium
+model on two, and the large mixture-of-experts model on eight. Their batching parameters yield
+interactive batch caps between 83 and 133 sequences and exchange rates 𝜌𝑚between 1.24 and 1.51.
+Loading weights takes 30, 90, and 300 seconds, which corresponds to 0.03, 0.10, and 0.33 of a
+15-minute period. Each load costs $1.00 and each unload $0.50 per accelerator, which accounts for
+warm-up energy, drained sequences, and discarded caches. Interactive prices are $0.15, $0.80, and
+$3.00 per million tokens. An idle loaded accelerator draws 0.25 kW, a parked one draws 0.06 kW,
+and decode at full load adds 0.45 kW.
+Demand. Mean interactive load follows the hour-of-day profile of token volume on a public inference
+marketplace, computed from 30 days of hourly data, with a peak-to-trough ratio of 2.6 [32]. The
+medium model’s profile is shifted by eight hours, as for a second region, and the large model’s daily
+swing is half again as large. Weekend load is 0.91 of weekday load. At the mean, interactive traffic
+occupies 49% of the fleet on average. Note that real serving traces are bursty around their daily
+pattern [42]. Accordingly, load deviates from its mean by a first-order autoregression with coefficient
+0.90 and standard deviation 10%, as in (18). Spot demand follows a flatter daily profile with an
+independent 10% noise every period, and it is scaled so that, at half the interactive price, it would
+occupy 35% of the fleet. Spot work must finish within 𝐷= 8 periods (120 minutes). A lost interactive
+token costs 𝛽𝑚= 5 𝜋𝑚in service credits and goodwill, and an expired spot token is refunded and
+costs 𝛾𝑚= 0.5 𝜋𝑚.
+22
+
+
+--- Page 23 ---
+quanyan zhu
+Spot Markets for AI Inference
+Table 2. Policies. All policies use the same planning program (21) with different restrictions. “Static” placement
+refers to the best constant placement for two typical weekdays at mean demand.
+Policy
+Spot price
+Placement
+Forecast of interactive load, demand, power
+Posted
+half of 𝜋𝑚, rate-limited
+static
+seasonal and AR(1), for the rate limit
+Dynamic price
+dynamic
+static
+seasonal and AR(1)
+Dynamic placement
+half of 𝜋𝑚, rate-limited
+dynamic
+seasonal and AR(1)
+Myopic
+dynamic
+dynamic
+persistence
+MPC
+dynamic
+dynamic
+seasonal and AR(1); events once announced
+Oracle
+dynamic
+dynamic
+perfect, horizon 2 × 16 periods
+Electricity and events. Electricity costs $0.065 per kWh on average, with a daily swing of $0.025
+that peaks at 20:00 UTC. The simulated week contains two events that the seasonal profile does not
+anticipate. On Wednesday, a model launch doubles the large model’s interactive load, ramping up
+from 13 : 00 UTC over 1 hour, holding for 5 hours, and decaying over 3 hours. On Friday, the grid
+operator calls a demand-response event. From 17 : 00 UTC for 2 hours, the facility must stay below
+62% of its nominal cap (236 kW), and electricity costs $0.80 per kWh. The event is announced 2
+hours ahead.
+Policies. We compare six policies (Table 2). Posted represents current practice, namely, the best
+static placement for a typical weekday and a spot tier sold at half the interactive price. It is a strong
+version of that practice since the same planning program sets a rate limit on spot admissions so that
+the posted tier never accepts more work than it expects to finish by the deadline. Dynamic price
+and Dynamic placement each add one of the two levers. Myopic uses both levers with a persistence
+forecast, i.e., it expects current interactive load, spot demand, electricity price, and power cap to
+continue unchanged. MPC is Algorithm 1 with the forecasts (18) and a horizon of 16 periods (4
+hours). Oracle knows the realized future over twice that horizon and bounds what any controller
+could achieve with this program.
+Simulation. Each policy is run for one week at 15-minute periods on 20 random draws of interactive
+load and spot demand, with the same draws for every policy. The plant serves interactive traffic first
+at the effective replicas (5), serves spot work first-in-first-out within the capacity (6), and enforces
+the power cap by shedding spot work first and interactive work second. Profit is computed by (9)
+without the holding cost, which serves as a planning device. Gains are measured against Posted,
+paired by draw, and reported with standard errors across draws.
+7.2 Results
+Profit gain of 7.4% from dynamic control. Table 3 summarizes the week. MPC earns $369.8
+thousand, compared with $344.1 thousand for Posted, which is a gain of 7.4% (standard error 0.32),
+and it captures 93% of the gain of the Oracle. Of the $25.6 thousand gained per week, $13.3 thousand
+comes from interactive penalties avoided, $2.7 thousand from interactive revenue no longer lost,
+and $12.2 thousand from additional spot revenue, while switching costs take back $1.6 thousand,
+and energy, refunds, and expiry penalties take back $0.9 thousand. In addition, the interactive tier
+receives better service. MPC misses the speed promise on 0.01% of interactive tokens, compared
+with 0.25% for Posted. Note that the two levers are complements. Dynamic prices alone gain 2.7%,
+23
+
+
+--- Page 24 ---
+quanyan zhu
+Spot Markets for AI Inference
+Table 3. One week of operation, means over 20 draws. Profit in thousands of dollars per week; gain over
+Posted in percent, with its standard error in parentheses; share of the Oracle’s gain captured. SLO: share
+of interactive tokens served at the promised speed. Spot: tokens of spot work served, in trillions. Surplus:
+spot buyers’ surplus, in thousands of dollars. Delay: mean and 95th percentile of the wait of a spot token,
+in minutes. Loads: accelerators loaded with new weights per week. Util.: share of accelerator time spent
+decoding at full-load equivalent.
+Policy
+Profit
+Gain (%) Share (%)
+SLO (%)
+Spot
+Surplus
+Delay
+Loads
+Util. (%)
+Posted
+344.1
+—
+—
+99.75
+0.50
+54.7
+11 / 33
+0
+79.3
+Dynamic price
+353.4 +2.7 (0.04)
+34
+99.75
+0.52
+56.0
+16 / 56
+0
+81.0
+Dynamic placement 361.9 +5.2 (0.30)
+64
+99.98
+0.51
+57.0
+10 / 26
+1,238
+81.2
+Myopic
+367.8 +6.9 (0.32)
+85
+99.99
+0.51
+55.8
+9 / 22
+1,688
+81.7
+MPC
+369.8 +7.4 (0.32)
+93
+99.99
+0.53
+58.3
+15 / 51
+1,078
+82.6
+Oracle
+371.8 +8.0 (0.35)
+100
+100.00
+0.53
+59.3
+21 / 95
+796
+83.0
+Mon
+Tue
+Wed
+(flash crowd)
+Thu
+Fri
+(grid event)
+Sat
+Sun
+0
+10
+20
+30
+40
+profit gain over Posted (%)
+Dynamic price
+Dynamic placement
+MPC
+Oracle
+Figure 9. Profit gain over Posted by day, means over 20 draws. The large model’s flash crowd falls on
+Wednesday, and the grid event falls on Friday.
+dynamic placement alone 5.2%, and both together under the same forecasts 7.4%. Forecasts of
+the daily cycle add a little. The Myopic controller gains 6.9%, with more than half again as many
+accelerator loads as MPC, since it keeps reacting to the load that it has just seen.
+Prices on ordinary days and placement during events. Figure 9 breaks the gain down by day. On
+the five days without events, MPC gains 2.5%, and dynamic prices alone already gain 2.4%. On these
+days, the fleet is tight only for a few evening hours. As Proposition 2 predicts, the fixed discount loses
+little when capacity is slack, and its losses are concentrated in the tight hours. On the day of the
+flash crowd, MPC gains 38.4%, and on the day of the grid event, it gains 7.4%. Prices cannot help
+on these days since the interactive tier is the one short of capacity, and only moving accelerators or
+power to it can help. Figure 10 shows the week under MPC. Placement follows the daily cycle in
+small steps and moves sharply only for the two events. Spot prices stay at or within a tick or two of
+half price for most of the week and rise during the events.
+The flash crowd. When the large model’s load doubles, MPC moves accelerators from the medium
+model, whose load is low at that hour, to the large one, namely, from 216 to 360 accelerators at the
+24
+
+
+--- Page 25 ---
+quanyan zhu
+Spot Markets for AI Inference
+100
+200
+300
+accelerators
+(a) Interactive load, in accelerators needed at the interactive batch cap
+0
+200
+400
+accelerators
+(b) Placement under MPC (stacked), with the best static placement
+0.5
+0.6
+0.7
+spot / interactive price
+(c) Spot prices under MPC
+Mon
+Tue
+Wed
+Thu
+Fri
+Sat
+Sun
+150
+200
+250
+300
+350
+kW
+(d) Facility power
+Small
+Medium
+Large
+static placement
+half price (Posted)
+Posted
+MPC
+power cap
+Figure 10. One week under MPC (first draw). Gray bands mark the flash crowd on Wednesday and the grid
+event on Friday. (a) Interactive load of each model, in accelerators needed at the interactive batch cap. (b)
+Accelerators loaded with each model, stacked, where dashed lines mark the best static placement used by
+Posted. (c) Spot prices relative to the interactive price. (d) Facility power under Posted and MPC, and the
+power cap.
+25
+
+
+--- Page 26 ---
+quanyan zhu
+Spot Markets for AI Inference
+10
+15
+20
+25
+hour (Wednesday)
+0
+50
+100
+150
+k tokens/s
+(a) Large model: load and capacity
+10
+15
+20
+25
+hour (Wednesday)
+100
+200
+300
+accelerators
+(b) Placement (MPC solid)
+10
+15
+20
+25
+hour (Wednesday)
+0.5
+0.6
+0.7
+spot / interactive price
+(c) Spot prices (MPC)
+15
+20
+hour (Friday)
+250
+300
+350
+kW
+(d) Power and cap
+15
+20
+hour (Friday)
+0.00
+0.25
+0.50
+0.75
+1.00
+1.25
+billion tokens per period
+(e) Spot work served
+15
+20
+hour (Friday)
+0.5
+0.6
+0.7
+spot / interactive price
+(f) Spot prices (MPC)
+Small
+Medium
+Large
+static placement
+large-model load
+Posted
+MPC
+power cap
+interactive lost, Posted
+Figure 11. The two events (first draw). Top: the flash crowd. (a) Large-model interactive load and the
+interactive capacity of its replicas under MPC (solid) and the static placement (dashed). (b) Accelerators per
+model under MPC (solid) and static (dashed). (c) Spot prices under MPC. Bottom: the grid event (gray band).
+(d) Facility power and the cap. (e) Spot work served under MPC and Posted, and interactive work that Posted
+cannot serve within the cap. (f) Spot prices under MPC.
+peak, compared with a static allocation of 224 (Fig. 11a,b). Since the forecast learns the surge from
+the load it observes, the first periods are served from the safety margin. In the first draw, Posted fails
+to serve 0.6 billion interactive tokens during the surge, and MPC fails to serve 0.01 billion. Dynamic
+prices alone fail to serve 0.6 billion, the same as Posted. The reason is that raising the spot price frees
+spot capacity on the large model’s replicas, but the interactive tier needs more replicas rather than
+more room on the ones it has. At the same time, MPC raises the spot price of every model, to 0.78
+of the interactive price for the large model and to 0.73 and 0.73 for the small and medium ones,
+respectively (Fig. 11c). The other models’ prices rise because they gave up accelerators, which is the
+spillover of Proposition 1(iv).
+The grid event. Two hours before the event, MPC learns that the cap will fall to 236 kW. It raises
+spot prices to slow admissions, serves more of the backlog before the event, and, at the start of
+the event, unloads replicas to park their accelerators, going from 500 to 322 loaded accelerators
+(Fig. 10b). Facility power falls by 111 kW from its level in the two hours before (Fig. 11d). The
+interactive tier is served in full throughout, and the spot tier absorbs the curtailment. In particular,
+MPC serves 1.2 billion spot tokens in the two hours of the event, compared with 6.9 billion in the
+26
+
+
+--- Page 27 ---
+quanyan zhu
+Spot Markets for AI Inference
+two hours before. In contrast, Posted keeps its replicas loaded, cannot fit even its interactive load
+under the cap, and loses 1.2 billion interactive tokens in the first draw (0.53 billion on average). The
+spot price during the event reaches 0.78 of the interactive price for the large model (Fig. 11f). In
+this sense, the spot tier serves as the facility’s flexible load, and its price tells buyers when the facility
+is curtailed.
+Buyers. Spot buyers are not worse off. Although dynamic prices are above half price in tight hours,
+MPC serves more spot work in total. The posted tier rations by a rate limit that is set before demand
+is known, and it turns work away whenever demand exceeds the limit. In contrast, a price admits
+whatever buyers want at that price and lets the backlog absorb the surprise. Moreover, MPC has
+more capacity when it is needed since it moves replicas. It serves 526 billion spot tokens a week,
+compared with 495 billion for Posted, and spot buyers’ surplus is 6.5% higher. Profit plus buyer
+surplus rises by 7.3%. The cost to buyers is a longer wait. The mean delay of a spot token rises from
+11 to 15 minutes, and its 95th percentile rises from 33 to 51 minutes, which is still well within the
+120-minute deadline. Only 0.07% of admitted spot work expires. The Oracle waits longest since it
+knows best when capacity will be free.
+7.3 Sensitivity
+In this subsection, we vary one feature at a time on 10 draws, with gains paired by draw against
+Posted under the same conditions (Fig. 12).
+Lookahead. A controller that plans one period ahead gains 5.5%. Planning one hour ahead gains
+6.8%, and planning four hours ahead gains 7.1%, with no further gain from eight hours (Fig. 12a).
+A few hours suffice since the deadline is two hours and placement transients last a few hours.
+Switching costs and loading time. Without switching costs, MPC gains 7.7% but loads 7, 414
+accelerators a week. The base cost cuts loads to 1, 098 for a gain of 7.1%. As the cost rises, placement
+freezes (Theorem 3). At 64 times the base cost, the controller loads 6 accelerators a week and gains
+2.7%, which is the gain of dynamic prices alone (Fig. 12b). Loading time matters much less than
+loading cost. Scaling all load times by 0, 1, 2, and 3 yields gains of 7.2%, 7.1%, 7.1%, and 7.0%,
+since the controller loads ahead of need, and the lost fraction of a period matters only when a load is
+a surprise.
+Deadlines. Longer deadlines raise the profit of both policies (Fig. 12c), as predicted by Theorem 1(iv).
+With a deadline of one period, MPC earns $363.6 thousand and Posted $341.0 thousand; with 8
+hours, they earn $371.7 thousand and $350.2 thousand, respectively. The gain of MPC over Posted
+is 6.6% and 6.1% at the two ends. Deferral and dynamic pricing are partial substitutes since a long
+deadline allows even a fixed-price tier to move work out of tight hours. This observation is consistent
+with current batch tiers, which pair a fixed discount with a 24-hour window.
+Forecast noise. With a standard deviation of interactive-load deviations of 5%, MPC gains 7.3% and
+Myopic 6.8%. At 30%, they gain 8.5% and 7.2%, respectively (Fig. 12d). The gain does not shrink
+with noise since noise hurts the static policy more. A static placement must cover the unconditional
+variation of load, whereas the controller re-plans every period and sizes its margin to the error of a
+forecast a few periods ahead, which is much smaller when deviations persist. Both sell their margins
+as spot capacity, as in Theorem 2.
+27
+
+
+--- Page 28 ---
+quanyan zhu
+Spot Markets for AI Inference
+0.25
+0.5
+1
+2
+4
+8
+MPC horizon (hours)
+5.0
+5.5
+6.0
+6.5
+7.0
+7.5
+8.0
+profit gain over Posted (%)
+(a) Lookahead
+0
+1.5
+6
+24
+96
+round-trip switching cost ($ per accelerator)
+2
+4
+6
+8
+profit gain over Posted (%)
+7,414
+1,098
+589
+167
+6
+(b) Switching cost (labels: loads/week)
+0.25
+0.5
+1
+2
+4
+8
+spot deadline (hours)
+340
+350
+360
+370
+profit ($ thousand per week)
+(c) Deadline
+5
+10
+15
+20
+25
+30
+s.d. of interactive-load deviations (%)
+6
+7
+8
+9
+profit gain over Posted (%)
+(d) Forecast noise
+Myopic
+Oracle
+MPC
+Dynamic price
+Posted
+Figure 12. Sensitivity, 10 draws per point, bars of ± one standard error. (a) Gain of MPC over Posted against
+the horizon of the program, with Myopic and Oracle at the base case. (b) Gain of MPC against the round-trip
+cost of loading and unloading one accelerator (the base case is $1.50; zero is plotted at the left end); labels
+give accelerator loads per week. (c) Weekly profit of MPC and Posted against the spot deadline. (d) Gains of
+MPC and Myopic against the standard deviation of interactive-load deviations.
+8 Discussion
+In this section, we discuss the implications of our results, their implementation, and their limitations.
+Implications for providers. Four operating rules follow from Section 5, and each of them continues
+to hold in the closed loop of Section 7.
+1. Price spot work midway between the interactive price and its effective cost. The effective cost 𝐶𝑡is
+the cheapest cost of serving the work anywhere in its deadline window, including the shadow rent
+of the fleet and of power in that period (Theorem 1). When the fleet is slack, the resulting spot
+price is close to the prevailing half price (Proposition 1(v)). When the fleet is tight, the price is
+higher, and it is higher for every model at once since the models share the fleet.
+2. Price interactive service above 𝜌𝑚MC𝑚. An interactive token displaces 𝜌𝑚spot tokens (Lemma 1),
+and hence the shadow cost of interactive capacity is the spot cost scaled by the latency exchange
+rate (Proposition 1(ii)). A provider that prices its fast tiers off its standard tier by a fixed multiple
+ignores the scarcity of the fleet.
+28
+
+
+--- Page 29 ---
+quanyan zhu
+Spot Markets for AI Inference
+3. Hold more safety capacity when a spot tier can use it. Spot work serves as the salvage market for the
+interactive tier’s safety margin, and hence the optimal probability of missing the speed promise
+falls as the spot tier becomes more valuable (Theorem 2). In other words, the spot tier and the
+interactive tier’s reliability are complements rather than rivals.
+4. Price the transients and place the trends. Move weights only when the cumulative value of a replica
+over the expected duration of a shift exceeds the round-trip cost of loading and unloading it
+(Theorem 3). Absorb shorter shifts with the spot price and the backlog.
+Implementation. The controller requires forecasts of means and standard deviations, the current
+backlog with its deadlines, and the announced electricity prices and power caps. Its program is a
+linear program of a few thousand variables that solves in milliseconds, and hence it can run every
+few minutes alongside an existing batch scheduler. Note that the scheduler needs no change. It
+serves interactive traffic first and fills the remaining slots with spot work in first-in-first-out order,
+which is what continuous-batching servers already do with priorities. Moreover, the spot price can be
+published as a schedule over the next few hours, which informs buyers of when capacity is likely to
+be cheap and when the facility expects to curtail.
+Market power and the half-price rule. Our provider is a monopolist of its own spare capacity
+facing linear demand, and the factor 1
+2 in the pricing rules comes from that demand curve. With
+other valuation distributions, the markup over 𝐶𝑡changes, but the cost side of every result does not.
+In particular, the shadow prices of the fleet and power, the effective cost under deferral, the critical
+fractile, and the inaction band are properties of the provider’s operations rather than of its demand.
+If the provider sold its spare capacity on a competitive exchange, it would ask 𝐶𝑡itself (Remark 1),
+and the difference between the monopoly price and 𝐶𝑡measures the provider’s market power over its
+spot tier.
+The spot tier as flexible load. Grid operators increasingly ask large new loads to curtail during the
+few hours a year when the grid is stressed [25]. The grid event of Section 7 shows that a spot tier
+makes such curtailment cheap for an inference provider. The interactive tier keeps its promise, and
+the curtailment falls on work whose buyers accepted a deadline and are compensated for it through a
+lower price. The shadow price 𝜂of power in the planning program represents the provider’s value of
+a kilowatt at each hour. A provider could use it to bid its flexibility into a demand-response program,
+which would turn the spot tier’s flexibility into revenue from the grid as well as from buyers.
+Limitations. The model is a fluid model. It summarizes batching by full-load throughputs and does
+not track the latency of individual requests, the split between prefill and decode, or the memory
+of key–value caches beyond the batch cap. It treats interactive demand as exogenous in the short
+run and spot buyers as price-takers who do not time their submissions against the price schedule.
+Moreover, forecast errors are normal, and there is one facility with one kind of accelerator. The
+planning program is solved by receding horizon without closed-loop guarantees. In addition, the
+numerical study is stylized. Its daily profile is measured, but its fleet, models, prices, and events are
+illustrative, and hence its percentages indicate magnitudes rather than predict a provider’s results.
+Each of these limitations points to a direction for further work. Possible directions include several
+facilities with transfer between them, as in Zhang et al. [47]; prefill and decode as two resources;
+demand curves learned online; buyers who choose deadlines from a menu of prices; and robust or
+stochastic versions of the program.
+29
+
+
+--- Page 30 ---
+quanyan zhu
+Spot Markets for AI Inference
+9 Conclusion
+Inference providers operate fleets sized for the interactive peak and sell the remaining capacity
+through fixed discounts. In this paper, we have developed a framework for allocating and pricing
+this capacity dynamically. Four features distinguish inference from conventional cloud capacity:
+capacity depends on the latency tier, placement is slow and costly while the split between tiers is free,
+demand can wait until a deadline, and power can bind. We have shown that, when these features
+are taken into account, the provider’s problem has a clear structure. Spot prices lie midway between
+the interactive price and the effective cost of capacity in the deadline window. Interactive capacity
+carries a shadow cost scaled by the latency exchange rate. A spot tier raises the optimal reliability
+of the interactive tier. Placement should follow persistent shifts in demand and leave transients to
+prices. Building on these elements, we have designed a model predictive controller that solves a
+small linear program each period. In a simulated week, the controller raises profit by 7.4% over a
+fixed half-price policy, captures 93% of the gain available with perfect forecasts, keeps the interactive
+promise through a flash crowd and a grid curtailment, and leaves spot buyers better off.
+More broadly, the analysis suggests that the price of spare inference capacity should be understood
+as an operational signal rather than a fixed discount. This price summarizes, at each moment, the
+scarcity of accelerators, the cost and availability of power, and the flexibility that buyers offer through
+their deadlines. As inference becomes a basic input to economic activity and a significant load on the
+power grid, mechanisms that make this signal explicit will matter for the efficiency of AI services
+and for their integration with the energy system. As future work, we would extend the framework
+to facilities linked by transfers of work, to prefill and decode as separate resources, and to demand
+curves learned online. Other directions include buyers who choose deadlines strategically from a
+menu of prices and competition among providers whose spot tiers serve overlapping buyers.
+Appendix A Proofs
+In this appendix, we prove the results of Sections 4 to 6. Section A.1 collects the facts that the proofs
+use. The proofs then follow in the order in which the results appear, except that Lemma 2 is proved
+before Theorem 1, which uses it, and Remark 1 is proved after Theorem 3.
+A.1 Preliminaries
+Supergradients and optimality conditions. For a concave function 𝑉on ℝ, 𝜕𝑉(𝑛) = {𝑤: 𝑉(𝑚) ≤
+𝑉(𝑛) + 𝑤(𝑚−𝑛) ∀𝑚} denotes its superdifferential, which is the interval between the right and left
+derivatives of 𝑉at 𝑛. Note that all optimization problems below maximize a concave objective
+subject to linear constraints. For such problems, the Karush–Kuhn–Tucker (KKT) conditions, with
+supergradients in place of gradients where the objective is not differentiable, are necessary at an
+optimum without any further constraint qualification, and they are sufficient for optimality [36,
+Sections 28–29]. We use this fact without further mention.
+Decode throughput. With 𝜏𝑚(𝑏) = 𝜏0,𝑚+ 𝜏1,𝑚𝑏and 𝜃𝑚(𝑏) = 𝑏/𝜏𝑚(𝑏),
+𝜃′
+𝑚(𝑏) =
+𝜏0,𝑚
+𝜏𝑚(𝑏)2 > 0,
+𝜃′′
+𝑚(𝑏) = −2𝜏0,𝑚𝜏1,𝑚
+𝜏𝑚(𝑏)3
+≤0,
+and hence throughput is increasing and concave in the batch size, as stated in Section 4.1. The speed
+of each stream, 1/𝜏𝑚(𝑏), is decreasing in 𝑏, and therefore a speed floor 𝑠is met exactly by the batches
+30
+
+
+--- Page 31 ---
+quanyan zhu
+Spot Markets for AI Inference
+𝑏≤(1/𝑠−𝜏0,𝑚)/𝜏1,𝑚. Together with the memory cap 𝐵𝑚, this condition yields the batch caps 𝑏I
+𝑚and
+𝑏S
+𝑚of Section 4.1.
+Concave value functions. The placement problem of Section 5.4 relies on the following standard
+fact.
+Lemma A.1 (Concave value of a parametric concave program). Let 𝐶⊆ℝ𝑝× ℝ𝑞be convex and
+𝑓: 𝐶→ℝconcave. For 𝑛in the projection 𝑁of 𝐶onto ℝ𝑞, let 𝑉(𝑛) = sup{ 𝑓(𝑥, 𝑛) : (𝑥, 𝑛) ∈𝐶}. If 𝑉is
+finite on 𝑁, then 𝑉is concave on 𝑁.
+Proof. Let 𝑛, 𝑛′ ∈𝑁, 𝜆∈[0, 1] and 𝜀> 0, and choose 𝑥, 𝑥′ with (𝑥, 𝑛), (𝑥′, 𝑛′) ∈𝐶, 𝑓(𝑥, 𝑛) ≥𝑉(𝑛)−𝜀
+and 𝑓(𝑥′, 𝑛′) ≥𝑉(𝑛′) −𝜀. By convexity of 𝐶, the point (𝜆𝑥+ (1 −𝜆)𝑥′, 𝜆𝑛+ (1 −𝜆)𝑛′) lies in 𝐶, and by
+concavity of 𝑓,
+𝑉 𝜆𝑛+ (1 −𝜆)𝑛′ ≥𝑓 𝜆𝑥+ (1 −𝜆)𝑥′, 𝜆𝑛+ (1 −𝜆)𝑛′ ≥𝜆𝑉(𝑛) + (1 −𝜆)𝑉(𝑛′) −𝜀.
+Since 𝜀is arbitrary, 𝑉is concave.
+□
+In Section 5.4, 𝑉𝑡(𝑛) is defined as the optimal value of one period’s pricing and service problem
+with 𝑛replicas, net of the rents. That problem maximizes an objective that is jointly concave in its
+decisions and in 𝑛(a concave quadratic revenue less linear costs) over a polyhedron in which 𝑛enters
+linearly. Therefore, Lemma A.1 shows that 𝑉𝑡is concave, as assumed in Theorem 3.
+A.2 Proof of Lemma 1 (co-batching)
+Consider any way of serving the load with 𝑛divisible replicas, or equivalently with replicas that
+divide their time between batch compositions. Let 𝑛𝐼denote the replica capacity that holds at least
+one interactive stream. Since every stream in a batch advances at 1/𝜏𝑚(𝑏) tokens per second, a
+replica that holds an interactive stream must run batches with 1/𝜏𝑚(𝑏) ≥𝑠I
+𝑚, that is, 𝑏≤𝑏I
+𝑚. Its total
+throughput is then at most 𝜃𝑚(𝑏I
+𝑚) = 𝜃I
+𝑚since 𝜃𝑚is increasing. Therefore, interactive load 𝑟requires
+𝑛𝐼≥𝑟/𝜃I
+𝑚, and those replicas have at most 𝜃I
+𝑚𝑛𝐼−𝑟tokens per second left for spot streams. The
+other 𝑛−𝑛𝐼replicas run spot work only, at most at batch 𝑏S
+𝑚and throughput 𝜃S
+𝑚. Hence, total spot
+throughput is at most
+𝜃I
+𝑚𝑛𝐼−𝑟+ 𝜃S
+𝑚(𝑛−𝑛𝐼) = 𝜃S
+𝑚𝑛−𝑟−(𝜃S
+𝑚−𝜃I
+𝑚) 𝑛𝐼≤𝜃S
+𝑚𝑛−𝑟−(𝜃S
+𝑚−𝜃I
+𝑚) 𝑟
+𝜃I
+𝑚
+= 𝜃S
+𝑚𝑛−𝜌𝑚𝑟,
+using 𝜃S
+𝑚≥𝜃I
+𝑚and 𝑛𝐼≥𝑟/𝜃I
+𝑚. The bound is attained with 𝑛𝐼= 𝑟/𝜃I
+𝑚replicas at batch 𝑏I
+𝑚carrying
+interactive streams only and the rest at batch 𝑏S
+𝑚carrying spot streams only.
+With whole replicas, let 𝑘= ⌈𝑟/𝜃I
+𝑚⌉≤𝑛replicas run at batch 𝑏I
+𝑚and carry all interactive streams,
+with their spare slots filled by spot streams, and let the other 𝑛−𝑘replicas run spot work at batch
+𝑏S
+𝑚. Spot throughput is 𝑘𝜃I
+𝑚−𝑟+ (𝑛−𝑘)𝜃S
+𝑚= 𝜃S
+𝑚𝑛−𝑟−(𝜃S
+𝑚−𝜃I
+𝑚)𝑘. Since 𝑘< 𝑟/𝜃I
+𝑚+ 1, this exceeds
+𝜃S
+𝑚𝑛−𝜌𝑚𝑟−(𝜃S
+𝑚−𝜃I
+𝑚).
+Finally, if neither batch cap is set by memory, 𝜏𝑚(𝑏I
+𝑚) = 1/𝑠I
+𝑚, and hence 𝜃I
+𝑚= 𝑏I
+𝑚𝑠I
+𝑚= (1 −
+𝜏0,𝑚𝑠I
+𝑚)/𝜏1,𝑚, and likewise 𝜃S
+𝑚= (1 −𝜏0,𝑚𝑠S)/𝜏1,𝑚. Their ratio is 𝜌𝑚= (1 −𝜏0,𝑚𝑠S)/(1 −𝜏0,𝑚𝑠I
+𝑚).
+□
+A.3 Proof of Proposition 1 (spot prices on a shared fleet)
+Existence. The capacity constraints imply 𝑛𝑚≥𝜌𝑚𝑅𝑚/𝜃S
+𝑚= 𝑅𝑚/𝜃I
+𝑚, and the assumptions make the
+point 𝑛𝑚= 𝑅𝑚/𝜃I
+𝑚, 𝑎𝑚= 0 feasible. The feasible set is closed, and it is bounded since 𝑛is bounded by
+the fleet and 𝑎by capacity. Since the objective is continuous, an optimum exists.
+31
+
+
+--- Page 32 ---
+quanyan zhu
+Spot Markets for AI Inference
+KKT conditions. We attach multipliers 𝜇𝑚≥0 to the capacity constraints, 𝜈≥0 to the fleet, and
+𝜂≥0 to power. Let 𝜖𝑚= 𝑔𝑚(𝜆𝑒+ 𝜂)𝑤1/(Δ𝜃S
+𝑚) denote the energy and power cost of the decode work
+of one spot token. Stationarity in 𝑛𝑚≥0 and 𝑎𝑚≥0 reads
+𝜇𝑚Δ𝜃S
+𝑚−𝑔𝑚
+
+𝜈+ (𝜆𝑒+ 𝜂)(𝑤0 −𝑤park)
+
+≤0,
+with equality if 𝑛𝑚> 0,
+(22)
+𝜋𝑚(1 −2𝑎𝑚/Λ𝑚) −𝜖𝑚−𝜇𝑚≤0,
+with equality if 𝑎𝑚> 0.
+(23)
+(i) Suppose that 𝑎𝑚> 0. Then, 𝑛𝑚> 0, and hence (22) holds with equality, and 𝜇𝑚+ 𝜖𝑚=
+MC𝑚(𝜈, 𝜂) by the definition (11) and ˆ𝑤= 𝑤0 −𝑤park + 𝑤1. Then, (23) gives 𝜋𝑚(1 −2𝑎𝑚/Λ𝑚) = MC𝑚,
+and therefore MC𝑚< 𝜋𝑚, 𝑎𝑚= 1
+2Λ𝑚(1−MC𝑚/𝜋𝑚), and, from (3), 𝑝𝑚= 𝜋𝑚(1−𝑎𝑚/Λ𝑚) = 1
+2 (𝜋𝑚+MC𝑚).
+Conversely, suppose that 𝑎𝑚= 0. By (22), 𝜇𝑚+ 𝜖𝑚≤MC𝑚whether or not 𝑛𝑚> 0, and by (23),
+𝜋𝑚≤𝜇𝑚+ 𝜖𝑚. Hence, MC𝑚≥𝜋𝑚. Therefore, model 𝑚sells spot work if and only if MC𝑚< 𝜋𝑚.
+(ii) Let Π(𝑅) denote the optimal profit as a function of the interactive loads, and let L(𝑥, 𝜆; 𝑅)
+denote the Lagrangian of (10) with decision 𝑥= (𝑛, 𝑎) and multipliers 𝜆= (𝜇, 𝜈, 𝜂). The load 𝑅𝑚
+enters L linearly and separately from 𝑥, through the energy term, the capacity constraint, and the
+power constraint, with coefficient
+𝑠𝑚= −(𝜆𝑒+ 𝜂) 𝑤1𝑔𝑚
+𝜃I
+𝑚
+−Δ𝜌𝑚𝜇𝑚.
+At optimal multipliers 𝜆∗, strong duality gives Π(𝑅) = max𝑥L(𝑥, 𝜆∗; 𝑅), and for any other loads 𝑅′,
+weak duality gives Π(𝑅′) ≤max𝑥L(𝑥, 𝜆∗; 𝑅′) = Π(𝑅) + Í
+𝑚𝑠𝑚(𝑅′
+𝑚−𝑅𝑚). Hence, 𝑠is a supergradient
+of Π. If 𝑅𝑚> 0, then 𝑛𝑚> 0, and (22) with equality gives Δ𝜌𝑚𝜇𝑚= (𝑔𝑚/𝜃I
+𝑚)[𝜈+ (𝜆𝑒+ 𝜂)(𝑤0 −𝑤park)],
+using 𝜌𝑚/𝜃S
+𝑚= 1/𝜃I
+𝑚. By substitution, we obtain
+𝑠𝑚= −𝑔𝑚
+𝜃I
+𝑚
+
+𝜈+ (𝜆𝑒+ 𝜂) ˆ𝑤
+
+= −Δ𝜌𝑚MC𝑚.
+(iii) Fix 𝜈≥0 and set 𝜂= 0. For each model, let 𝑎𝑚(𝜈) =
+1
+2Λ𝑚(1 −MC𝑚(𝜈, 0)/𝜋𝑚)+ and
+𝑛𝑚(𝜈) = 𝑅𝑚/𝜃I
+𝑚+ 𝑎𝑚(𝜈)/(Δ𝜃S
+𝑚), which makes the capacity constraint bind, and let 𝜇𝑚satisfy (22)
+with equality. These choices satisfy (22), (23), and complementary slackness for capacity. The
+number of accelerators used is 𝑁(𝜈) = Í
+𝑚𝑔𝑚𝑛𝑚(𝜈), which is continuous and nonincreasing in 𝜈,
+strictly decreasing wherever some model sells spot work, and tends to Í
+𝑚𝑔𝑚𝑅𝑚/𝜃I
+𝑚≤𝐺as 𝜈→∞. If
+𝑁(0) ≤𝐺, then 𝜈= 0 satisfies the fleet constraint and complementary slackness. Otherwise, there is
+a unique 𝜈> 0 with 𝑁(𝜈) = 𝐺since 𝑁is strictly decreasing wherever 𝑁(𝜈) > Í
+𝑚𝑔𝑚𝑅𝑚/𝜃I
+𝑚. In both
+cases, all KKT conditions hold, provided that the power cap is slack at this point, and hence the
+solution is optimal. The multiplier is unique. For any other 𝜈′, the stationarity conditions determine
+𝑎(𝜈′) uniquely, and 𝑁(𝜈′) ≠𝐺would violate either the fleet constraint or complementary slackness.
+(iv) Each 𝑛𝑚(𝜈), and hence 𝑁(𝜈), is nondecreasing in every 𝑅𝑚′ and Λ𝑚′. Since 𝑁is nonincreasing
+in 𝜈, the solution of 𝑁(𝜈) = 𝐺, or 𝜈= 0, is nondecreasing in every 𝑅𝑚′ and Λ𝑚′. Moreover, MC𝑚is
+increasing in 𝜈, and hence, by (i), every spot price is nondecreasing in 𝜈, and every spot volume is
+nonincreasing in 𝜈for fixed Λ𝑚.
+(v) With 𝜈= 𝜂= 0, we have MC𝑚= 𝑔𝑚𝜆𝑒ˆ𝑤/(Δ𝜃S
+𝑚), and (i) gives the stated price.
+□
+A.4 Proof of Proposition 2 (what a fixed discount loses)
+(i) If capacity binds at neither price, the profit at price 𝑝is 𝑓(𝑝) = (𝑝−𝑐)Λ(1 −𝑝/𝜋), where 𝑐has
+no capacity component. This profit is a quadratic with leading coefficient −Λ/𝜋, maximized at
+32
+
+
+--- Page 33 ---
+quanyan zhu
+Spot Markets for AI Inference
+𝑝∗= 1
+2 (𝜋+𝑐), and hence 𝑓(𝑝∗) −𝑓(¯𝑝) = Λ
+𝜋(¯𝑝−𝑝∗)2. Summing over periods with weights 𝛼𝑡= Λ𝑡/𝜋, the
+sum Í
+𝑡𝛼𝑡(¯𝑝−𝑝∗
+𝑡)2 is minimized over ¯𝑝at the 𝛼-weighted mean of 𝑝∗
+𝑡, where it equals (Í
+𝑡𝛼𝑡)Var𝛼(𝑝∗).
+(ii) If capacity 𝐾binds at 𝑝∗, the provider sells 𝐾at 𝑝∗. At ¯𝑝< 𝑝∗, demand exceeds 𝐾, and with
+admissions rationed to 𝐾, the provider sells the same quantity at the same variable cost and a lower
+price. Therefore, the difference in profit is (𝑝∗−¯𝑝)𝐾.
+□
+A.5 Proof of Lemma 2 (deadlines as cumulative constraints)
+We order the units of work by deadline, breaking ties by admission time. Since all work has the same
+relative deadline 𝐷, this order is the order of admission, and hence first-in-first-out service removes
+units in this order. Let 𝑋𝑘= Í
+𝑗≤𝑘(𝑥𝑗+ 𝑧𝑗) denote the cumulative work removed by the end of step 𝑘.
+Under first-in-first-out, the units removed by step 𝑘are exactly the first 𝑋𝑘units in the order. The
+work due by step 𝑘consists of the old backlog due by then, 𝑑𝑘, plus the work admitted at steps 𝑗with
+𝑗+ 𝐷−1 ≤𝑘. Every unit due by 𝑘is removed by 𝑘if and only if 𝑋𝑘is at least this amount, which is the
+left inequality. The right inequality states that no more work is removed than has arrived. Conversely,
+any nondecreasing 𝑋that satisfies both inequalities for all 𝑘is realized by first-in-first-out service of
+𝑋𝑘−𝑋𝑘−1 units at step 𝑘.
+□
+A.6 Proof of Theorem 1 (deferral pricing)
+Reformulation. Let 𝑓𝑠𝜏≥0 denote the work admitted in period 𝑠and served in period 𝜏∈W𝑠. Since
+work admitted at 𝑠and served at 𝜏is in the backlog at the end of periods 𝑠, . . . , 𝜏−1, the holding
+cost ℎÍ
+𝑡𝑞𝑡+1 equals ℎÍ
+𝑠,𝜏(𝜏−𝑠) 𝑓𝑠𝜏for any assignment. Consider
+max
+𝑎, 𝑓≥0
+∑︁
+𝑠
+𝑎𝑠𝜋
+
+1 −𝑎𝑠
+Λ𝑠
+
+−
+∑︁
+𝑠
+∑︁
+𝜏∈W𝑠
+
+𝑐𝜏+ ℎ(𝜏−𝑠)
+
+𝑓𝑠𝜏
+s.t.
+∑︁
+𝜏∈W𝑠
+𝑓𝑠𝜏= 𝑎𝑠[𝜆𝑠],
+∑︁
+𝑠: 𝜏∈W𝑠
+𝑓𝑠𝜏≤𝐾𝜏[𝜇𝜏]. (24)
+Any feasible (𝑎, 𝑓) yields aggregate service 𝑥𝜏= Í
+𝑠𝑓𝑠𝜏that meets every deadline, and therefore the
+cumulative constraints of Lemma 2, at the same profit. Conversely, by Lemma 2, any feasible (𝑎, 𝑥)
+of (13) is realized by first-in-first-out service, which defines an assignment 𝑓with the same profit.
+Therefore, the two problems have the same optimal value, and we work with (24). Its feasible set is
+compact since 𝑎𝑠≤Í
+𝜏∈W𝑠𝐾𝜏, and hence an optimum exists.
+KKT conditions. Stationarity in 𝑎𝑠and 𝑓𝑠𝜏reads
+𝜋(1 −2𝑎𝑠/Λ𝑠) −𝜆𝑠≤0 (= 0 if 𝑎𝑠> 0),
+𝜆𝑠−𝑐𝜏−𝜇𝜏−ℎ(𝜏−𝑠) ≤0 (= 0 if 𝑓𝑠𝜏> 0).
+The second condition gives 𝜆𝑠≤𝐶𝑠, with equality if 𝑎𝑠> 0, since then 𝑓𝑠𝜏> 0 for some 𝜏∈W𝑠.
+(i) If 𝑎𝑠> 0, then 𝜋(1 −2𝑎𝑠/Λ𝑠) = 𝐶𝑠, and hence 𝑎𝑠= 1
+2Λ𝑠(1 −𝐶𝑠/𝜋) and 𝑝𝑠= 1
+2 (𝜋+ 𝐶𝑠). If 𝑎𝑠= 0,
+then 𝜋≤𝜆𝑠≤𝐶𝑠.
+(ii) By complementary slackness, 𝑓𝑠𝜏> 0 only where 𝜆𝑠= 𝑐𝜏+ 𝜇𝜏+ ℎ(𝜏−𝑠), that is, at periods
+that attain the minimum in (14).
+(iii) If 𝜇𝜏= 0 for some 𝜏∈W𝑡, then 𝐶𝑡≤𝑐𝜏+ ℎ(𝜏−𝑡). When 𝑎𝑡> 0, (i) gives the bound. When
+𝑎𝑡= 0, the price is the choke price 𝜋, and 𝜋≤𝐶𝑡≤𝑐𝜏+ ℎ(𝜏−𝑡) implies 𝜋≤1
+2 (𝜋+ 𝑐𝜏+ ℎ(𝜏−𝑡)).
+(iv) A longer deadline enlarges every window W𝑠, and hence the feasible set of (24).
+□
+A.7 Proof of Theorem 2 (spot backfill)
+Since
+𝑑
+𝑑𝑛𝔼min(𝑅, 𝜃I𝑛) = 𝜃I¯𝐹(𝜃I𝑛) and
+𝑑
+𝑑𝑛𝔼(𝑛−𝑅/𝜃I)+ = 𝐹(𝜃I𝑛), we obtain
+Φ′(𝑛) = Δ
+
+(𝜋+ 𝛽)𝜃I ¯𝐹(𝜃I𝑛) + 𝑣𝜃S 𝐹(𝜃I𝑛)
+
+−𝑘= Δ
+
+(𝜋+ 𝛽)𝜃I − (𝜋+ 𝛽)𝜃I −𝑣𝜃S
+𝐹(𝜃I𝑛)
+
+−𝑘.
+33
+
+
+--- Page 34 ---
+quanyan zhu
+Spot Markets for AI Inference
+The assumption 𝜌𝑣< 𝜋+ 𝛽is equivalent to 𝑣𝜃S < (𝜋+ 𝛽)𝜃I, and hence Φ′ is nonincreasing and Φ is
+concave.
+(i) Note that Φ′(𝑛) + 𝑘is a convex combination of Δ(𝜋+ 𝛽)𝜃I and Δ𝑣𝜃S, and hence Φ′(𝑛) ≥
+Δ𝑣𝜃S −𝑘≥0.
+(ii) If Δ𝜃S𝑣< 𝑘, then Φ′(𝑛) →Δ𝑣𝜃S −𝑘< 0 as 𝑛→∞, while Φ′(0) = Δ(𝜋+ 𝛽)𝜃I −𝑘> 0 when
+𝐹(0) = 0, by the assumption on 𝑘. For a load distribution with support on the whole line, such as
+the normal in (iv), we let 𝑛range over ℝ, and Φ′(𝑛) →Δ(𝜋+ 𝛽)𝜃I −𝑘> 0 as 𝑛→−∞. Since 𝐹is
+continuous, Φ′(𝑛∗) = 0 for some 𝑛∗, which is optimal by concavity. Solving for ¯𝐹(𝜃I𝑛∗) and dividing
+the numerator and the denominator by 𝜃I yields (16).
+(iii) We write 𝜛(𝑣) = (𝐴−𝜌𝑣)/(𝐵−𝜌𝑣) with 𝐴= 𝑘/(Δ𝜃I) and 𝐵= 𝜋+ 𝛽. The assumption on 𝑘is
+equivalent to 𝐴< 𝐵, and 𝜛′(𝑣) = 𝜌(𝐴−𝐵)/(𝐵−𝜌𝑣)2 < 0. At 𝑣= 0, 𝜛= 𝐴/𝐵.
+(iv) If 𝑅∼𝑁(ˆ𝑟, 𝜎2), then ¯𝐹(𝜃I𝑛∗) = 𝜛gives 𝜃I𝑛∗= ˆ𝑟+ 𝑧∗𝜎. The expected spot capacity is
+Δ𝜃S 𝔼(𝑛∗−𝑅/𝜃I)+ = Δ𝜌𝔼(𝜃I𝑛∗−𝑅)+ = Δ𝜌𝜎𝔼(𝑧∗−𝑍)+ with 𝑍standard normal, and 𝔼(𝑧−𝑍)+ =
+𝑧Φ𝑁(𝑧) + 𝜙𝑁(𝑧). Since 𝑧∗does not depend on 𝜎, the capacity is proportional to 𝜎.
+□
+A.8 Proof of Theorem 3 (placement hysteresis)
+We write (17) with loads 𝑢𝑡≥0 and unloads 𝑣𝑡≥0, 𝑛𝑡−𝑛𝑡−1 = 𝑢𝑡−𝑣𝑡, and objective Í
+𝑡[𝑉𝑡(𝑛𝑡) −
+𝜅+𝑢𝑡−𝜅−𝑣𝑡]. At an optimum, we may take 𝑢𝑡𝑣𝑡= 0 since reducing both by the same amount saves
+𝜅+ + 𝜅−> 0. We attach a free multiplier 𝜉𝑡to the 𝑡-th equality and set 𝜉𝑇= 0. The KKT conditions are
+𝜉𝑡≤𝜅+ (= if 𝑢𝑡> 0),
+−𝜉𝑡≤𝜅−(= if 𝑣𝑡> 0),
+𝑤𝑡:= 𝜉𝑡−𝜉𝑡+1 ∈𝜕𝑉𝑡(𝑛𝑡).
+(i) Telescoping the last condition with 𝜉𝑇= 0 gives 𝜉𝑡= Í
+𝑠≥𝑡𝑤𝑠, and the first two conditions give
+the stated range and equalities.
+(ii) If the replica is loaded at 𝑡1 and the next change is an unload at 𝑡2, then 𝜉𝑡1 = 𝜅+ and 𝜉𝑡2 = −𝜅−,
+and hence Í𝑡2−1
+𝑠=𝑡1 𝑤𝑠= 𝜉𝑡1 −𝜉𝑡2 = 𝜅+ + 𝜅−. For any window,
+Í𝑡2−1
+𝑠=𝑡1 𝑤𝑠
+ = |𝜉𝑡1 −𝜉𝑡2| ≤𝜅+ + 𝜅−.
+(iii) By sufficiency of the KKT conditions, the constant plan 𝑛𝑡≡¯𝑛, with 𝑢= 𝑣= 0, is optimal
+if there exist 𝑤𝑡∈𝜕𝑉𝑡(¯𝑛) whose tail sums 𝜉𝑡= Í
+𝑠≥𝑡𝑤𝑠lie in [−𝜅−, 𝜅+]. For 𝑡∉𝑆, 0 ∈𝜕𝑉(¯𝑛) since ¯𝑛
+maximizes 𝑉. For 𝑡∈𝑆, the assumption and 𝑉(𝑛) ≤𝑉(¯𝑛) give 𝑉𝑡(𝑛) −𝑉𝑡(¯𝑛) ≤𝛿(𝑛−¯𝑛)+. For 𝑛> ¯𝑛,
+this inequality bounds the right derivative of 𝑉𝑡at ¯𝑛by 𝛿. For 𝑛< ¯𝑛, it shows that the left derivative
+is nonnegative. Since the superdifferential of 𝑉𝑡at ¯𝑛is the interval between these derivatives, it
+contains a point 𝑤𝑡∈[0, 𝛿]. With these choices, 𝜉𝑡∈[0, 𝑑𝛿] ⊆[−𝜅−, 𝜅+] when 𝑑𝛿≤𝜅+. If plans must
+return to ¯𝑛, we add the terminal transition from 𝑛𝑇−1 to 𝑛𝑇= ¯𝑛with its own load and unload costs. Its
+multiplier 𝜉𝑇is then free in [−𝜅−, 𝜅+] instead of zero. Choosing 𝜉𝑇= −𝜅−gives 𝜉𝑡∈[−𝜅−, −𝜅−+ 𝑑𝛿],
+which lies in [−𝜅−, 𝜅+] when 𝑑𝛿≤𝜅+ + 𝜅−.
+□
+A.9 Proof of Remark 1 (price-taking providers)
+We replace the revenue 𝑎𝑠𝜋(1 −𝑎𝑠/Λ𝑠) in (13) by 𝑝ex
+𝑠𝑎𝑠and add the constraints 𝑎𝑠≤¯𝐴𝑠. Since the
+reformulation in the proof of Theorem 1 concerns only the service of admitted work, it still applies,
+and the problem is equivalent to (24) with the new revenue and the depth constraints. This problem
+is a linear program whose feasible set is nonempty (take 𝑎= 𝑓= 0) and compact. Therefore, it
+has an optimum, and the KKT conditions hold with multipliers 𝜆𝑠, 𝜇𝜏≥0, and 𝜁𝑠≥0 for the depth
+constraints. Stationarity in 𝑎𝑠and 𝑓𝑠𝜏reads
+𝑝ex
+𝑠−𝜆𝑠−𝜁𝑠≤0 (= 0 if 𝑎𝑠> 0),
+𝜆𝑠−𝑐𝜏−𝜇𝜏−ℎ(𝜏−𝑠) ≤0 (= 0 if 𝑓𝑠𝜏> 0),
+and, as in the proof of Theorem 1, the second condition gives 𝜆𝑠≤𝐶𝑠, with equality if 𝑎𝑠> 0.
+34
+
+
+--- Page 35 ---
+quanyan zhu
+Spot Markets for AI Inference
+Suppose that 𝑝ex
+𝑠
+> 𝐶𝑠. If 𝑎𝑠< ¯𝐴𝑠, then 𝜁𝑠= 0 by complementary slackness, and the first condition
+gives 𝑝ex
+𝑠
+≤𝜆𝑠≤𝐶𝑠, a contradiction. Hence, 𝑎𝑠= ¯𝐴𝑠. Suppose instead that 𝑝ex
+𝑠
+< 𝐶𝑠. If 𝑎𝑠> 0,
+then 𝜆𝑠= 𝐶𝑠, and the first condition with equality gives 𝑝ex
+𝑠
+= 𝐶𝑠+ 𝜁𝑠≥𝐶𝑠, a contradiction. Hence,
+𝑎𝑠= 0.
+□
+A.10 Proof of Lemma 3 (approximation error)
+(i) The marginal revenues 𝜋(1−(2𝑗−1)/𝐾) decrease in 𝑗, and hence an optimal split fills the segments
+in order. With 𝑤= ˆΛ/𝐾, the value at 𝑎= 𝑗𝑤is 𝜋𝑤Í𝑗
+𝑖=1(1 −(2𝑖−1)/𝐾) = 𝜋𝑤( 𝑗−𝑗2/𝐾) = 𝜋𝑎(1 −𝑎/ˆΛ),
+since Í
+𝑖≤𝑗(2𝑖−1) = 𝑗2. Between breakpoints, ˆΠ𝐾is linear, and hence it is the linear interpolation
+of Π at the breakpoints. Since Π is concave with Π′′ = −2𝜋/ˆΛ, the interpolation lies below it, and
+the standard interpolation error bound gives Π(𝑎) −ˆΠ𝐾(𝑎) ≤1
+2|Π′′| (𝑤/2)2 = 𝜋ˆΛ/(4𝐾2). Divided by
+max Π = 𝜋ˆΛ/4, this bound equals 1/𝐾2.
+(ii) For 𝑅∼𝑁(ˆ𝑟, 𝜎2) and capacity 𝑐, 𝔼(𝑅−𝑐)+ = 𝜎𝐿(𝑧) with 𝑧= (𝑐−ˆ𝑟)/𝜎. Note that 𝐿is convex
+with 𝐿′(𝑧) = −(1 −Φ𝑁(𝑧)). Each right-hand side of (20) is 𝜎times the tangent of 𝐿at 𝑧𝑖, evaluated at
+𝑧, and hence it is at most 𝜎𝐿(𝑧), with equality at 𝑧= 𝑧𝑖.
+For the gap, fix consecutive grid points 𝑎= 𝑧𝑖< 𝑏= 𝑧𝑖+1 and 𝑧∈[𝑎, 𝑏], and let 𝑠= (𝐿(𝑏) −
+𝐿(𝑎))/(𝑏−𝑎) denote the slope of the chord of 𝐿between them. By convexity, 𝐿lies below the chord on
+[𝑎, 𝑏], and the chord exceeds the tangents at 𝑎and 𝑏by 𝑢(𝑧−𝑎) and 𝑣(𝑏−𝑧), where 𝑢= 𝑠−𝐿′(𝑎) ≥0
+and 𝑣= 𝐿′(𝑏) −𝑠≥0. Therefore, the gap between 𝐿and the larger of the two tangents is at most
+min
+
+𝑢(𝑧−𝑎), 𝑣(𝑏−𝑧)
+	
+≤
+𝑢𝑣
+𝑢+ 𝑣(𝑏−𝑎) ≤𝑢+ 𝑣
+4
+(𝑏−𝑎) = (𝑏−𝑎) 𝐿′(𝑏) −𝐿′(𝑎)
+4
+,
+where the first inequality maximizes the minimum of an increasing and a decreasing linear function of
+𝑧, and the second uses 4𝑢𝑣≤(𝑢+𝑣)2 (the gap is zero if 𝑢+𝑣= 0). Since 𝐿′(𝑏)−𝐿′(𝑎) = Φ𝑁(𝑏)−Φ𝑁(𝑎) ≤
+𝜙𝑁(0)(𝑏−𝑎), the gap is at most 𝜎(𝑧𝑖+1 −𝑧𝑖)2𝜙𝑁(0)/4. For the grid used, the largest gap over [−2.5, 3],
+computed numerically, is 0.0031 𝜎.
+□
+35
+
+
+--- Page 36 ---
+quanyan zhu
+Spot Markets for AI Inference
+Appendix B Notation
+Symbol
+Meaning
+𝑡, Δ, 𝐻
+control period, its length (15 minutes), planning horizon in periods
+M, 𝑚, 𝑔𝑚
+set of models, a model, accelerators per replica
+𝐺, 𝑊𝑡
+accelerators in the fleet, power cap (kW)
+𝜏𝑚(𝑏) = 𝜏0,𝑚+ 𝜏1,𝑚𝑏
+decode-step time at batch 𝑏
+𝑠I
+𝑚, 𝑠S
+speed floors of the interactive and spot tiers (tokens/s per stream)
+𝑏I
+𝑚, 𝑏S
+𝑚; 𝜃I
+𝑚, 𝜃S
+𝑚
+batch caps; replica throughput at full load, by tier
+𝜌𝑚= 𝜃S
+𝑚/𝜃I
+𝑚
+latency exchange rate (Lemma 1)
+𝑛𝑚,𝑡, 𝑢𝑚,𝑡, 𝑣𝑚,𝑡, ˜𝑛𝑚,𝑡
+replicas, loads, unloads, effective replicas
+𝐿𝑚, ℓ𝑚= 𝐿𝑚/Δ, 𝜅±
+𝑚
+load time, its share of a period, load and unload costs
+𝜋𝑚, 𝑝𝑚,𝑡
+interactive price, spot price (per token)
+𝑅𝑚,𝑡, ˆ𝑟𝑚,𝑡, 𝜎𝑚,𝑡
+interactive load (tokens/s), its forecast mean and s.d.
+𝑌𝑚,𝑡, 𝑂𝑚,𝑡
+interactive load served and lost
+Λ𝑚,𝑡, 𝑎𝑚,𝑡
+spot demand at zero price, spot work admitted (tokens)
+𝑞𝑚,𝑡, 𝑥𝑚,𝑡, 𝑧𝑚,𝑡, 𝐷
+spot backlog, served, expired; deadline in periods
+𝐾𝑚,𝑡
+spot capacity of a period (tokens), (6)
+𝛽𝑚, 𝛾𝑚, ℎ𝑚
+interactive loss penalty, expiry penalty, holding cost (per token)
+𝑤0, 𝑤1, 𝑤park, ˆ𝑤
+idle, full-load increment and parked power per accelerator; ˆ𝑤= 𝑤0 −𝑤park + 𝑤1
+𝑒𝑡, 𝜆𝑒
+𝑡= 𝑒𝑡Δ/3600
+electricity price ($/kWh), cost of one kW for one period
+𝜈, 𝜂, 𝜇𝑚
+shadow prices of the fleet, power and spot capacity
+MC𝑚, 𝐶𝑡
+full marginal cost of a spot token (11), effective cost under deferral (14)
+𝐾, 𝐿(𝑧)
+revenue segments, standard normal loss function
+Appendix C Reproducibility
+The code is available in spot/code/. The script spotsim.py contains the model, the planning program
+(21), the forecasts, and the plant. The script concept.py computes the examples of Sections 4 to 6,
+writes Table 1 and the macros quoted in those sections, and draws Figs. 3 and 5 to 8. The script
+run.py runs every simulation of Section 7, 510 weeks in all, in about fifteen minutes on a ten-core
+laptop. The script report.py converts its output into Table 3 and Figs. 9 to 12, and it writes every
+number quoted in Section 7. Linear programs are solved by HiGHS [16] through SciPy. The hour-
+of-day profile of interactive load is read from data/derived_hod_profile.json, which holds the
+mean share of daily token volume in each hour, computed from 30 days of hourly candles of a public
+inference marketplace [32]. The tier price ratios quoted in Section 2 are medians over the tiered
+endpoints in a snapshot of a model router’s public listings taken on 31 October 2026 [28]. No other
+external data are used.
+36
+
+
+--- Page 37 ---
+quanyan zhu
+Spot Markets for AI Inference
+References
+[1] Orna Agmon Ben-Yehuda, Muli Ben-Yehuda, Assaf Schuster, and Dan Tsafrir. Deconstructing Amazon
+EC2 spot instance pricing. ACM Transactions on Economics and Computation, 1(3):16:1–16:20, 2013.
+[2] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav S. Gulavani,
+Alexey Tumanov, and Ramachandran Ramjee. Taming throughput-latency tradeoff in LLM inference
+with Sarathi-Serve. In 18th USENIX Symposium on Operating Systems Design and Implementation (OSDI),
+2024.
+[3] Amazon Web Services. New Amazon EC2 spot pricing model: Simplified purchasing without bidding
+and fewer interruptions. AWS Compute Blog, 2017.
+[4] Anthropic.
+Batch processing.
+https://platform.claude.com/docs/en/build-with-claude/
+batch-processing, 2026. Accessed 31 October 2026.
+[5] Anthropic. Pricing. https://platform.claude.com/docs/en/about-claude/pricing, 2026. Batch,
+prompt-caching, data-residency and fast-mode multipliers. Accessed 1 November 2026.
+[6] Kenneth J. Arrow, Theodore Harris, and Jacob Marschak. Optimal inventory policy. Econometrica, 19(3):
+250–272, 1951. doi: 10.2307/1906813.
+[7] Roger E. Bohn, Michael C. Caramanis, and Fred C. Schweppe. Optimal pricing in electrical networks
+over space and time. RAND Journal of Economics, 15(3):360–376, 1984. doi: 10.2307/2555444.
+[8] Michael A. Crew, Chitru S. Fernando, and Paul R. Kleindorfer. The theory of peak-load pricing: A survey.
+Journal of Regulatory Economics, 8(3):215–248, 1995.
+[9] DeepSeek. Models & pricing. https://api-docs.deepseek.com/quick_start/pricing, 2026. Peak
+and off-peak token prices. Accessed 1 November 2026.
+[10] Mert Demirer, Andrey Fradkin, Nadav Tadelis, and Sida Peng. The emerging market for intelligence:
+Pricing, supply, and demand for LLMs. NBER Working Paper 34608, National Bureau of Economic
+Research, 2025.
+[11] Avinash Dixit. Entry and exit decisions under uncertainty. Journal of Political Economy, 97(3):620–638,
+1989. doi: 10.1086/261619.
+[12] Janice C. Eberly and Jan A. Van Mieghem. Multi-factor dynamic investment under uncertainty. Journal
+of Economic Theory, 75(2):345–387, 1997. doi: 10.1006/jeth.1996.2281.
+[13] Yao Fu, Leyang Xue, Yeqi Huang, Andrei-Octavian Brabete, Dmitrii Ustiugov, Yuvraj Patel, and Luo Mai.
+ServerlessLLM: Low-latency serverless inference for large language models. In 18th USENIX Symposium
+on Operating Systems Design and Implementation (OSDI 24), pages 135–153. USENIX Association, 2024.
+[14] Guillermo Gallego and Garrett van Ryzin. Optimal dynamic pricing of inventories with stochastic demand
+over finite horizons. Management Science, 40(8):999–1020, 1994.
+[15] Google.
+Batch API (Gemini API documentation).
+https://ai.google.dev/gemini-api/docs/
+batch-api, 2026. Last updated 17 September 2026. Accessed 1 November 2026.
+[16] Qi Huangfu and J. A. Julian Hall. Parallelizing the dual revised simplex method. Mathematical Program-
+ming Computation, 10(1):119–142, 2018. doi: 10.1007/s12532-017-0130-5.
+[17] International Energy Agency. Energy and AI. Technical report, International Energy Agency, Paris, April
+2025. URL https://www.iea.org/reports/energy-and-ai.
+[18] Dara Kusic, Jeffrey O. Kephart, James E. Hanson, Nagarajan Kandasamy, and Guofei Jiang. Power
+and performance management of virtualized computing environments via lookahead control. Cluster
+Computing, 12(1):1–15, 2009. doi: 10.1007/s10586-008-0070-y.
+[19] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E.
+Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model serving
+with PagedAttention. In Proceedings of the 29th Symposium on Operating Systems Principles (SOSP), pages
+611–626, 2023.
+37
+
+
+--- Page 38 ---
+quanyan zhu
+Spot Markets for AI Inference
+[20] Zhuohan Li, Lianmin Zheng, Yinmin Zhong, Vincent Liu, Ying Sheng, Xin Jin, Yanping Huang, Zhifeng
+Chen, Hao Zhang, Joseph E. Gonzalez, and Ion Stoica. AlpaServe: Statistical multiplexing with model
+parallelism for deep learning serving. In 17th USENIX Symposium on Operating Systems Design and
+Implementation (OSDI 23), pages 663–679. USENIX Association, 2023.
+[21] Minghong Lin, Adam Wierman, Lachlan L. H. Andrew, and Eno Thereska. Dynamic right-sizing for
+power-proportional data centers. IEEE/ACM Transactions on Networking, 21(5):1378–1391, 2013. doi:
+10.1109/TNET.2012.2226216.
+[22] Zhenhua Liu, Adam Wierman, Yuan Chen, Benjamin Razon, and Niangjun Chen. Data center demand
+response: Avoiding the coincident peak via workload shifting and local generation. Performance Evaluation,
+70(10):770–791, 2013. doi: 10.1016/j.peva.2013.08.014.
+[23] David Q. Mayne, James B. Rawlings, Christopher V. Rao, and Pierre O. M. Scokaert. Constrained
+model predictive control: Stability and optimality. Automatica, 36(6):789–814, 2000. doi: 10.1016/
+S0005-1098(99)00214-9.
+[24] Xupeng Miao, Chunan Shi, Jiangfei Duan, Xiaoli Xi, Dahua Lin, Bin Cui, and Zhihao Jia. SpotServe:
+Serving generative large language models on preemptible instances. In Proceedings of the 29th ACM
+International Conference on Architectural Support for Programming Languages and Operating Systems,
+Volume 2 (ASPLOS ’24), pages 1112–1127, 2024. doi: 10.1145/3620665.3640411.
+[25] Tyler H. Norris, Tim Profeta, Dalia Patino-Echeverri, and Adam Cowie-Haskell. Rethinking load growth:
+Assessing the potential for integration of large flexible loads in US power systems. Technical report,
+Nicholas Institute for Energy, Environment & Sustainability, Duke University, Durham, NC, February
+2025. URL https://hdl.handle.net/10161/32077.
+[26] OpenAI. Batch API FAQ. https://help.openai.com/en/articles/9197833-batch-api-faq, 2026.
+Accessed 31 October 2026.
+[27] OpenAI. Pricing. https://developers.openai.com/api/docs/pricing, 2026. Standard, Flex/Batch,
+Fast and Ultrafast tiers, cached-input prices. Accessed 1 November 2026.
+[28] OpenRouter. API reference: list models and list endpoints for a model. https://openrouter.ai/api/v1/
+models and https://openrouter.ai/api/v1/models/{author}/{slug}/endpoints, 2026. Snapshot
+of 31 October 2026.
+[29] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo Goiri, Saeed Maleki, and Ricardo
+Bianchini. Splitwise: Efficient generative LLM inference using phase splitting. In 2024 ACM/IEEE
+51st Annual International Symposium on Computer Architecture (ISCA), pages 118–132, 2024. doi:
+10.1109/ISCA59077.2024.00019.
+[30] Reiner Pope, Sholto Douglas, Aakanksha Chowdhery, Jacob Devlin, James Bradbury, Jonathan Heek,
+Kefan Xiao, Shivani Agrawal, and Jeff Dean. Efficiently scaling transformer inference. In Proceedings of
+Machine Learning and Systems 5 (MLSys), 2023.
+[31] Qubax. Market: live prices for AI model inference. https://qubax.ai/market, 2026. Accessed 31
+October 2026.
+[32] Qubax. Market data API: models, model detail and OHLC candles. https://api.qubax.ai/v1/market/
+models, 2026. Snapshot of 1 November 2026.
+[33] Asfandyar Qureshi, Rick Weber, Hari Balakrishnan, John Guttag, and Bruce Maggs. Cutting the electric bill
+for Internet-scale systems. In Proceedings of the ACM SIGCOMM 2009 Conference on Data Communication,
+pages 123–134, 2009. doi: 10.1145/1592568.1592584.
+[34] Ana Radovanović, Ross Koningstein, Ian Schneider, Bokan Chen, Alexandre Duarte, Binz Roy, Diyue
+Xiao, Maya Haridasan, Patrick Hung, Nick Care, Saurav Talukdar, Eric Mullen, Kendal Smith, MariEllen
+Cottman, and Walfredo Cirne. Carbon-aware computing for datacenters. IEEE Transactions on Power
+Systems, 38(2):1270–1280, 2023. doi: 10.1109/TPWRS.2022.3173250.
+[35] James B. Rawlings, David Q. Mayne, and Moritz M. Diehl. Model Predictive Control: Theory, Computation,
+and Design. Nob Hill Publishing, 2nd edition, 2017. ISBN 978-0-9759377-3-0.
+[36] R. Tyrrell Rockafellar. Convex Analysis. Princeton University Press, 1970. doi: 10.1515/9781400873173.
+38
+
+
+--- Page 39 ---
+quanyan zhu
+Spot Markets for AI Inference
+[37] Arman Shehabi, Sarah J. Smith, Alex Hubbard, Alexander Newkirk, Nuoa Lei, Md Abu Bakar Siddik,
+Billie Holecek, Jonathan G. Koomey, Eric R. Masanet, and Dale A. Sartor. 2024 United States data
+center energy usage report. Technical Report LBNL-2001637, Lawrence Berkeley National Laboratory,
+December 2024.
+[38] Peter O. Steiner. Peak loads and efficient pricing. Quarterly Journal of Economics, 71(4):585–610, 1957.
+[39] Steven Stoft. Power System Economics: Designing Markets for Electricity. Wiley-IEEE Press, 2002.
+[40] Kalyan T. Talluri and Garrett J. van Ryzin. The Theory and Practice of Revenue Management. Kluwer
+Academic Publishers, Boston, 2004.
+[41] tokensto.cash. Sell your spare AI tokens for cash. https://tokensto.cash, 2026. Accessed 31 October
+2026.
+[42] Yuxin Wang, Yuhan Chen, Zeyu Li, Xueze Kang, Yuchu Fang, Yeju Zhou, Yang Zheng, Zhenheng
+Tang, Xin He, Rui Guo, Xin Wang, Qiang Wang, Amelie Chi Zhou, and Xiaowen Chu. BurstGPT: A
+real-world workload dataset to optimize LLM serving systems. arXiv:2401.17644, 2024. URL https:
+//arxiv.org/abs/2401.17644.
+[43] Philipp Wiesner, Ilja Behnke, Dominik Scheinert, Kordian Gontarska, and Lauritz Thamsen. Let’s wait
+awhile: How temporal workload shifting can reduce carbon emissions in the cloud. In Proceedings of
+the 22nd International Middleware Conference (Middleware ’21), pages 260–272, 2021. doi: 10.1145/
+3464298.3493399.
+[44] Robert Wilson. Architecture of power markets. Econometrica, 70(4):1299–1340, 2002.
+[45] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed
+serving system for transformer-based generative models. In 16th USENIX Symposium on Operating Systems
+Design and Implementation (OSDI), pages 521–538, 2022.
+[46] Qi Zhang, Quanyan Zhu, and Raouf Boutaba. Dynamic resource allocation for spot markets in cloud
+computing environments. In Proceedings of the 4th IEEE International Conference on Utility and Cloud
+Computing (UCC), pages 178–185, 2011. doi: 10.1109/UCC.2011.33.
+[47] Qi Zhang, Quanyan Zhu, Mohamed Faten Zhani, Raouf Boutaba, and Joseph L. Hellerstein. Dynamic
+service placement in geographically distributed clouds. IEEE Journal on Selected Areas in Communications,
+31(12):762–772, 2013. doi: 10.1109/JSAC.2013.SUP2.1213008.
+[48] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xuanzhe Liu, Xin Jin, and Hao Zhang.
+DistServe: Disaggregating prefill and decoding for goodput-optimized large language model serving. In
+18th USENIX Symposium on Operating Systems Design and Implementation (OSDI), 2024.
+[49] Quanyan Zhu. AI tokenomics: The economics of tokens, computation, and pricing in foundation models.
+arXiv:2606.24616, 2026. URL https://arxiv.org/abs/2606.24616.
+39

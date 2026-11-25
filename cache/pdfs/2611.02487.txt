@@ -1,0 +1,2180 @@
+--- Page 1 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation
+Algorithms
+Tingran Gan∗
+dynamisg@sjtu.edu.cn
+Shanghai Jiao Tong University
+Shanghai, China
+Zhouziyue Lu∗
+zhouziyue_lu@sjtu.edu.cn
+Shanghai Jiao Tong University
+Shanghai, China
+Dian Jin
+2430XH10019@m.fudan.edu.cn
+Fudan University
+Shanghai, China
+Tao Li
+litao118@meituan.com
+Meituan
+Beijing, China
+Yang Gao
+gaoyang94@meituan.com
+Meituan
+Beijing, China
+Ming Liu
+liuming66@meituan.com
+Meituan
+Beijing, China
+Weiwen Liu†
+wwliu@sjtu.edu.cn
+Shanghai Jiao Tong University
+Shanghai, China
+Jianghao Lin†
+linjianghao@sjtu.edu.cn
+Shanghai Jiao Tong University
+Shanghai, China
+Weinan Zhang†
+wnzhang@sjtu.edu.cn
+Shanghai Jiao Tong University
+Shanghai, China
+Yong Yu†
+yyu@sjtu.edu.cn
+Shanghai Jiao Tong University
+Shanghai, China
+Abstract
+Improving recommendation algorithms for the Web requires coor-
+dinating interacting design choices and learning from experiments.
+We present RecRSI, an LLM-based research framework that uses
+mechanism hypotheses to organize algorithm discovery. Each hy-
+pothesis links a proposed mechanism change to a reference design,
+a rationale, and an expected observation. MechSpace derives imple-
+mentable primitives and composition rules from the task source;
+Research Line uses this space and prior evidence to develop and test
+hypotheses; Mechanism Feedback carries outcomes and their design
+context into subsequent research. This organization makes each ex-
+periment inform which mechanisms to develop, revise, or combine
+next. Across four initial recommenders and four datasets, RecRSI
+yields average relative improvements of 8.48% in NDCG@5 and
+6.88% in HR@5 over the initial algorithms, and 2.60% and 2.20%, re-
+spectively, over the strongest competing result for each setting and
+metric. Component and process studies link these gains to coordi-
+nated mechanism choices and evidence-guided follow-up. Our code
+is publicly available at https://github.com/DynamisG210/RecRSI.
+CCS Concepts
+• Information systems →Recommender systems.
+Keywords
+Recommender Systems, Automated Algorithm Discovery, Research
+Agents, Mechanism Hypotheses
+∗Both authors contributed equally to this research.
+†Corresponding authors.
+1
+Introduction
+Recommendation algorithms shape how users discover content
+and products across the Web, from personalized feeds to online
+marketplaces. Developing these ranking algorithms across different
+interaction settings requires coordinating representations, scor-
+ing functions, learning objectives, and optimization procedures,
+whose effectiveness depends on the task and on one another [18].
+With limited training and evaluation budgets, automated research
+must identify worthwhile changes and use their outcomes to guide
+further discovery.
+Large language model (LLM) agents increasingly automate al-
+gorithm design and experimentation. Program-evolution systems
+search over evaluated candidates [10, 21], while research agents
+develop and test hypotheses [6, 16, 31]. In recommendation, Self-
+EvolveRec couples user simulation with model diagnosis, while
+RecHarness combines direction routing with accumulated exper-
+imental skills [9, 12]. Sustained algorithm discovery poses two
+challenges for these systems.
+Interdependent mechanisms obscure which changes to
+test. Studies of recommendation architectures and interaction
+search show that useful component choices depend on their task
+and surrounding design [4, 23, 28]. A scoring change, for example,
+affects both prediction and the scores consumed by the training
+objective. Research must decide which mechanisms to change
+together and how to implement their interaction. Distinct code
+edits may revisit similar mechanisms; a promising combination
+may span several components. Repeatedly reconstructing these re-
+lationships during program search makes targeted experimentation
+difficult within a limited budget.
+Context-dependent outcomes are difficult to reuse.
+Reflection-based agents reuse feedback across trials [27, 33], and
+arXiv:2611.02487v1  [cs.IR]  2 Nov 2026
+
+
+--- Page 2 ---
+Gan et al.
+Initial recommender
+Candidate-level evolution
+Candidate programs
+Propose /
+edit
+Train &
+evaluate
+Select /
+reuse
+Selected
+recommender
+Guide candidate revision
+RecRSI: Mechanism-Guided Research
+MechSpace
+Formulate
+Mechanism Hypothesis
+Mechanism change
+Design rationale
+Expected outcome
+Select /
+realize
+Train &
+evaluate
+Hypothesis-linked
+Evidence
+Tested change
+Observed outcome
+Next question
+Selected
+recommender
+Guide hypothesis formulation
+(a)
+Discovery progress
+Validation NDCG@5 gain (%)
+0
+2
+4
+6
+8
+0
+4
+8
+12
+Effective evaluations
+2.68 pp
+RecRSI
+RecHarness
+DeepEvolve
+ShinkaEvolve
+Self-EvolveRec
+OpenEvolve
+(b)
+Figure 1: Research organization and algorithm discovery. (a) Candidate-level evolution organizes iteration around programs;
+RecRSI uses mechanism hypotheses to connect proposed changes, their rationale, and experimental evidence for the next
+design. Both workflows generate, evaluate, and refine algorithms. (b) Mean best-so-far validation NDCG@5 gain over the initial
+recommender on the same eight tasks as Figure 3(a,b). Search repeats are averaged within each task, then tasks receive equal
+weight.
+CausalEvolve emphasizes organizing past experience to guide
+further evolution [1]. In recommendation, an evaluation measures
+a complete algorithm under a particular mechanism combination.
+Its value for the next experiment depends on the tested hypothesis,
+reference design, and unchanged components. A failed alternative
+may challenge one explanation while leaving an earlier design
+worth pursuing. Research must connect the observation to that
+design context to decide what to refine, replace, or recombine.
+A mechanism is a design with a specific computational or learn-
+ing role, such as sequence aggregation, matching geometry, or a
+ranking objective. A mechanism hypothesis links a proposed change
+to a reference design, a rationale, and an expected observation. It
+makes an experiment both a concrete algorithmic intervention and
+a research question whose outcome can inform the next design.
+We introduce RecRSI, a framework that uses mechanism hy-
+potheses as the organizing unit of recommendation algorithm dis-
+covery. MechSpace derives task-specific primitives and compo-
+sition rules, making proposed interventions implementable. Re-
+search Line develops and tests hypotheses through complementary
+roles for composition, refinement, explanation testing, and explo-
+ration. Mechanism Feedback interprets outcomes in the context
+of the tested hypotheses and designs to inform the next research
+decision. A new hypothesis can build on a successful earlier design
+and use an unsuccessful experiment to choose its next interven-
+tion. Section 3.4 demonstrates this process in a real research run.
+Figure 1 links this hypothesis-centered organization to algorithm
+discovery progress across eight tasks. The name reflects a recursive
+self-improvement perspective [36]: evaluated recommender designs
+and their evidence support successive algorithm improvements.
+Experiments cover four initial recommenders and four datasets.
+Across the 16 model–dataset settings, RecRSI improves NDCG@5
+and HR@5 by an average of 8.48% and 6.88% over the initial algo-
+rithms, and 2.60% and 2.20% over the strongest competing result
+for each setting and metric. Component and process studies trace
+these gains to coordinated mechanism choices, history-informed
+follow-up, and discoveries beyond the initial search horizon. Our
+contributions are:
+• A mechanism-guided discovery framework. RecRSI
+makes mechanism hypotheses the research unit connecting
+algorithm design, experimentation, and follow-up.
+• A method for cumulative mechanism research. Task-
+derived interventions and hypothesis-linked feedback turn
+earlier successes and failures into concrete follow-up experi-
+ments.
+• Evidence of discovery quality and research value. Eval-
+uation across 16 settings establishes ranking gains; com-
+ponent, history, and continuation studies connect them to
+the research decisions and mechanism combinations that
+produce them.
+
+
+--- Page 3 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation Algorithms
+2
+Related Work
+2.1
+Automated Algorithm Discovery and
+Program Evolution
+Automatic algorithm design searches over executable computa-
+tions, from AutoML-Zero’s mathematical operations to FunSearch’s
+LLM-generated programs [22, 24]. Evolution of Heuristics (EoH)
+co-evolves ideas and code [14]; AlphaEvolve, OpenEvolve, and
+ShinkaEvolve develop populations of evaluated programs with
+complementary selection and diversity mechanisms [10, 21, 26].
+The Darwin Gödel Machine extends this loop to the coding agent’s
+own implementation [36].
+Self-Refine iterates on generated outputs, Reflexion stores verbal
+feedback for subsequent trials, and ReEvo uses short- and long-
+term reflections in evolution [17, 27, 33]. DeepEvolve incorporates
+literature-informed hypotheses; CausalEvolve organizes outcome-
+and procedure-level factors in a causal scratchpad and uses un-
+expected outcomes to generate follow-up hypotheses [1, 15]. The
+AI Scientist automates research from ideas through experiments
+and manuscripts; its successor and AIDE organize experimentation
+through tree search [6, 16, 31]. The autoresearch software provides
+a compact code–train–evaluate loop with a fixed training-time bud-
+get [8]. Broader reviews examine memory, skills, protocols, and
+harnesses as externalized agent capabilities [38], and analyze agen-
+tic data generation through accuracy, complexity, and diversity [35].
+AgentNAS builds interchangeable module slots; FairNAD struc-
+tures literature-derived design attributes [5, 25]. MechSpace derives
+task-specific mechanism specifications and composition rules, con-
+necting a proposed research question to an implementable inter-
+vention.
+2.2
+Automated Research for Recommender
+Systems
+RecBole provides unified implementations and protocols [37]; sys-
+tematic studies underline the importance of tuning and comparable
+evaluations [2, 23]. AutoFIS selects feature interactions, and Au-
+toCTR searches their architectural combinations [13, 28].
+LLMs support multiple stages of recommendation, from feature
+modeling and ranking to pipeline control [11]. Self-EvolveRec cou-
+ples simulated-user critiques with model diagnostics [9]. RecHar-
+ness combines bandit routing with accumulated Experiment Skills,
+grouped trials, validation-based reward updates, and structural
+jumps followed by local retuning [12]. EvoRec distills methodolo-
+gies from experiment memory; AgentX-Model coordinates repro-
+duction, follow-up, composition, and diagnosis [20, 32]. RecRSI
+organizes recommendation research around a mechanism hypothe-
+sis specifying an implementable intervention, its reference design,
+a rationale, and an expected observation. This hypothesis guides
+candidate construction and links the resulting evidence to the mech-
+anisms changed and held fixed, informing which designs to refine
+or recombine next.
+3
+Methodology
+RecRSI carries a mechanism hypothesis through formulation, im-
+plementation, evaluation, and follow-up. Together, its three stages
+connect a research question to an executable intervention and turn
+the outcome into evidence for the next decision (Figure 2).
+3.1
+Task and Mechanism Hypotheses
+Given an initial recommendation algorithm 𝐴0, a task environment
+T, and a budget 𝐵, RecRSI searches for an improved algorithm
+implementation. Researchers supply the initial source, data splits,
+editable interfaces, and a fixed training–evaluation protocol Π:
+𝜃𝐴= TrainΠ(𝐴; 𝐷tr),
+𝑞(𝐴) = EvalΠ(𝐴,𝜃𝐴; 𝐷val).
+(1)
+The inner process learns parameters; the outer process changes the
+algorithm under limits on experimental opportunities and resources.
+RecRSI returns the highest-scoring evaluated algorithm, including
+𝐴0 among the candidates.
+A composition 𝐶describes the mechanisms used together and
+their relationships. A mechanism hypothesis is ℎ𝑡= (𝐶ref
+𝑡,𝐶𝑡, 𝜌𝑡,
+𝜖𝑡): the reference design, proposed composition, research rationale,
+and expected observation. The transition from 𝐶ref
+𝑡
+to 𝐶𝑡specifies
+which mechanisms stay unchanged and which are added, replaced,
+or removed; 𝜌𝑡and 𝜖𝑡state why this intervention merits an ex-
+periment and what it is expected to reveal. The hypothesis guides
+implementation of candidate 𝐴𝑡; b
+𝐶𝑡denotes the composition de-
+scribed in the implemented candidate’s record.
+The research state R𝑡= (H𝑡, U𝑡,𝐴★
+𝑡) contains hypothesis–
+experiment records, open questions, and the current best algorithm.
+Records store both the construction references and the observations
+motivating follow-up hypotheses.
+3.2
+MechSpace: A Design Space for Mechanism
+Hypotheses
+MechSpace converts the initial source and task interfaces into a
+mechanism space ST = (PT, ΓT) of primitives and composition
+rules. Each primitive connects a computational or learning effect to
+a source location, input and output types, parameters, and imple-
+mentation requirements. Its effect path specifies how the changed
+computation participates in training or prediction.
+Within the supplied edit scope and composition limits, an LLM
+generator proposes primitives, parameter settings, source anchors,
+and compatibility rules. An LLM reviewer examines coverage,
+redundancy, composability, and effect paths from the supplied
+source; a deterministic assembler validates schemas, mutation
+targets, and composition constraints to produce the registry and
+grammar. Effect-path assessment is source-based LLM review;
+candidate execution is checked separately during qualification. For
+example, the reviewer rejects an evaluation-only learned readout
+because the training loss does not use its new parameters. The
+MoRec/CDs space covers representation, scoring, objective, update,
+architecture, and sampling; it is built once and reused through task
+adapters.
+Composing interventions. The grammar determines how primi-
+tives can be combined. In the MoRec/CDs instance, SELECT chooses
+one primitive, and COMPOSE combines two or three from distinct
+axes, subject to mutation-target constraints. The primitive score_
+cosine_temp changes Model.predict_score, shared by training
+and candidate evaluation. The primitive obj_pairwise_margin
+
+
+--- Page 4 ---
+Gan et al.
+MechSpace
+Initial
+algorithm
+Task &
+interfaces
+Generate · Review
+Assemble
+…
+Task-specific space
+Primitives
+Implementation
+requirements
+Composition rules
+Research Line
+Shared context
+Mechanism
+Composer
+Lineage
+Refiner
+Falsification
+Designer
+Frontier
+Architect
+…
+…
+…
+…
+…
+…
+Proposal
+pool
+Filter & select
+Selected hypothesis
+Implementer
+Qualification
+Train & evaluate
+fix
+Failures
+Mechanism Feedback
+Tested composition
+Observations
+Next questions
+Shared Research
+State
+Compositions
+Observations
+Open questions
+Current best
+Selected algorithm
+Figure 2: Overview of RecRSI. MechSpace supplies the design space for mechanism hypotheses; Research Line develops them
+into candidates and experiments; Mechanism Feedback links outcomes to the tested hypotheses and designs. The shared
+research state carries this evidence into subsequent investigations.
+adds a ranking term through the same positive and negative scores:
+𝑠(𝑢,𝑖) = ⟨¯z𝑢, ¯e𝑖⟩/𝜏,
+L = LBCE +
+𝜆
+|V|
+∑︁
+𝑗∈V
+softplus
+
+𝑚−(𝑠+
+𝑗−𝑠−
+𝑗)
+
+.
+(2)
+Here z𝑢and e𝑖are sequence and item representations, with ¯v =
+v/(∥v∥2 + 𝜀). V indexes non-padding supervised positions, 𝑠+
+𝑗and
+𝑠−
+𝑗are their positive and negative scores, and LBCE sums the mean
+positive and negative BCE losses. This instance uses 𝜏= 𝑚= 0.2,
+𝜆= 0.5, and 𝜀= 10−8. Sharing the scores makes the interaction
+between scoring and learning explicit. Focal weighting offers an al-
+ternative on the objective axis, while recent-history fusion modifies
+representations upstream of the scorer.
+3.3
+Research Line: Advancing Mechanism
+Hypotheses
+Four complementary roles form a hypothesis pool Q from the
+mechanism space and research state (Algorithm 1). The Mechanism
+Composer proposes combinations with a joint rationale; the Lineage
+Refiner develops an existing direction; the Falsification Designer
+formulates contrasts between explanations; and the Frontier Archi-
+tect identifies underexplored directions while considering its peers’
+proposals.
+From a hypothesis to a complete design. Selected primitives spec-
+ify the intervention; the reference candidate specifies the surround-
+ing design. A scoring hypothesis, for example, also identifies the ob-
+jective to use or restore when revisiting an earlier branch. The task
+adapter resolves this complete composition against the mechanism
+Algorithm 1 Mechanism-guided recommendation research
+Require: Initial algorithm 𝐴0, task T, budget 𝐵
+1: S ←MechSpace(𝐴0, T)
+2: R ←Initialize(𝐴0, T)
+3: while research budget remains do
+4:
+Q ←Propose(S, R, 𝐵)
+5:
+(ℎ,𝐶) ←SelectFeasible(Q, R, 𝐵)
+6:
+if no eligible proposal then break
+7:
+(𝐴, b
+𝐶,𝑧) ←ImplementAndQualify(ℎ,𝐶, T)
+8:
+if 𝑧= PASS then
+9:
+𝑜←AdmitAndEvaluateΠ(𝐴, 𝐵)
+10:
+else
+11:
+𝑜←QualificationFailure(𝑧)
+⊲skip evaluation
+12:
+end if
+13:
+𝑒←Feedback(T,ℎ, b
+𝐶,𝑜; R)
+14:
+Update R, current best, and remaining 𝐵
+15: end while
+16: return Current best algorithm in R
+space and editable interfaces. Feasibility checks enforce composi-
+tion rules and reference links; candidate identities support duplicate
+filtering.
+The roles adapt their hypotheses to the available evidence; a
+fixed selector allocates experimental opportunities. Within each
+opportunity block, it enforces role coverage at the opening positions
+and whenever the remaining positions are needed to cover available,
+unselected roles. Other choices follow a fixed role-priority order
+with stable tie-breaking, reserving opportunities for complementary
+research actions.
+
+
+--- Page 5 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation Algorithms
+Table 1: Final test performance across four seed recommenders and four datasets.
+Seed Recommender
+Method
+CDs
+Electronics
+Office
+MovieLens-1M
+NDCG@5
+HR@5
+NDCG@5
+HR@5
+NDCG@5
+HR@5
+NDCG@5
+HR@5
+SASRec
+Seed
+0.3489
+0.4572
+0.3623
+0.4860
+0.2674
+0.3980
+0.5613
+0.7176
+RecHarness
+0.3954
+0.5126
+0.3705
+0.4947
+0.2754
+0.4080
+0.5687
+0.7241
+DeepEvolve
+0.3510
+0.4605
+0.3678
+0.4932
+0.2795
+0.4099
+0.5340
+0.6917
+OpenEvolve
+0.3645
+0.4841
+0.3674
+0.4920
+0.2771
+0.4139
+0.5610
+0.7188
+ShinkaEvolve
+0.3641
+0.4841
+0.3629
+0.4871
+0.2743
+0.4100
+0.5647
+0.7212
+Self-EvolveRec
+0.3645
+0.4806
+0.3679
+0.4918
+0.2731
+0.4055
+0.5607
+0.7171
+RecRSI (Ours)
+0.4329
+0.5605
+0.3730
+0.5027
+0.2811
+0.4127
+0.5678
+0.7275
+Improv. (%)
++9.50
++9.36
++0.67
++1.61
++0.58
+−0.28
+−0.16
++0.47
+MoRec
+Seed
+0.3795
+0.5014
+0.3698
+0.4949
+0.2887
+0.4258
+0.5636
+0.7209
+RecHarness
+0.4011
+0.5283
+0.3726
+0.4982
+0.2855
+0.4240
+0.5687
+0.7264
+DeepEvolve
+0.3863
+0.5104
+0.3804
+0.5053
+0.2875
+0.4259
+0.5715
+0.7267
+OpenEvolve
+0.3924
+0.5203
+0.3780
+0.5033
+0.2905
+0.4291
+0.5651
+0.7234
+ShinkaEvolve
+0.3875
+0.5133
+0.3774
+0.5026
+0.2897
+0.4270
+0.5671
+0.7240
+Self-EvolveRec
+0.3878
+0.5134
+0.3730
+0.4982
+0.2901
+0.4277
+0.5645
+0.7212
+RecRSI (Ours)
+0.4151
+0.5416
+0.3938
+0.5231
+0.2902
+0.4267
+0.5708
+0.7271
+Improv. (%)
++3.50
++2.52
++3.51
++3.52
+−0.11
+−0.56
+−0.12
++0.05
+BERT4Rec
+Seed
+0.3286
+0.4417
+0.3881
+0.5072
+0.2423
+0.3643
+0.5313
+0.6809
+RecHarness
+0.3220
+0.4383
+0.3959
+0.5148
+0.2363
+0.3572
+0.5476
+0.6954
+DeepEvolve
+0.3334
+0.4480
+0.3905
+0.5091
+0.2374
+0.3574
+0.5403
+0.6893
+OpenEvolve
+0.3286
+0.4417
+0.3881
+0.5072
+0.2423
+0.3643
+0.5344
+0.6833
+ShinkaEvolve
+0.3281
+0.4418
+0.3932
+0.5123
+0.2451
+0.3678
+0.5425
+0.6882
+Self-EvolveRec
+0.3070
+0.4146
+0.3807
+0.4984
+0.2169
+0.3280
+0.5464
+0.6937
+RecRSI (Ours)
+0.3742
+0.4940
+0.4046
+0.5233
+0.2681
+0.3963
+0.5424
+0.6905
+Improv. (%)
++12.24
++10.27
++2.20
++1.66
++9.36
++7.76
+−0.96
+−0.70
+NGCF
+Seed
+0.2919
+0.4059
+0.2642
+0.3635
+0.0867
+0.1365
+0.2771
+0.6547
+RecHarness
+0.2916
+0.4028
+0.2996
+0.4064
+0.0916
+0.1430
+0.2778
+0.6606
+DeepEvolve
+0.3217
+0.4380
+0.2875
+0.3899
+0.0959
+0.1454
+0.2883
+0.6727
+OpenEvolve
+0.3353
+0.4503
+0.2890
+0.3914
+0.1011
+0.1519
+0.2939
+0.6838
+ShinkaEvolve
+0.3349
+0.4497
+0.2873
+0.3946
+0.1022
+0.1531
+0.2939
+0.6850
+Self-EvolveRec
+0.3189
+0.4343
+0.2725
+0.3738
+0.0950
+0.1446
+0.2871
+0.6682
+RecRSI (Ours)
+0.3366
+0.4514
+0.2922
+0.3936
+0.1051
+0.1566
+0.2957
+0.6863
+Improv. (%)
++0.41
++0.24
+−2.45
+−3.15
++2.86
++2.23
++0.63
++0.20
+Bold/underline: best/second best. Improv.: RecRSI’s relative gain over the strongest competing system, computed before rounding.
+The Implementer receives the hypothesis specification, source,
+and interface requirements. Qualification checks interfaces and
+execution, with bounded repair for implementation failures. Candi-
+dates that pass qualification and resource admission enter training
+and evaluation under Π. An unresolved qualification failure skips
+evaluation and records its status, diagnostics, and cost; the incum-
+bent stays unchanged and research proceeds to the next eligible
+proposal under the remaining budget. These records and measured
+outcomes feed Mechanism Feedback.
+3.4
+Mechanism Feedback and Research State
+Update
+Mechanism Feedback relates an outcome to the intervention and
+question that produced it. Each record links the hypothesis ℎ𝑡, im-
+plemented composition b
+𝐶𝑡, and observation 𝑜𝑡to the reference
+design, changed and unchanged mechanisms, performance differ-
+ence, execution status, and cost. The original rationale, expected
+observation, and suggested tests remain available alongside the
+measurements.
+Using evidence across experiments. The feedback record updates
+the shared state:
+𝑒𝑡= Feedback(T,ℎ𝑡, b
+𝐶𝑡,𝑜𝑡; R𝑡),
+R𝑡+1 = Update(R𝑡,𝑒𝑡).
+(3)
+Outcomes update the experimental history and mechanism-level
+evidence; the current best changes when validation performance
+improves. The construction reference determines the base design;
+evidence from another experiment can motivate a new intervention.
+Role-specific inputs include the incumbent, latest result, recent
+mechanism comparisons, open questions, and role history, linking
+working explanations to measured outcomes.
+
+
+--- Page 6 ---
+Gan et al.
+An unsuccessful hypothesis guides the next discovery. In a
+MoRec/CDs search, round 3 asks whether the pairwise objective
+from round 2 helps through general emphasis on difficult examples
+or specifically through positive–negative separation. It replaces
+the auxiliary pairwise term with focal-weighted BCE; validation
+NDCG@5 falls from 0.3705 to 0.3438. The regression becomes part
+of the mechanism history, while the round 2 design remains the
+incumbent. All four roles use this observation and the incumbent in
+round 4. The selected Frontier Architect proposal restores round 2’s
+BCE and pairwise objective and tests cosine-temperature scoring,
+hypothesizing that reducing embedding-norm effects will improve
+ranking. The candidate implements Eq. 2 and reaches validation
+NDCG@5 of 0.4097. Round 2 supplies the construction reference;
+round 3 supplies evidence for changing direction.
+4
+Experiments
+Experimental setup. We study algorithm discovery from four ini-
+tial recommenders—SASRec [7], MoRec [34], BERT4Rec [29], and
+NGCF [30]—on Amazon CDs, Electronics, Office, and MovieLens-
+1M [3]. All systems share the same preprocessed data, splits, and
+evaluation protocol within each model–dataset setting (Appen-
+dix D). We compare RecRSI with the initial algorithms and five
+discovery systems: RecHarness, DeepEvolve, OpenEvolve, ShinkaE-
+volve, and Self-EvolveRec [9, 10, 12, 15, 26].
+We reproduce all baselines from their official open-source im-
+plementations. All systems use GPT-5.6 Terra/Luna with a com-
+mon ceiling of 12 genuine evaluations, each a completed training–
+evaluation run, and pre-specified API-expenditure safeguards (Ap-
+pendix B). Candidates are selected by development-set NDCG@5
+and retrained for final test evaluation; results are averaged over
+three independent searches. The ablation study uses MoRec on
+all four datasets; continuation and feedback use MoRec/CDs, and
+mechanism discovery uses BERT4Rec/Electronics. These analyses
+use development NDCG@5. Space construction compares final test
+performance on SASRec/CDs. Reference API cost measures model-
+call expenditure, and GPU-hours measure search computation; both
+exclude final retraining. Appendices A–D detail evaluation scope,
+aggregation, ranking protocols, feedback controls, and implemen-
+tation settings.
+4.1
+Performance Comparison
+Algorithm discovery across starting models. Table 1 reports final
+test performance across 16 model–dataset settings. RecRSI improves
+on the initial algorithm in all 16 settings and achieves the highest
+mean NDCG@5 in 11 settings and the highest mean HR@5 in
+12. Averaged over all settings, the relative gains over the initial
+algorithms are 8.48% in NDCG@5 and 6.88% in HR@5; gains over
+the strongest competing result in each setting and metric are 2.60%
+and 2.20%. The mean advantage remains positive after omitting any
+starting model or dataset (Appendix A).
+BERT4Rec/Electronics links these performance gains to con-
+crete algorithm designs. RecRSI reaches test NDCG@5 of 0.4046,
+compared with 0.3881 for the initial algorithm and 0.3959 for
+the strongest competitor, RecHarness. The eight selected designs
+combine changes to scoring, objectives, and representations.
+Section 4.3.4 examines how these combinations arise and which
+components contribute to their gains.
+0
+2
+4
+6
+8
+API reference cost per search (USD)
+0
+3
+6
+9
+NDCG@5 gain (%)
+RecHarness
+DeepEvolve
+OpenEvolve
+ShinkaEvolve
+Self-EvolveRec
+RecRSI
+(a) Quality versus API reference cost
+0
+1
+2
+Relative gain per GPU-hour (pp/h)
+RecRSI
+RecHarness
+OpenEvolve
+ShinkaEvolve
+Self-EvolveRec
+DeepEvolve
+1.96
+1.65
+1.33
+1.31
+0.45
+0.34
+(b) GPU efficiency
+0.0
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+API token ceiling (millions)
+0
+2
+4
+6
+8
+Best validation NDCG@5 gain (%)
+(c) Quality at a common token budget
+RecHarness
+DeepEvolve
+OpenEvolve
+ShinkaEvolve
+Self-EvolveRec
+RecRSI
+Figure 3: Discovery quality and search cost. (a,b) Eight-task
+final test NDCG@5 gain over Seed versus API reference cost
+(USD) and per GPU-hour. (c) Best validation gain at a com-
+mon input-plus-output token ceiling on the same eight tasks;
+at 3 million tokens, RecRSI reaches 7.72% versus 5.09% for
+RecHarness. Repeats are averaged within tasks, then tasks
+equally. Search costs exclude final retraining.
+Discovery quality and research investment. Across the eight tasks
+in Figure 3(a,b), RecRSI lies on the quality–API-cost Pareto fron-
+tier and achieves the highest average test gain. Compared with
+RecHarness, it spends an additional USD 2.38 per search on average
+and increases the mean test NDCG@5 gain over the seed from
+4.68% to 7.36%—a 57.17% larger gain. RecRSI uses additional tokens
+to formulate mechanism-level hypotheses, compose interventions,
+and integrate evidence. The higher discovery quality shows the
+return on this research investment. RecRSI also leads at a common
+budget of 3 million tokens: mean validation gain reaches 7.72%
+
+
+--- Page 7 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation Algorithms
+versus 5.09% for RecHarness (panel c). It achieves the highest test
+gain per GPU-hour, 1.96 percentage points.
+4.2
+Ablation Studies
+The ablations examine how mechanism knowledge, experimental
+history, and research roles support algorithm construction. Full
+combines specialized roles, explicit MechSpace constraints, and
+Mechanism Feedback. Prompt supplies the same mechanism knowl-
+edge through natural-language guidance instead of explicit con-
+straints; Unified uses four unspecialized roles. Summary replaces
+mechanism history with a general-purpose experiment summary;
+Prompt+Summary applies both substitutions. Each configuration
+searches MoRec on CDs, Electronics, Office, and MovieLens-1M
+with up to 12 evaluations. We average the relative gain of the best-
+so-far development score over the initial model, weighting the four
+datasets equally.
+Table 2: Component contributions and space–feedback inter-
+action on MoRec across four datasets.
+Method
+Mean frontier
+gain (%) ↑
+Change vs.
+Full (pp)
+Full (RecRSI)
+5.6775
+–
+Prompt
+5.4591
+−0.2184
+Unified
+5.6387
+−0.0388
+Summary
+5.1927
+−0.4848
+Prompt + Summary
+5.5807
+−0.0968
+Feedback
+MechSpace
+Prompt
+Space effect
+Δ (pp)
+Mechanism
+5.6775
+5.4591
++0.2184
+Summary
+5.1927
+5.5807
+−0.3880
+Feedback effect Δ (pp)
++0.4848
+−0.1216
++0.6064
+Gains (%) average best-development NDCG@5 improvement over the initial model
+equally across four datasets. Effects are percentage-point differences; bottom-right is
+𝑔𝐹−𝑔𝑃−𝑔𝑆+ 𝑔𝑃+𝑆.
+Joint value of mechanism choices and feedback. Full achieves the
+highest mean frontier gain, 5.6775%, across the four datasets (Ta-
+ble 2). With explicit MechSpace, Mechanism Feedback raises the
+gain from 5.1927% under Summary to 5.6775%, a 9.34% increase
+in discovery gain. The space–feedback interaction is positive at
+0.6064 percentage points: explicit MechSpace improves the frontier
+with Mechanism Feedback, whereas its advantage disappears under
+a general summary. The four-way comparison links the benefit
+of structured mechanism choices to how experimental experience
+guides their use. MechSpace specifies implementable interventions;
+hypothesis-linked feedback connects them to the design condi-
+tions and outcomes of earlier tests, helping later hypotheses target
+promising combinations.
+4.3
+Analysis of Mechanism-Guided Research
+The following studies track how earlier experiments shape later
+designs, from continued search to individual feedback decisions
+and mechanism combinations.
+4.3.1
+Research Continuation vs. Restarts. Continue (Long24) ex-
+tends a single search to 24 evaluations; Restart (2×Short12) takes
+the better result from two independent 12-evaluation searches.
+Both strategies receive 24 evaluation opportunities in each of three
+MoRec/CDs blocks. Table 3 reports their final quality and API ex-
+penditure.
+Block 1
+Block 2
+Block 3
+Continue (24)
+Restart (2×12)
+12 evaluations
+0.36
+0.38
+0.40
+0.42
+0
+6
+12
+18
+24
+B3 eval. 13:
+Keep fusion + margin
+Test cosine scoring
+Total completed evaluations
+Best-so-far DEV NDCG@5
+Figure 4: Overlaid research progress on MoRec/CDs. Colors
+distinguish three experiment blocks, with solid Continue and
+dashed Restart trajectories. At 2𝑘total evaluations, Restart
+takes the better of the two independent searches after 𝑘eval-
+uations each. The divider marks evaluation 12; filled circles
+mark later bests, including the Block 3 scoring hypothesis.
+Table 3 reports final quality and API cost.
+Table 3: Final discovery quality and continuation gains at 24
+total evaluations.
+Block
+Continue
+(24)
+Best restart
+(2×12)
+Gain after
+eval. 12
+Continue
+−restart
+1
+0.4237
+0.4195
++0.0057
++0.0043
+2
+0.4299
+0.4299
++0.0043
+≈0
+3
+0.4153
+0.3884
++0.0352
++0.0269
+Scores and gains are development NDCG@5; differences use unrounded values (Block
+2: −2.38×10−5). API reference USD for Continue / both restarts: 8.81 / 8.10, 8.51 / 8.19,
+and 9.03 / 7.54 for Blocks 1–3.
+Continue achieves higher final NDCG@5 in Blocks 1 and 3 and
+nearly ties the best restart in Block 2. All three continued searches
+find new best candidates after evaluation 12 (Figure 4).
+Block 3 shows how earlier exploration supports the later im-
+provement. Its best NDCG@5 remains at 0.3801 from evaluations 2
+through 12. At evaluation 13, the next hypothesis combines the
+existing recent-three-item fusion and margin objective with cosine-
+normalized scoring at temperature 0.2. The combination reaches
+
+
+--- Page 8 ---
+Gan et al.
+0.4153, exceeding the best restart by 6.92%. This scoring experiment
+builds on the earlier representation and objective to improve the
+design beyond the short-search horizon.
+To examine how accumulated experience guides the next design,
+we branch from the same MoRec/CDs incumbent with its research
+history available or reset. Access to history yields a better candi-
+date at each of three successive steps: mean NDCG@5 is 0.3947
+versus 0.3681, a difference of 0.0266 (Table 13). After a query-gate
+regression, the history-informed branch keeps the scorer and tests
+item-embedding gradient clipping; the reset branch switches to a
+pairwise objective. Earlier evidence thus guides both the choice of
+a new intervention and the design it builds on (Appendix E).
+4.3.2
+Feedback-Guided Research Decisions. When an experiment
+underperforms, the next decision depends on which mechanisms to
+preserve and which hypothesis to test. We compare Raw, Summary,
+and Mechanism at frozen decision points from real MoRec/CDs
+research trajectories, yielding ten next-candidate comparisons. Raw
+provides the experimental records; Summary turns them into action-
+able research advice; Mechanism links observations to the hypothe-
+ses and mechanisms tested and proposes follow-up investigations.
+Each comparison shares the research history, available actions, and
+downstream implementation and evaluation process; Summary and
+Mechanism also share the feedback model and output-token limit
+(Appendix C). Mechanism leads to higher next-candidate NDCG@5
+than Summary in seven of the ten comparisons (Table 4).
+Table 4: Next-candidate quality in ten feedback comparisons
+at frozen MoRec/CDs decision points.
+State
+Raw
+Summary
+Mechanism
+1
+0.3647
+0.3729
+0.3767
+2
+0.3647
+0.3729
+0.3729
+3
+0.4123
+0.4135
+0.4150
+4
+0.3729
+0.3729
+0.3729
+5
+0.3681
+0.3673
+0.4037
+6
+0.3729
+0.3729
+0.3755
+7
+0.4079
+0.4152
+0.4175
+8
+0.4139
+0.3739
+0.3996
+9
+0.3339
+0.3729
+0.3409
+10
+0.3377
+0.3612
+0.3625
+Development NDCG@5; bold denotes the best value, including ties.
+At State 6, a convolution-and-mask regression leads Mechanism
+Feedback to test a prefix-mean representation with weight 0.1,
+keeping the gate and BCE objective unchanged. The next candidate
+reaches 0.3755, compared with 0.3729 under both Raw and Sum-
+mary. At State 5, Mechanism tests cosine scoring with the pairwise
+objective, reaching 0.4037 versus 0.3673 for Summary. These deci-
+sions show how feedback guides both what to change and what to
+build on, turning the outcome of a mechanism hypothesis into the
+basis for the next experiment.
+4.3.3
+Mechanism-Space Construction. We test whether MechSpace
+can supply effective interventions for algorithm discovery by com-
+paring its generated space (A) with a human-designed space (H) on
+SASRec/CDs.
+To construct H, the authors examine the initial SASRec imple-
+mentation and established recommendation techniques, manually
+specifying mechanisms, parameter domains, and composition rules.
+H defines six mechanisms, including relative-position attention,
+gated FFNs, and ranking objectives, with 20 single/pair structures
+and 95 parameter assignments. A contains 16 fixed-parameter prim-
+itives and 494 nominal single/pair/triple combinations. Mechanism
+coverage, composition rules, and space size are outcomes of the con-
+struction procedures; both resulting spaces are searched through
+12 genuine evaluations.
+Both searches use Research Line with the same SASRec initial-
+ization, data, evaluator, training protocol, and LLM role-to-model
+assignments. Each winner is selected by validation NDCG@5, re-
+trained with three seeds, and evaluated on held-out test data.
+Table 5: Final test performance of the validation-selected
+candidates from the automatically generated (A) and human-
+designed (H) mechanism spaces on SASRec/CDs. Results are
+reported as mean ± sample standard deviation.
+Space
+NDCG@5
+HR@5
+A: MechSpace
+0.4236 ± 0.0036
+0.5572 ± 0.0062
+H: Human-designed
+0.3540 ± 0.0051
+0.4660 ± 0.0053
+A yields 19.65% higher test NDCG@5 and 19.57% higher HR@5
+than H (Table 5). The selected algorithm from A normalizes em-
+bedding directions before adding positional embeddings, an inter-
+vention absent from H. The winner from H combines bounded
+causal relative-position attention bias with hardness-weighted bi-
+nary cross-entropy. The comparison shows how MechSpace sup-
+ports discovery: it supplies a useful intervention absent from the
+manual space, which Research Line turns into a higher-performing
+algorithm under the same evaluation budget.
+4.3.4
+Discovered Mechanisms and Research Hypotheses. We an-
+alyze the mechanisms discovered in the three main-comparison
+searches (RO1–RO3) and five additional searches (RO4–RO8) on
+BERT4Rec/Electronics (Table 6). Each improves on its initial algo-
+rithm, with relative NDCG@5 gains of 0.98–8.67% and a mean of
+3.87%. The selected programs combine two or three mechanism cat-
+egories: scoring and objective changes each appear in seven designs,
+architecture changes in five, and representation changes in one.
+The frequent scoring–objective combinations connect the values
+used to learn the recommender with those used to rank items, mak-
+ing their compatibility a concrete question for mechanism-guided
+research.
+RO2 produces the largest gain, 8.67%, by combining cosine-
+temperature scoring with label-smoothed training while keeping
+the encoder unchanged. The shared scorer coordinates training
+logits and item ranking. Component comparisons for RO1–RO3
+(Appendix C.1) expose why design context matters. With bilin-
+ear scoring fixed in RO1, layer aggregation changes NDCG@5 by
+−0.0014 without smoothing but +0.0015 with it. This component
+comparison identifies an objective-dependent design opportunity:
+layer aggregation improves the design when paired with smoothing.
+A hypothesis records the intervention together with its surround-
+ing design so that this dependence can guide the next experiment.
+In RO2, smoothing adds 0.0019 to an already effective cosine scorer.
+
+
+--- Page 9 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation Algorithms
+Table 6: Mechanism combinations and development-set gains in all eight BERT4Rec/Electronics searches.
+Search
+Selected mechanism combination
+Categories
+Root
+Selected
+Gain (%)
+RO1
+Bilinear scoring + layer aggregation + label smoothing
+S + A + O
+0.4079
+0.4199
++2.95
+RO2
+Cosine-temperature scoring + label smoothing
+S + O
+0.4047
+0.4398
++8.67
+RO3
+Bias-free query projection + label smoothing
+S + O
+0.4045
+0.4220
++4.32
+RO4
+Shared score projection + position scaling
+S + A
+0.4089
+0.4165
++1.87
+RO5
+Bounded item bias + label smoothing
+S + O
+0.4054
+0.4094
++0.98
+RO6
+Relative-distance bias + masked decoder + label smoothing
+R + A + O
+0.3997
+0.4147
++3.75
+RO7
+Context scoring head + mask adapter + label smoothing
+S + A + O
+0.4069
+0.4209
++3.43
+RO8
+Bilinear query + deep prediction head + in-batch discrimination
+S + A + O
+0.4043
+0.4243
++4.95
+Root and Selected are search-stage development NDCG@5; gains use each search’s unrounded root value. R: representation; A: architecture; S: scoring; O: objective. Categories
+describe the complete selected composition.
+RO3’s pre-experiment hypothesis shows how prior results shape
+the next combination. It builds on label smoothing, which had im-
+proved development NDCG@5 from 0.4045 to 0.4101, and uses the
+regression of a residual-head alternative to motivate a new scoring
+hypothesis. The improved, smoothed design becomes the refer-
+ence for testing the new scorer. A bias-free query projection tests
+whether learned matching geometry can complement this objec-
+tive; the resulting design reaches 0.4220. The combination exceeds
+both projection alone (0.4170) and smoothing alone (0.4101). The
+proposal history explains why the scorer was tested; the component
+comparisons show what it adds to the design.
+5
+Conclusion
+RecRSI makes mechanism hypotheses the unit of cumulative recom-
+mendation research. Its task-derived mechanism space, reference-
+based candidate construction, and mechanism feedback allow re-
+search to build on promising designs and learn from both successful
+and unsuccessful experiments. Across 16 model–dataset settings,
+RecRSI improves both ranking metrics over every initial recom-
+mender and achieves positive average gains over the strongest
+competing results. The process analyses show how accumulated
+evidence redirects research and develops stronger mechanism com-
+binations. The resulting research cycle uses each experiment to
+inform the next mechanism choice.
+References
+[1] Yongqiang Chen, Chenxi Liu, Zhenhao Chen, Tongliang Liu, Bo Han, and Kun
+Zhang. 2026. CausalEvolve: Towards Open-Ended Discovery with Causal Scratch-
+pad. arXiv:2603.14575 doi:10.48550/arXiv.2603.14575
+[2] Maurizio Ferrari Dacrema, Paolo Cremonesi, and Dietmar Jannach. 2019. Are
+We Really Making Much Progress? A Worrying Analysis of Recent Neural Rec-
+ommendation Approaches. In Proceedings of RecSys. ACM, New York, NY, USA,
+101–109. doi:10.1145/3298689.3347058
+[3] F. Maxwell Harper and Joseph A. Konstan. 2015. The MovieLens Datasets: History
+and Context. ACM Transactions on Interactive Intelligent Systems 5, 4, Article 19
+(2015), 19 pages. doi:10.1145/2827872
+[4] Xiangnan He, Kuan Deng, Xiang Wang, Yan Li, Yongdong Zhang, and Meng
+Wang. 2020. LightGCN: Simplifying and Powering Graph Convolution Network
+for Recommendation. In Proceedings of SIGIR. ACM, New York, NY, USA, 639–648.
+doi:10.1145/3397271.3401063
+[5] Seokhoon Jeong, Mijung Kim, and Taehwan Kim. 2026. Agentic Neural Architec-
+ture Search. arXiv:2607.07984 doi:10.48550/arXiv.2607.07984
+[6] Zhengyao Jiang, Dominik Schmidt, Dhruv Srikanth, Dixing Xu, Ian Kaplan,
+Deniss Jacenko, and Yuxiang Wu. 2025. AIDE: AI-Driven Exploration in the
+Space of Code. arXiv:2502.13138 doi:10.48550/arXiv.2502.13138
+[7] Wang-Cheng Kang and Julian McAuley. 2018. Self-Attentive Sequential Recom-
+mendation. In 2018 IEEE International Conference on Data Mining (ICDM). IEEE,
+Piscataway, NJ, USA, 197–206. doi:10.1109/ICDM.2018.00035
+[8] Andrej Karpathy. 2026. autoresearch: AI Agents Running Research on Single-
+GPU Nanochat Training Automatically. GitHub. https://github.com/karpathy/
+autoresearch
+[9] Sein Kim, Sangwu Park, Hongseok Kang, Wonjoong Kim, Jimin Seo, Yeonjun
+In, Kanghoon Yoon, Hyunsik Jeon, and Chanyoung Park. 2026. Self-EvolveRec:
+Self-Evolving Recommender Systems with LLM-Based Directional Feedback.
+arXiv:2602.12612 doi:10.48550/arXiv.2602.12612
+[10] Robert Tjarko Lange, Yuki Imajuku, and Edoardo Cetin. 2026.
+ShinkaE-
+volve:
+Towards
+Open-Ended
+and
+Sample-Efficient
+Program
+Evolution.
+In The Fourteenth International Conference on Learning Representations.
+74026–74078.
+https://proceedings.iclr.cc/paper_files/paper/2026/hash/
+7886b9bafe76c52fd568db10ff9772df-Abstract-Conference.html
+[11] Jianghao Lin, Xinyi Dai, Yunjia Xi, Weiwen Liu, Bo Chen, Hao Zhang, Yong Liu,
+Chuhan Wu, Xiangyang Li, Chenxu Zhu, Huifeng Guo, Yong Yu, Ruiming Tang,
+and Weinan Zhang. 2025. How Can Recommender Systems Benefit from Large
+Language Models: A Survey. ACM Transactions on Information Systems 43, 2,
+Article 28 (2025), 47 pages. doi:10.1145/3678004
+[12] Haoran Ling, Yuecheng Li, Zeyu Song, Jing Yao, Shuwen Kang, Chi Lu, Wenjin
+Wu, and Peng Jiang. 2026. RecHarness: A Bandit-Routed Agentic Harness for
+Self-Evolving Recommender Systems. arXiv:2607.29241 https://arxiv.org/abs/
+2607.29241
+[13] Bin Liu, Chenxu Zhu, Guilin Li, Weinan Zhang, Jincai Lai, Ruiming Tang, Xi-
+uqiang He, Zhenguo Li, and Yong Yu. 2020. AutoFIS: Automatic Feature Inter-
+action Selection in Factorization Models for Click-Through Rate Prediction. In
+Proceedings of KDD. ACM, New York, NY, USA, 2636–2645. doi:10.1145/3394486.
+3403314
+[14] Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao
+Lu, and Qingfu Zhang. 2024. Evolution of Heuristics: Towards Efficient Auto-
+matic Algorithm Design Using Large Language Model. In Proceedings of the 41st
+International Conference on Machine Learning (Proceedings of Machine Learn-
+ing Research, Vol. 235). PMLR, Cambridge, MA, USA, 32201–32223.
+https:
+//proceedings.mlr.press/v235/liu24bs.html
+[15] Gang Liu, Yihan Zhu, Jie Chen, and Meng Jiang. 2025. Scientific Algorithm
+Discovery by Augmenting AlphaEvolve with Deep Research. arXiv:2510.06056
+doi:10.48550/arXiv.2510.06056
+[16] Chris Lu, Cong Lu, Robert Tjarko Lange, Jakob Foerster, Jeff Clune, and David
+Ha. 2024. The AI Scientist: Towards Fully Automated Open-Ended Scientific
+Discovery. arXiv:2408.06292 doi:10.48550/arXiv.2408.06292
+[17] Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler Hallinan, Luyu Gao, Sarah
+Wiegreffe, Uri Alon, Nouha Dziri, Shrimai Prabhumoye, Yiming Yang, Shashank
+Gupta, Bodhisattwa Prasad Majumder, Katherine Hermann, Sean Welleck, Amir
+Yazdanbakhsh, and Peter Clark. 2023. Self-Refine: Iterative Refinement with Self-
+Feedback. In Advances in Neural Information Processing Systems, Vol. 36. Curran
+Associates, Inc., Red Hook, NY, USA, 46534–46594. doi:10.52202/075280-2019
+[18] Kelong Mao, Jieming Zhu, Jinpeng Wang, Quanyu Dai, Zhenhua Dong, Xi Xiao,
+and Xiuqiang He. 2021. SimpleX: A Simple and Strong Baseline for Collaborative
+Filtering. In Proceedings of the 30th ACM International Conference on Information
+and Knowledge Management (CIKM ’21). Association for Computing Machinery,
+New York, NY, USA, 1243–1252. doi:10.1145/3459637.3482297
+[19] Julian McAuley, Christopher Targett, Qinfeng Shi, and Anton van den Hengel.
+2015. Image-based Recommendations on Styles and Substitutes. In Proceedings
+of the 38th International ACM SIGIR Conference on Research and Development
+in Information Retrieval. Association for Computing Machinery, New York, NY,
+USA, 43–52. doi:10.1145/2766462.2767755
+[20] Lingyu Mu, Hao Deng, Haibo Xing, Jinxin Hu, Yu Zhang, and Xiaoyi Zeng.
+2026. EvoRec: Self Evolving Agentic Recommender Systems. arXiv:2606.28368
+doi:10.48550/arXiv.2606.28368
+
+
+--- Page 10 ---
+Gan et al.
+[21] Alexander Novikov, Ngân V˜u, Marvin Eisenberger, Emilien Dupont, Po-Sen
+Huang, Adam Zsolt Wagner, Sergey Shirobokov, Borislav Kozlovskii, Francisco
+J. R. Ruiz, Abbas Mehrabian, M. Pawan Kumar, Abigail See, Swarat Chaudhuri,
+George Holland, Alex Davies, Sebastian Nowozin, Pushmeet Kohli, and Matej Ba-
+log. 2025. AlphaEvolve: A Coding Agent for Scientific and Algorithmic Discovery.
+arXiv:2506.13131 doi:10.48550/arXiv.2506.13131
+[22] Esteban Real, Chen Liang, David So, and Quoc Le. 2020. AutoML-Zero: Evolving
+Machine Learning Algorithms From Scratch. In Proceedings of ICML (Proceedings
+of Machine Learning Research, Vol. 119). PMLR, Cambridge, MA, USA, 8007–8019.
+https://proceedings.mlr.press/v119/real20a.html
+[23] Steffen Rendle, Walid Krichene, Li Zhang, and John Roberts Anderson. 2020.
+Neural Collaborative Filtering vs. Matrix Factorization Revisited. In Proceedings
+of the 14th ACM Conference on Recommender Systems. Association for Computing
+Machinery, New York, NY, USA, 240–248. doi:10.1145/3383313.3412488
+[24] Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov,
+Matej Balog, M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S.
+Ellenberg, Pengming Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi.
+2024. Mathematical Discoveries from Program Search with Large Language
+Models. Nature 625 (2024), 468–475. doi:10.1038/s41586-023-06924-6
+[25] Yuiko Sakuma, Masakazu Yoshimura, Marcel Gröpl, Zitang Sun, Junji Otsuka,
+Atsushi Irie, and Takeshi Ohashi. 2026. Structuring Open-Ended NAS: Semi-
+Automated Design Knowledge Structuring with LLMs for Efficient Neural Archi-
+tecture Search. arXiv:2605.19247 doi:10.48550/arXiv.2605.19247
+[26] Asankhaya Sharma. 2025. OpenEvolve: An Open-Source Evolutionary Coding
+Agent. GitHub. https://github.com/algorithmicsuperintelligence/openevolve
+[27] Noah Shinn, Federico Cassano, Ashwin Gopinath, Karthik Narasimhan,
+and Shunyu Yao. 2023.
+Reflexion: Language Agents with Verbal Re-
+inforcement
+Learning.
+In
+Advances
+in
+Neural
+Information
+Processing
+Systems, Vol. 36. Curran Associates, Inc., Red Hook, NY, USA, 8634–
+8652.
+https://proceedings.neurips.cc/paper_files/paper/2023/hash/
+1b44b878bb782e6954cd888628510e90-Abstract-Conference.html
+[28] Qingquan Song, Dehua Cheng, Hanning Zhou, Jiyan Yang, Yuandong Tian, and
+Xia Hu. 2020.
+Towards Automated Neural Interaction Discovery for Click-
+Through Rate Prediction. In Proceedings of KDD. ACM, New York, NY, USA,
+945–955. doi:10.1145/3394486.3403137
+[29] Fei Sun, Jun Liu, Jian Wu, Changhua Pei, Xiao Lin, Wenwu Ou, and Peng Jiang.
+2019. BERT4Rec: Sequential Recommendation with Bidirectional Encoder Rep-
+resentations from Transformer. In Proceedings of the 28th ACM International
+Conference on Information and Knowledge Management. Association for Comput-
+ing Machinery, New York, NY, USA, 1441–1450. doi:10.1145/3357384.3357895
+[30] Xiang Wang, Xiangnan He, Meng Wang, Fuli Feng, and Tat-Seng Chua. 2019.
+Neural Graph Collaborative Filtering. In Proceedings of the 42nd International
+ACM SIGIR Conference on Research and Development in Information Retrieval.
+Association for Computing Machinery, New York, NY, USA, 165–174. doi:10.
+1145/3331184.3331267
+[31] Yutaro Yamada, Robert Tjarko Lange, Cong Lu, Shengran Hu, Chris Lu, Jakob
+Foerster, Jeff Clune, and David Ha. 2025. The AI Scientist-v2: Workshop-Level
+Automated Scientific Discovery via Agentic Tree Search. arXiv:2504.08066 doi:10.
+48550/arXiv.2504.08066
+[32] Shuang Yang, Zijie Zhuang, Changxin Lao, Pengbo Xu, Hanwen Xu, Yusheng
+Huang, Han Gao, Guanchen Wang, Tianbao Ma, Linxun Chen, Peilin Song,
+Xuming Wang, Chen Li, Fan Wu, Tao Wang, Zibo Zhao, Xiangyu Wu, An Liu,
+Fei Pan, Peng Jiang, Chen Yang, Zhaojie Liu, and Wenwu Ou. 2026. Advancing
+Model Research in AgentX: Long-Horizon Autonomy for Industrial Recommender
+Systems. arXiv:2609.30001 https://arxiv.org/abs/2609.30001
+[33] Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto, Chuanbo Hua, Haeyeon
+Kim, Jinkyoo Park, and Guojie Song. 2024. ReEvo: Large Language Models
+as Hyper-Heuristics with Reflective Evolution. In Advances in Neural Infor-
+mation Processing Systems, Vol. 37. Curran Associates, Inc., Red Hook, NY,
+USA, 43571–43608. https://proceedings.neurips.cc/paper_files/paper/2024/hash/
+4ced59d480e07d290b6f29fc8798f195-Abstract-Conference.html
+[34] Zheng Yuan, Fajie Yuan, Yu Song, Youhua Li, Junchen Fu, Fei Yang, Yunzhu
+Pan, and Yongxin Ni. 2023. Where to Go Next for Recommender Systems? ID-
+vs. Modality-based Recommender Models Revisited. In Proceedings of the 46th
+International ACM SIGIR Conference on Research and Development in Information
+Retrieval. Association for Computing Machinery, New York, NY, USA, 2639–2649.
+doi:10.1145/3539618.3591932
+[35] Xingshan Zeng, Zishan Xu, Boju Zhang, Yuzhou Wu, Lingzhi Wang, Jianghao
+Lin, Liangyou Li, Yasheng Wang, Lifeng Shang, Xin Jiang, Weinan Zhang, Yong
+Yu, Qun Liu, and Weiwen Liu. 2026. What Makes Good Agentic Data? An ACE
+Lens on Data Generation for LLM Agents. arXiv:2608.27260 doi:10.48550/arXiv.
+2608.27260
+[36] Jenny Zhang, Shengran Hu, Cong Lu, Robert Lange, and Jeff Clune. 2025.
+Darwin Gödel Machine: Open-Ended Evolution of Self-Improving Agents.
+arXiv:2505.22954 doi:10.48550/arXiv.2505.22954
+[37] Wayne Xin Zhao, Shanlei Mu, Yupeng Hou, Zihan Lin, Yushuo Chen, Xingyu
+Pan, Kaiyuan Li, Yujie Lu, Hui Wang, Changxin Tian, Yingqian Min, Zhichao
+Feng, Xinyan Fan, Xu Chen, Pengfei Wang, Wendi Ji, Yaliang Li, Xiaoling Wang,
+and Ji-Rong Wen. 2021. RecBole: Towards a Unified, Comprehensive and Efficient
+Framework for Recommendation Algorithms. In Proceedings of the 30th ACM
+International Conference on Information and Knowledge Management. Association
+for Computing Machinery, New York, NY, USA, 4653–4664. doi:10.1145/3459637.
+3482016
+[38] Chenyu Zhou, Huacan Chai, Wenteng Chen, Zihan Guo, Rong Shan, Yuanyi Song,
+Tianyi Xu, Yingxuan Yang, Aofan Yu, Weiming Zhang, Congming Zheng, Jiachen
+Zhu, Zeyu Zheng, Zhuosheng Zhang, Xingyu Lou, Changwang Zhang, Zhihui Fu,
+Jun Wang, Weiwen Liu, Jianghao Lin, and Weinan Zhang. 2026. Externalization
+in LLM Agents: A Unified Review of Memory, Skills, Protocols and Harness
+Engineering. arXiv:2604.08224 doi:10.48550/arXiv.2604.08224
+
+
+--- Page 11 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation Algorithms
+Table 7: Search-to-search standard deviation of final TEST NDCG@5 and HR@5, aligned with Table 1.
+Seed Recommender
+Method
+CDs
+Electronics
+Office
+MovieLens-1M
+NDCG@5
+HR@5
+NDCG@5
+HR@5
+NDCG@5
+HR@5
+NDCG@5
+HR@5
+SASRec
+RecHarness
+0.0051
+0.0114
+0.0288
+0.0335
+0.0034
+0.0047
+0.0045
+0.0039
+DeepEvolve
+0.0286
+0.0356
+0.0012
+0.0019
+0.0082
+0.0154
+0.0571
+0.0538
+OpenEvolve
+0.0065
+0.0074
+0.0020
+0.0035
+0.0019
+0.0011
+0.0015
+0.0034
+ShinkaEvolve
+0.0081
+0.0142
+0.0064
+0.0057
+0.0039
+0.0084
+0.0038
+0.0052
+Self-EvolveRec
+0.0047
+0.0105
+0.0004
+0.0010
+0.0050
+0.0087
+0.0048
+0.0048
+RecRSI (Ours)
+0.0095
+0.0115
+0.0185
+0.0182
+0.0032
+0.0086
+0.0049
+0.0060
+MoRec
+RecHarness
+0.0156
+0.0159
+0.0051
+0.0055
+0.0055
+0.0053
+0.0021
+0.0025
+DeepEvolve
+0.0149
+0.0194
+0.0097
+0.0103
+0.0022
+0.0002
+0.0077
+0.0039
+OpenEvolve
+0.0026
+0.0070
+0.0003
+0.0007
+0.0019
+0.0041
+0.0015
+0.0025
+ShinkaEvolve
+0.0077
+0.0124
+0.0073
+0.0075
+0.0033
+0.0049
+0.0018
+0.0022
+Self-EvolveRec
+0.0072
+0.0109
+0.0033
+0.0030
+0.0019
+0.0016
+0.0016
+0.0007
+RecRSI (Ours)
+0.0131
+0.0170
+0.0135
+0.0155
+0.0048
+0.0048
+0.0085
+0.0057
+BERT4Rec
+RecHarness
+0.0108
+0.0104
+0.0072
+0.0074
+0.0122
+0.0151
+0.0061
+0.0057
+DeepEvolve
+0.0082
+0.0109
+0.0041
+0.0032
+0.0086
+0.0120
+0.0091
+0.0092
+OpenEvolve
+0.0000
+0.0000
+0.0000
+0.0000
+0.0000
+0.0000
+0.0068
+0.0069
+ShinkaEvolve
+0.0006
+0.0010
+0.0085
+0.0085
+0.0049
+0.0054
+0.0153
+0.0108
+Self-EvolveRec
+0.0408
+0.0507
+0.0118
+0.0126
+0.0311
+0.0416
+0.0103
+0.0102
+RecRSI (Ours)
+0.0379
+0.0389
+0.0074
+0.0083
+0.0031
+0.0064
+0.0087
+0.0059
+NGCF
+RecHarness
+0.0081
+0.0118
+0.0109
+0.0124
+0.0011
+0.0025
+0.0036
+0.0116
+DeepEvolve
+0.0013
+0.0035
+0.0073
+0.0121
+0.0017
+0.0024
+0.0085
+0.0192
+OpenEvolve
+0.0007
+0.0014
+0.0003
+0.0003
+0.0008
+0.0015
+0.0001
+0.0004
+ShinkaEvolve
+0.0002
+0.0001
+0.0235
+0.0280
+0.0016
+0.0020
+0.0011
+0.0028
+Self-EvolveRec
+0.0221
+0.0221
+0.0129
+0.0163
+0.0047
+0.0035
+0.0082
+0.0134
+RecRSI (Ours)
+0.0006
+0.0004
+0.0205
+0.0263
+0.0075
+0.0116
+0.0001
+0.0023
+Entries are sample SD (𝑛= 3) across source-search winners evaluated in the named environment. – denotes an unavailable SD.
+A
+Evaluation and Aggregation
+Evaluation scope. Table 1 evaluates discovered algorithms in 16
+settings from four recommenders and four datasets, combining
+task-specific search winners and source-selected designs retrained
+on target data. This assesses final quality and design reuse across
+environments. The common search cohort in Appendix B examines
+progress and resources; source-linked bootstrap analysis below
+assesses search variability.
+Final test performance and variability. For system 𝑚, evaluation
+setting 𝑡, and source-search repeat 𝑟, ¯𝑞𝑚,𝑡,𝑟averages final TEST re-
+training scores of the algorithm selected by development NDCG@5.
+Its design stays fixed during target retraining. Tables 1 and 7 report
+means and sample SDs over three searches:
+¯𝑞𝑚,𝑡= 1
+3
+3
+∑︁
+𝑟=1
+¯𝑞𝑚,𝑡,𝑟,
+𝑠𝑚,𝑡=
+v
+u
+t
+1
+2
+3
+∑︁
+𝑟=1
+( ¯𝑞𝑚,𝑡,𝑟−¯𝑞𝑚,𝑡)2.
+(4)
+The SD measures variation between discovered algorithms.
+OpenEvolve’s zero SD on BERT4Rec/CDs, Electronics, and Office
+reflects three Seed-equivalent implementations sharing final test
+evaluations.
+Across-task comparisons. Relative gains are averaged equally over
+16 settings, using Seed or the highest competing mean per setting
+Table 8: RecRSI versus each comparator on the 16 settings. Δ
+is mean relative gain (%); W/T/L counts wins, ties, and losses
+based on mean test scores.
+NDCG@5
+HR@5
+Comparator
+Δ
+W/T/L
+Δ
+W/T/L
+RecHarness
++5.52
+13/0/3
++4.24
+14/0/2
+DeepEvolve
++5.70
+15/0/1
++4.83
+16/0/0
+OpenEvolve
++4.38
+15/0/1
++3.50
+14/0/2
+ShinkaEvolve
++4.31
+15/0/1
++3.45
+14/0/2
+Self-EvolveRec
++7.23
+15/0/1
++6.12
+14/0/2
+and metric as the denominator. Table 8 compares fixed systems.
+Against the strongest competitor, mean NDCG@5/HR@5 advan-
+tages remain positive when omitting any setting (1.96–2.94%/1.66–
+2.56%), starting model (1.57–3.35%/1.35–2.97%), or dataset (1.33–
+3.52%/1.07–2.93%).
+Search-level robustness. Search variability is assessed on the eight
+MoRec and BERT4Rec settings with linked source-search and target-
+evaluation records. Mean NDCG@5/HR@5 gains over the task-
+wise strongest competitor are 3.70%/3.06%, with 95% percentile
+bootstrap intervals [1.64%, 5.57%]/[1.36%, 4.61%]. In 100,000 draws,
+we independently resample searches within system and source
+
+
+--- Page 12 ---
+Gan et al.
+Table 9: Task data splits and ranking protocols. Sampled pools contain one positive and 99 fixed negatives; all candidates within
+a task share the same evaluation protocol.
+Task
+Split / evaluation history
+Ranking protocol
+SASRec / all four datasets
+Per-user last-two holdout; test histories include training and valida-
+tion interactions.
+One positive plus 99 fixed negatives, evalu-
+ation seed 72026.
+BERT4Rec/Electronics, Office
+Amazon 2014 5-core; penultimate interaction for development, last
+for test.
+Fixed uniform sampled pools.
+BERT4Rec/MovieLens-1M
+Per-user temporal split of the full MovieLens-1M data.
+Fixed sampled pools; test negatives exclude
+train/dev and the test positive.
+BERT4Rec/CDs
+Common preprocessed data and user/item IDs across systems.
+Fixed sampled candidate sets.
+MoRec/CDs, Electronics
+Common CDs preprocessing across systems; Electronics uses per-
+user last-two holdout. Test histories include training and validation
+interactions.
+Fixed sampled candidate sets shared across
+systems.
+MoRec/Office, MovieLens-1M
+Per-user timestamp order (source-row tie-break); penultimate inter-
+action for development, last for test. Test history: train + develop-
+ment.
+One positive and 99 fixed uniform nega-
+tives; seed 72026. Negatives exclude the
+query history and target.
+NGCF/CDs, Electronics, Office
+Per-user last-two temporal holdout.
+Fixed uniform pools; development/test
+seeds 72026/72027.
+NGCF/MovieLens-1M
+Fixed task split.
+Full-catalog ranking.
+task using aggregated retraining scores, carry each search’s target
+evaluations together to preserve dependence, and recompute the
+strongest comparator. Both intervals exceed zero.
+B
+Discovery Curves and Resource Accounting
+Search progress and investment. Figures 1(b) and 3 link progress
+and final quality to research expenditure using 144 trajectories: six
+systems, three searches, and eight tasks (SASRec/CDs; MoRec/CDs,
+Office, MovieLens-1M; BERT4Rec and NGCF each on Electronics
+and MovieLens-1M). Searches are averaged within tasks, then tasks
+equally. Figure 1(b) tracks best development NDCG@5, including
+the initial algorithm and carrying the best forward after stopping.
+Figure 3(c) plots its relative gain at cumulative input-plus-output
+token ceilings through 3 million, counting setup once and reported
+reasoning and cached tokens. Panels (a,b) pair final TEST gains
+with search costs; GPU efficiency divides mean relative gain by
+mean GPU-hours.
+Budgets and stopping. The shared ceiling is 12 genuine evalua-
+tions; failed implementation or qualification consumes resources
+without counting as evaluation. A USD 7–8 API safeguard, fixed
+before search and independent of performance, stops searches at
+the cost limit using completed plus in-flight expenditure. It stopped
+18 DeepEvolve or Self-EvolveRec searches (Table 10). Counts and
+costs include resumed work within each search; evaluation-budget
+exhaustion and execution interruptions also end searches.
+Search costs. Reference API cost includes research calls, initializa-
+tion, and mechanism-space construction. GPU-hours cover alloca-
+tion for qualification, each search’s initial-training share, candidate
+fits, and unsuccessful attempts. Final TEST retraining and transfer
+evaluation are excluded from search cost.
+C
+Mechanism Hypotheses and Feedback
+Controls
+Mechanism space and feedback. Researchers fix source interfaces,
+editable targets, allowed axes, and composition limits. MechSpace
+Table 10: Completed evaluations in searches stopped by the
+API safeguard. R1–R3 are search repeats; – marks a repeat
+not stopped by this safeguard.
+System
+Task
+R1
+R2
+R3
+DeepEvolve
+MoRec/CDs
+2
+6
+0
+MoRec/Office
+0
+1
+–
+MoRec/MovieLens-1M
+11
+–
+–
+BERT4Rec/Electronics
+–
+10
+11
+Self-EvolveRec
+MoRec/CDs
+2
+–
+10
+MoRec/MovieLens-1M
+–
+–
+1
+BERT4Rec/Electronics
+6
+6
+–
+BERT4Rec/MovieLens-1M
+9
+9
+–
+NGCF/Electronics
+7
+0
+2
+generates primitives, parameter settings, and compatibility rules
+within them. For MoRec/CDs (Section 3.2), generation proposes 18
+primitives; review selects 16 across six axes. SELECT chooses one;
+COMPOSE combines two or three, with at most one per axis and two
+mutation targets: 16 singles, 106 pairs, and 372 triples. Primitives
+specify locations, types, stages, parameters, implementation, and
+incompatibilities. Explicit selection enforces these specifications;
+Prompt supplies them as text.
+Four-dataset ablation. Table 2 averages 100(𝑞max/𝑞0 −1)
+equally over four datasets, including the initial model in 𝑞max.
+All configurations complete 12 evaluations except MovieLens-
+1M
+Prompt+Summary
+(11);
+comparing
+all
+MovieLens-1M
+configurations at evaluation 11 gives unchanged frontiers.
+With 𝑔𝐹,𝑔𝑃,𝑔𝑆,𝑔𝑃+𝑆
+denoting Full, Prompt, Summary, and
+Prompt+Summary gains, 𝑔𝐹−𝑔𝑃−𝑔𝑆+ 𝑔𝑃+𝑆
+= 0.6064 per-
+centage points measures how feedback changes the benefit of
+explicit mechanism choices.
+Feedback comparisons. Raw, Summary, and Mechanism share
+histories, legal actions, selection, implementation, and evaluation.
+Raw passes records; Summary gives research advice; Mechanism
+
+
+--- Page 13 ---
+RecRSI: Mechanism-Guided Discovery of Recommendation Algorithms
+connects interventions and outcomes to follow-up hypotheses. Sum-
+mary and Mechanism receive identical facts and source diagnostics
+with gpt-5.6-terra, medium reasoning, and a 20,000-token out-
+put limit. The ten comparisons use frozen checkpoints from real
+MoRec/CDs research runs. For example, States 1–2 come from
+rounds 2–3 of the Full component-study search, and State 3 from
+round 18 of a continued Mechanism Feedback run.
+C.1
+BERT4Rec Mechanism Hypotheses and
+Components
+RO3 builds on label smoothing, which raised development
+NDCG@5 from 0.4045 to 0.4101, and responds to a residual-head
+regression by testing a new matching geometry. With query q𝑗,
+tied item embeddings 𝐸, and existing output bias b, its shared
+training/prediction scorer is
+s𝑗= (q𝑗𝑊)𝐸⊤+ b,
+𝑊∈R64×64.
+(5)
+The projection has no added bias. For 𝑝𝑗= softmax(s𝑗), target 𝑦𝑗,
+catalog size 𝑁, and valid positions V,
+L = −1
+|V|
+∑︁
+𝑗∈V
+"
+0.9 log𝑝𝑗,𝑦𝑗+ 0.1
+𝑁
+𝑁
+∑︁
+𝑖=1
+log𝑝𝑗,𝑖
+#
+.
+(6)
+Padding is excluded; encoder, embeddings, and original output
+mapping remain unchanged. The hypothesis predicts that learning
+the matching geometry will complement the smoothed objective.
+Component comparison design. Each column in Table 11 com-
+pares scoring and objective changes individually and together in
+one discovered design. RO1 also varies layer aggregation, giving
+eight combinations. These comparisons test how an intervention’s
+contribution depends on accompanying mechanisms.
+Table 11: Component comparisons for BERT4Rec/Electronics
+designs RO1–RO3. A: layer aggregation; S: scoring change; O:
+full-catalog label smoothing.
+Design
+RO1
+RO2
+RO3
+Initial
+0.4079
+0.4047
+0.4045
+S
+0.4158
+0.4379
+0.4170
+O
+0.4107
+0.4073
+0.4101
+S + O
+0.4185
+0.4398
+0.4220
+A
+0.4098
+–
+–
+A + S
+0.4144
+–
+–
+A + O
+0.4133
+–
+–
+A + S + O
+0.4199
+–
+–
+S is bilinear projection for RO1/RO3 and cosine-temperature scoring for RO2. A applies
+only to RO1.
+Component contributions. RO3’s combination reaches 0.4220,
+exceeding projection alone by 0.0051 and smoothing alone by
+0.0119. Its interaction, 𝑞𝑆𝑂−𝑞𝑆−𝑞𝑂+ 𝑞0 = −0.0005, is approx-
+imately additive. RO1 combines two-layer averaging (A), bilin-
+ear scoring (S), and smoothing (O). Its 0.4199 exceeds all seven
+other configurations. With S fixed, A changes quality by −0.0014
+without O but +0.0015 with O, yielding conditional interaction
+𝑞𝐴𝑆𝑂−𝑞𝐴𝑆−𝑞𝑆𝑂+ 𝑞𝑆= 0.0029. RO2’s cosine scorer (temperature
+0.2) reaches 0.4379; smoothing adds 0.0019, reaching 0.4398, with
+interaction −0.0007. Component comparisons use fixed training
+seeds 51006, 51007, and 51008 for RO1, RO2, and RO3, respectively.
+D
+Task and LLM Configurations
+Data and training. Electronics and Office use Amazon Reviews
+2014 5-core subsets [19]; Table 9 specifies splits and ranking proto-
+cols. Baseline search capabilities are preserved except web access.
+Within each starting-model setting, all systems share training and
+checkpoint selection; outer algorithm selection uses development
+NDCG@5. SASRec: embedding 50, two causal blocks/two heads,
+length 200, dropout 0.2; Adam 10−3, betas (0.9, 0.98), batch 256, 300
+epochs, evaluation every five epochs, patience four. One uniform
+negative per positive excludes training history.
+BERT4Rec: two layers/heads, hidden/feed-forward 64/256, length
+50, masking/dropout 0.2, learning rate 10−3, weight decay zero,
+train/evaluation batch 128/64; 100 epochs, NDCG@5 checks every
+five epochs, patience four. MoRec: batch 256, hidden 50, length
+200, dropout 0.2, embedding regularization 0.005; Adam 10−3, betas
+(0.9, 0.98), 300 epochs. Checkpoints are selected by development
+HR@5 every five epochs with patience four. NGCF: learning rate
+10−3, NDCG@5 each epoch, patience 30; batch/epochs 128/300 for
+CDs and Office, 1024/300 for Electronics, 1024/500 for MovieLens-
+1M.
+Hardware and LLMs. Training and evaluation use NVIDIA
+RTX 3080 Ti GPUs. All discovery systems use GPT-5.6 Terra/Luna.
+Table 12 gives the role assignments, with T for Terra and L for
+Luna. Research calls use medium reasoning with temperature left
+unset. Output limits follow the task and role configurations.
+Table 12: Role-specific LLM assignments.
+System
+Request roles
+RecHarness
+T: controller, implementation; L: research, critic.
+DeepEvolve
+T: planner, developer, reflection, writer; L: reader,
+search, debugger.
+OpenEvolve
+Generation: T and L.
+ShinkaEvolve
+Query: T and L; embedding:
+text-embedding-3-small.
+Self-EvolveRec
+T: development/debugging; L: research, diagnosis
+research, feedback.
+RecRSI
+L: Composer, Refiner, Falsification; T: Frontier,
+implementation.
+E
+Research History and Subsequent Candidates
+With history and History reset start from the same MoRec/CDs
+incumbent (NDCG@5 0.4181), with prior experiments available
+or cleared. Access to research history improves candidate quality
+across all three successive decisions (Table 13). At the final step, the
+history branch keeps the scorer and clips item-embedding gradients
+to norm 0.5; the reset branch replaces BCE with pairwise logistic
+loss.
+Table 13: Research history improves successive candidate
+quality on MoRec/CDs. Values are development NDCG@5.
+Round
+With history
+History reset
+Difference
+13
+0.4021
+0.3686
++0.0334
+14
+0.3669
+0.3405
++0.0265
+15
+0.4152
+0.3953
++0.0199
+Mean
+0.3947
+0.3681
++0.0266

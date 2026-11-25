@@ -1,0 +1,2151 @@
+--- Page 1 ---
+1
+From Intents to Algorithms: Verified Algorithm
+Discovery for Transport Networks
+Behnam Ojaghi, Ricard Vilalta, and Ra¨ul Mu˜noz
+CTTC, Castelldefels, Barcelona, Spain
+{bojaghi,ricard.vilalta,raul.munoz}@cttc.es
+Abstract—Intent-based networking decouples desired outcomes
+from device-level configuration, but most systems still map intents
+to parameters of an algorithm selected in advance. Large language
+models (LLMs) create an opportunity to automate algorithm
+design, yet unrestricted generated code is unsuitable for transport-
+network control because feasibility, reproducibility, and robustness
+must be enforced independently of the model. We present VERA-
+TN, a verification-guided framework that compiles a network
+intent into a bounded algorithm-design specification. The target
+architecture uses an LLM as a semantic variation operator over
+typed request-ordering and path-ranking programs; generated
+logic remains separated from a trusted allocator that enforces path
+validity, latency, capacity, and single-path constraints. We prove
+feasibility preservation under explicit assumptions and establish
+a sufficient bound for the lexicographic latency tie-break in the
+exact reference model. The released proof-of-concept instantiates
+the same interface with a bounded ten-parameter numerical
+candidate and deterministic replay, rather than a completed
+live-LLM/AST study. Across 150 certified held-out cases on a 28-
+node TEFNET24-derived hierarchy, evolutionary search reaches a
+mean priority-utility ratio of 0.958, compared with 0.952 for equal-
+budget random search and 0.940 for priority-greedy routing. The
+gain over random search is small but statistically detectable (Holm-
+adjusted p = 0.0083). The candidate does not improve congestion
+relative to MILP-C, and the effect of failure-aware training is
+inconclusive at the 0.05 level (p = 0.051). Eight discovery runs
+on the official national topology and replay on 12 unseen metro-
+regional topologies show no stable intent-specific specialization.
+These results support the trust-boundary and numerical-evolution
+claims but do not establish a benefit from LLM generation.
+Index Terms—Large language models, automated algorithm
+design, intent-based networking, transport networks, traffic engi-
+neering, evolutionary computation, program synthesis, verification,
+network digital twin.
+I. INTRODUCTION
+I
+NTENT-BASED networking (IBN) seeks to replace device-
+level configuration with declarative descriptions of the
+outcomes that a network should achieve. Instead of specifying
+individual routes, resource allocations, or controller commands,
+an operator can express requirements such as preserving
+latency for a critical service, avoiding congested transport links,
+prioritizing selected service classes, or minimizing disruptive
+reconfiguration. An intent-based network system then translates,
+resolves, activates, and assures these requirements through a
+closed management loop [1]. This abstraction is particularly
+attractive for beyond-5G and 6G infrastructures, where transport
+resources must support heterogeneous services whose objectives
+and operating conditions evolve over time.
+Existing intent-driven resource-management approaches,
+however, typically assume that the algorithm itself has already
+been selected. An intent can modify objective coefficients,
+SLA targets, priorities, traffic demands, or constraints, but the
+underlying optimization model, heuristic, or learned policy
+remains structurally fixed. Recent intent-based network-slicing
+frameworks, for example, translate service objectives into math-
+ematical resource-allocation and conflict-resolution problems
+and adapt their parameters as network conditions change [2], [3].
+Such approaches provide effective intent-aware optimization,
+but adaptation occurs primarily within a predefined algorithm.
+This distinction becomes important when the appropriate
+decision logic depends on the intent itself. Consider two feasible
+transport policies. A latency-oriented policy may repeatedly
+choose the shortest path and concentrate traffic on a scarce cut,
+whereas a resilience-oriented policy may deliberately reserve
+that cut for critical services. Similarly, a rule that maximizes the
+number of admitted requests can behave differently from one
+that maximizes priority-weighted admission, and a congestion-
+minimizing policy may be undesirable when reconfiguration
+stability becomes the dominant objective. Changing the numer-
+ical inputs of a fixed heuristic does not necessarily produce
+the decision structure required by these different operational
+goals.
+Large language models (LLMs) create a new possibility: in-
+stead of selecting only the output of an optimization procedure,
+they can participate in designing the procedure itself. Recent
+work on LLM-assisted algorithm design has demonstrated
+that language models can generate and improve executable
+heuristics through evaluator-driven search. FunSearch evolves
+a designated function inside a predefined program skeleton [4];
+EoH jointly evolves heuristic ideas and executable imple-
+mentations [5]; ReEvo uses reflective language feedback to
+guide heuristic evolution [6]; and LLaMEA evolves complete
+metaheuristics from evaluation feedback [7]. More recently,
+AlphaEvolve has demonstrated the potential of evaluator-driven
+code evolution across mathematical, scientific, and systems
+problems [8]. These developments suggest a progression from
+human-designed algorithm →
+LLM-assisted algorithm design.
+(1)
+Directly transferring this paradigm to transport-network
+control is, however, problematic. A candidate algorithm can
+achieve a high evaluation score while still containing invalid
+logic, numerical instabilities, hidden dependencies, or op-
+erations that should never be available to model-generated
+code. More importantly, network resource allocation contains
+arXiv:2609.27386v1  [cs.NI]  23 Sep 2026
+
+
+--- Page 2 ---
+2
+hard operational constraints. A generated procedure must
+not reinterpret link capacities, ignore service-latency bounds,
+construct invalid paths, or bypass the controller’s enforcement
+policy. Performance measured on a finite training set also
+provides no guarantee that an algorithm will remain effective
+when the topology, traffic matrix, telemetry accuracy, or active
+intent changes.
+A second challenge is defining what should actually be
+generated. Allowing an LLM to synthesize an unrestricted end-
+to-end network controller unnecessarily combines algorithm
+design, feasibility enforcement, resource-state management,
+and actuation into one probabilistic component. Conversely,
+restricting generation to a fixed linear score whose coefficients
+are optimized provides strong containment but corresponds
+primarily to parameter tuning rather than algorithm discovery.
+A useful middle ground requires a sufficiently expressive
+structural search space while retaining a deterministic execution
+boundary.
+This paper introduces VERA-TN, a verification-guided LLM
+evolution framework for intent-conditioned transport-network
+algorithm discovery. Rather than asking the LLM to allocate
+each transport request directly, VERA-TN compiles an operator
+intent into a typed algorithm-design specification and uses the
+LLM as a semantic variation operator over a bounded domain-
+specific language (DSL). Candidate programs define reusable
+request-ordering and candidate-path-ranking functions through
+controlled combinations of transport features, thresholds, inter-
+actions, and conditional branches.
+Crucially, generated logic does not control feasibility or
+network state. Candidate paths are constructed by trusted
+deterministic code, and every selected path is independently
+checked against link-capacity, latency, path-validity, and single-
+path requirements before resource state can change. The
+resulting separation is
+intent
+| {z }
+desired behavior
+→LLM-generated algorithm
+|
+{z
+}
+ranking logic
+→trusted allocator
+|
+{z
+}
+feasibility
+→controller
+|
+{z
+}
+actuation
+.
+(2)
+VERA-TN is verification-guided rather than universally
+“verified.” The methodology separates several distinct levels of
+evidence. Static and runtime verification determine whether a
+candidate program is admissible to execute. The trusted alloca-
+tor preserves the modeled transport constraints independently
+of the generated ranking logic. Exact optimization supplies
+an external quality reference on tractable instances. Finally,
+failure-oriented scenarios examine robustness under analytical
+link failures and capacity degradation. Network-digital-twin
+(NDT) evaluation remains a target operational-validation stage.
+Another important design objective is to remove the LLM
+from the service-critical execution path. Once discovery is
+complete, the selected typed abstract syntax tree (AST) is
+serialized, versioned, and compiled into deterministic local
+code. Transport requests can then be processed without invoking
+the originating LLM. This separation amortizes the potentially
+expensive discovery process over repeated network operation
+and allows the resulting algorithm to be inspected, replayed,
+audited, and rolled back independently of the model provider.
+The main contributions of this work are as follows:
+• Intent-conditioned algorithm-discovery formulation: We
+formulate transport resource allocation at two levels. The
+first is a path-based exact reference problem for priority-
+aware admission and routing. The second treats the decision
+procedure itself as the optimization object, explicitly distin-
+guishing a network intent from individual transport service
+requests.
+• Bounded structural algorithm representation: We intro-
+duce a typed intent-to-algorithm intermediate representation
+and a transport-specific DSL in which an LLM can modify
+feature selection, bounded interactions, thresholds, lexico-
+graphic rules, and conditional decision structure rather than
+only numerical coefficients.
+• Trusted execution and feasibility preservation: We isolate
+generated ranking logic from path construction, resource
+accounting, hard-constraint enforcement, and controller actua-
+tion. We establish a feasibility-preservation property showing
+that any candidate executed through the trusted allocator
+satisfies the modeled path, latency, capacity, and single-path
+constraints under the stated assumptions.
+• Verification-guided evolution: We define a target typed-
+AST procedure that combines static and runtime verification,
+exact-oracle comparison, structural-diversity preservation,
+and structured failure-witness feedback. The released study
+evaluates only the bounded numerical instantiation.
+• Reproducible proof-of-concept evaluation: We release
+deterministic code, seeds, candidate vectors, solver cer-
+tificates, raw metrics, and figure-generation scripts. The
+numerical study uses 150 held-out cases on a TEFNET24-
+derived
+[9] hierarchy and an external-validity check on
+the official national topology and 12 unseen metro-regional
+topologies. Model-connected typed-AST experiments remain
+future work.
+These contributions are intended to answer a question that is
+different from conventional LLM-assisted network control: can
+a generative model help discover a reusable transport-network
+algorithm while the network retains deterministic authority
+over what constitutes an admissible action?
+The remainder of this paper is organized as follows. Sec-
+tion II positions VERA-TN with respect to LLM-assisted
+algorithm design, LLM-based networking, intent-driven op-
+timization, and trusted network validation. Section III defines
+the intent and transport-network system model and the reference
+allocation problem. Section IV introduces the bounded intent-to-
+algorithm representation and trusted execution model. Section V
+presents the verification-guided LLM evolution procedure. Sec-
+tion VI describes the topology, prototype, and reproducibility
+framework. Section VII defines and reports the experimental
+evaluation. Section VIII discusses implications and limitations,
+and Section IX concludes the paper.
+II. RELATED WORK
+A. Automated Heuristic and Algorithm Design
+Automated heuristic design predates LLM-based generation.
+Hyper-heuristics search over heuristics rather than directly
+
+
+--- Page 3 ---
+3
+Trusted deterministic execution
+LLM-generated (no network authority)
+Intent compiler
+(JSON / IR)
+Static check
+AST + types
+Sandbox
+replay + timeout
+Trusted allocator
+capacity + latency
+Scenario evaluator
+admission, congestion,
+reconfiguration
+MILP oracle
+quality gap
+Robustness evaluator
+analytical perturbations
+(optional)
+Network intent
++ SLA/SLO
+LLM program
+generator
+Program archive
++ population
+Accepted candidate
+algorithm
+candidate AST
+repair
+score
+robustness
+parents + witnesses
+(next generation)
+LLM-generated
+Program verification
+Trusted allocation / evaluation
+Archive / population
+External I/O
+Fig. 1. VERA-TN system architecture and trust boundary. The generated algorithm (violet) is restricted to request-ordering and path-ranking logic. Every
+candidate is verified, executed through the trusted allocator, scored against the exact oracle, and stress-tested by the robustness evaluator, all inside the trusted
+deterministic region (green). Selected parents and structured failure witnesses are returned to the generator for the next round of candidate generation, closing
+the evolutionary loop. The architectural contribution is therefore containment of generated decision logic rather than direct LLM control of network resources.
+over problem solutions, while genetic programming has long
+been used to evolve routing and dispatching rules, including
+their structure and numerical parameters. VERA-TN does
+not claim a new evolutionary optimizer. Its contribution is
+the trusted execution and verification boundary around a
+generated rule. Evaluator-driven algorithm design has moved
+from generating isolated code fragments toward iterative search
+over executable procedures. FunSearch evolves a designated
+function within a trusted program skeleton [4]; EoH co-
+evolves heuristic ideas and implementations [5]; ReEvo uses
+reflective feedback to repair heuristics [6]; and LLaMEA
+evolves complete metaheuristics under an external evaluator
+[7]. LLM4AD and recent surveys organize this emerging
+design space and its evaluation challenges [10], [11], while
+AlphaEvolve illustrates the broader potential of evaluator-
+guided code evolution [8]. VERA-TN adopts the external-
+evaluator principle but adds a transport-specific trust boundary:
+generated logic may rank requests and prevalidated paths, but
+it cannot construct paths, mutate resource state, or invoke a
+controller These methods motivate VERA-TN’s typed target
+interface. However, the present numerical study does not
+evaluate an LLM and cannot establish whether LLM generation
+improves on genetic programming under the same grammar
+and evaluation budget.
+B. LLMs and Intent-Based Networking
+LLMs are increasingly used to translate networking tasks,
+assist protocol reasoning, and optimize resource allocation.
+NetLLM develops a general adaptation framework for network-
+ing tasks [12], and LLM-RAO uses language-model reasoning
+within resource-allocation optimization [13]. These methods
+primarily produce decisions or learned policies. In parallel,
+IBN research has established closed-loop intent translation,
+conflict resolution, activation, and assurance [1], [14], [15].
+Recent transport and slicing frameworks map intents into
+multi-objective optimization models and adaptation loops [2],
+[3]. VERA-TN asks a complementary question: whether the
+reusable decision procedure can itself become the bounded
+search object while the network retains deterministic enforce-
+ment.
+C. Traffic Engineering and Trusted Validation
+The allocation model builds on path-based multicommodity
+flow and K-shortest-path traffic engineering [16], [17]. Exact
+mixed-integer optimization supplies a quality reference rather
+than an online deployment requirement. The feedback loop
+is also related to counterexample-guided inductive synthesis
+(CEGIS) [18], although VERA-TN’s failure witnesses are
+empirical counterexamples from finite network scenarios, not
+exhaustive symbolic proofs. Network digital twins provide a
+complementary environment for perturbation and controller-
+aware validation [19]; TeraFlowSDN illustrates an open
+controller integration target [20]. The resulting distinction
+among program admissibility, allocation feasibility, solution
+optimality, and operational validation is central to the proposed
+methodology.
+III. SYSTEM MODEL
+The first design question is not which LLM should control
+the network, but which decisions a generated algorithm should
+be allowed to influence. Fig. 1 therefore separates algorithm
+discovery from network authority. The generator may modify
+only the request-ordering and path-ranking logic. Program
+admissibility, candidate-path construction, resource accounting,
+constraint enforcement, and eventual actuation remain outside
+the generated program and are performed by deterministic
+trusted components. This boundary is the principal architectural
+mechanism through which VERA-TN limits the operational
+effect of an erroneous generated candidate.
+A. Intent and Transport-Network Model
+We consider an intent-driven packet transport network
+represented by an undirected graph
+G = (V, E),
+(3)
+
+
+--- Page 4 ---
+4
+where V denotes the set of transport nodes and E denotes the
+set of physical or logical links. Each link e ∈E is characterized
+by its usable capacity Ce, propagation and processing delay de,
+current carried load le, and, when applicable, an operational-risk
+attribute qe associated with failures, degradation, or shared-risk
+conditions. The network state available at a decision epoch is
+therefore represented by the topology together with the current
+resource and telemetry state of its links.
+The network receives a set R of transport service requests.
+Each request k ∈R is represented as
+rk = (sk, tk, bk, Lmax
+k
+, πk, ck) ,
+(4)
+where sk and tk denote the ingress and egress nodes, respec-
+tively, bk is the requested bandwidth, Lmax
+k
+is the maximum
+tolerable end-to-end transport latency, πk represents the ser-
+vice priority, and ck denotes the service class. The priority
+parameter does not itself determine a routing decision. Rather,
+it expresses the relative importance assigned by the operator or
+service policy when resource contention prevents simultaneous
+satisfaction of all requests.
+Unlike conventional traffic-engineering formulations in
+which the objective function and algorithm are predefined
+by the network designer, we assume that network operation is
+initiated by a declarative intent. An intent specifies the desired
+network outcome without prescribing the algorithm that must
+achieve it. We represent a network intent conceptually as
+I = (O, C, P) ,
+(5)
+where O denotes the ordered set of optimization objectives,
+C denotes mandatory operational constraints, and P contains
+preference or policy information used to distinguish among
+feasible solutions.
+For example, an operator may express the following intent:
+“Maximize the admitted service priority, preserve
+critical traffic before best-effort traffic, satisfy all
+bandwidth and latency requirements, and, among
+solutions with equivalent service admission, minimize
+peak link utilization.”
+The distinction between objectives and hard constraints is
+important. Capacity limits, latency bounds, and path validity
+are treated as non-negotiable constraints and cannot be relaxed
+or reinterpreted by an LLM-generated algorithm. Conversely,
+objectives such as reducing congestion, favoring particular
+service classes, minimizing reconfiguration, or increasing
+resilience determine how alternative feasible allocations should
+be ranked.
+Before algorithm discovery, the natural-language intent is
+compiled into a structured, machine-readable specification.
+Ambiguous, contradictory, or unsupported requirements are
+rejected or returned for clarification rather than being resolved
+implicitly by the generated algorithm. This establishes a stable
+semantic boundary between what the operator requests and
+what the algorithm-discovery process is permitted to change.
+For each request k, the trusted network layer computes a
+finite set Pk of up to K loop-free candidate paths between sk
+and tk. Candidate paths can be obtained using Yen’s K-shortest-
+path algorithm or an equivalent deterministic path-enumeration
+procedure [17]. The latency associated with candidate path
+p ∈Pk is
+Dk,p =
+X
+e∈p
+de.
+(6)
+Any path for which
+Dk,p > Lmax
+k
+(7)
+is eliminated before algorithm evaluation. Hence, the generated
+algorithm operates only over paths satisfying the request-level
+latency constraint.
+Let xk,p ∈{0, 1} be a binary decision variable equal to
+one when request k is assigned to candidate path p, and
+zero otherwise. Let ak ∈{0, 1} indicate whether request k is
+admitted. The resulting transport allocation must satisfy three
+fundamental feasibility conditions: each admitted request is
+assigned to exactly one path, the aggregate bandwidth placed on
+every link does not exceed its usable capacity, and only paths
+satisfying the corresponding latency bound may be selected.
+B. Reference Transport Resource-Allocation Problem
+To quantify the quality of discovered algorithms indepen-
+dently of the LLM, we formulate an exact path-based reference
+optimization problem. Its primary objective is to maximize
+priority-weighted service admission, with normalized path
+latency used only as a secondary preference:
+max
+{xk,p},{ak}
+X
+k∈R
+πkak −ϵ
+X
+k∈R
+X
+p∈Pk
+Dk,p
+Lmax
+k
+xk,p,
+(8)
+where ϵ > 0 controls only the latency tie-break. We use integer-
+valued policy priorities, as is common for service classes.
+Lemma 1 (Lexicographic Dominance): For a nonempty
+request set, if every candidate path is latency-feasible and
+0 < ϵ < 1/|R|, then any one-unit increase in P
+k πkak
+dominates every possible change in the normalized latency
+term of (8).
+Proof: For an admitted request, exactly one selected path
+contributes a term in [0, 1] because Dk,p ≤Lmax
+k
+. Hence the
+total normalized latency term lies in [0, |R|], and its change
+between two feasible allocations has magnitude at most |R|.
+Therefore ϵ|∆D| < 1, whereas a change in the integer-valued
+priority sum is at least one. The priority objective consequently
+remains lexicographically dominant.
+The artifact uses ϵ = 0.5/(|R| + 1), which satisfies this
+sufficient bound.
+Each admitted request must be assigned to exactly one
+candidate path:
+X
+p∈Pk
+xk,p = ak,
+∀k ∈R.
+(9)
+The aggregate bandwidth allocated over each transport link
+cannot exceed its usable capacity:
+le +
+X
+k∈R
+X
+p∈Pk:
+e∈p
+bkxk,p ≤Ce,
+∀e ∈E.
+(10)
+The decision variables satisfy
+xk,p ∈{0, 1},
+ak ∈{0, 1}.
+(11)
+
+
+--- Page 5 ---
+5
+Because infeasible-latency paths are removed during
+candidate-path construction, the formulation does not require
+an additional latency constraint. Similarly, path continuity and
+loop freedom are inherited from the trusted path-enumeration
+procedure.
+The reference formulation is not the algorithm deployed by
+the proposed framework. Instead, it serves as an optimization
+oracle on instances for which an exact solution can be obtained
+within the prescribed computational budget. Let J⋆denote its
+optimal objective value and J(A) denote the objective achieved
+by candidate algorithm A. For oracle-solvable instances, the
+relative optimality loss of A is measured as
+Gap(A) =
+J⋆−J(A)
+max (|J⋆| , ϵ).
+(12)
+This metric provides an external measure of solution quality
+that is independent of the LLM’s own evaluation or reasoning.
+For larger instances where proving optimality becomes compu-
+tationally impractical, the exact oracle can be replaced by the
+best available solver incumbent together with its optimization
+bound. Such cases should be reported separately from exact-
+optimality comparisons.
+C. Intent-Conditioned Algorithm-Discovery Problem
+The objective of this work is fundamentally different from
+solving the reference optimization problem once. Given a
+network-intent specification I, a family of transport-network
+states S, and a bounded space A of executable candidate
+algorithms, we seek an algorithm A⋆whose decision logic
+performs well across the relevant operating scenarios while
+remaining inside the trusted feasibility envelope.
+The algorithm-discovery problem is expressed as
+A⋆= arg max
+A∈A
+F (A | I, S)
+(13)
+s.t.
+V (A, I, S) = valid,
+(14)
+where F(·) evaluates the algorithm according to the objectives
+encoded by the network intent, and V(·) represents the
+structural and operational verification mechanisms described
+in the following sections.
+The output is therefore not a single set of routing decisions.
+Instead, it is a reusable intent-conditioned algorithm that can
+subsequently be executed on previously unseen network states
+without invoking the LLM for every individual service request.
+This distinction separates the proposed problem from direct
+LLM-based resource allocation: the LLM participates in discov-
+ering and improving the decision procedure, whereas trusted
+deterministic components execute and verify the resulting
+procedure during network operation.
+The next section defines how the abstract intent in (5) is
+compiled into a bounded machine-readable representation and
+specifies the trusted execution boundary within which candidate
+algorithms are permitted to operate.
+IV. INTENT-TO-ALGORITHM REPRESENTATION AND
+TRUSTED EXECUTION MODEL
+The system model in Section III defines the transport-
+resource allocation problem and the desired behavior specified
+by a network intent. We now define the representation exposed
+to the algorithm-discovery process and, critically, the boundary
+between LLM-generated decision logic and trusted determinis-
+tic network functions. The design follows the principle that the
+generated algorithm may determine how feasible alternatives
+are prioritized, but may not redefine feasibility, modify network
+state directly, or bypass operator constraints.
+A. Intent-to-Algorithm Intermediate Representation
+Directly exposing an unrestricted natural-language intent
+to an algorithm-generation model would leave objectives,
+constraints, and available network information open to interpre-
+tation. Therefore, before algorithm discovery, the conceptual
+intent I = (O, C, P) introduced in (5) is compiled into the
+typed intermediate representation (IR)
+IIR = ⟨O, C, F, B, D⟩,
+(15)
+where O contains the ordered optimization objectives, C con-
+tains immutable operational constraints, F defines the features
+accessible to generated algorithms, B specifies syntactic and
+computational bounds on candidate programs, and D defines
+the trusted execution and deployment contract.
+The objective component O specifies how feasible allo-
+cations are evaluated, rather than prescribing the algorithm
+used to obtain them. For example, the intent considered in
+Section III-A can be compiled into the lexicographic hierarchy
+O = [max Uadm, min Umax, min Creconf] ,
+(16)
+where Uadm denotes priority-weighted service admission, Umax
+denotes peak link utilization, and Creconf denotes reconfig-
+uration cost when reconfiguration is considered. Additional
+objectives can be activated by the intent without changing the
+trusted feasibility conditions.
+The constraint component C contains requirements that the
+algorithm-discovery process cannot modify. For the transport-
+network problem considered here,
+C = {capacity, latency,
+path validity, single-path assignment}.
+(17)
+If an incoming intent contradicts an operator-defined hard
+constraint, the compiler rejects the corresponding specification
+rather than implicitly relaxing the constraint during algorithm
+generation.
+The feature schema F exposes only normalized, read-
+only network and request information. Candidate algorithms
+therefore cannot query arbitrary controller state or introduce
+undeclared information during execution. We partition the
+feature schema into request-level and path-level features:
+F = Freq ∪Fpath.
+(18)
+For request k, the request-level feature vector is represented
+as
+f req
+k
+=
+
+¯πk,¯bk, τk, χk
+
+,
+(19)
+where ¯πk is normalized service priority, ¯bk is normalized
+requested bandwidth, τk is latency tightness, and χk is a
+numerical or categorical encoding of the service class.
+
+
+--- Page 6 ---
+6
+Latency tightness is defined as
+τk = minp∈Pk Dk,p
+Lmax
+k
+,
+(20)
+where values approaching one indicate that the request has
+little latency margin even on its shortest feasible path.
+The bounds component B restricts generated programs
+to a finite, deterministic, and resource-bounded expression
+space. The deployment component D specifies that candidate
+algorithms may return only request-ranking and path-ranking
+scores. They cannot directly modify link resources, issue
+controller commands, access the file system or external network,
+or call undeclared tools.
+Hence, the IR separates three responsibilities:
+IIR
+|{z}
+desired behavior
+−→
+A
+|{z}
+decision logic
+−→
+T
+|{z}
+trusted execution
+,
+(21)
+where T denotes the deterministic transport-resource allocation
+layer defined in Section IV-D.
+B. Bounded Algorithm Design Space
+For a compiled intent IIR, the discovery process searches
+a bounded set A(IIR) of executable candidate algorithms.
+Each candidate is represented by two deterministic decision
+functions:
+A = (hord, hpath) ,
+(22)
+where hord(k) determines the order in which competing trans-
+port requests are considered and hpath(k, p) ranks candidate
+path p for request k.
+Accordingly,
+hord : Freq →R,
+(23)
+hpath : Freq × Fpath →R.
+(24)
+A central requirement is that the search space allow structural
+variation rather than only coefficient tuning. We therefore use a
+typed domain-specific expression language in which candidate
+functions may contain bounded compositions of
+GDSL = {weighted-sum, lexicographic, min, max,
+bounded-product, threshold, conditional}.
+(25)
+For example, a discovered path-ranking function may instan-
+tiate the conditional structure
+hpath(k, p) =
+
+
+
+gtight(k, p),
+τk ≥δ,
+gflex(k, p),
+τk < δ,
+(26)
+where δ ∈[0, 1] is an evolved threshold, gtight(·) may
+emphasize path latency and bottleneck utilization, and gflex(·)
+may instead emphasize residual capacity, fragmentation, or
+operational risk.
+Thus, evolution may modify not only numerical coefficients
+but also feature selection, comparison order, interaction struc-
+ture, thresholds, and conditional branches. This distinction
+is important because a fixed functional form with optimized
+weights would correspond primarily to parameter tuning,
+whereas the bounded expression space permits controlled
+discovery of distinct decision strategies.
+The expression space deliberately excludes unrestricted
+programming constructs. Candidate programs cannot contain
+recursion, unbounded loops, dynamic imports, mutable global
+state, arbitrary system calls, external network access, or con-
+troller invocations. Each generated expression has a statically
+defined input type and must return a finite scalar value within
+a bounded execution budget.
+The resulting candidate can be serialized as an expression
+tree and replayed independently of the LLM that generated
+it. This allows structural comparison among algorithms and
+supports deterministic evaluation, archival, and reproducibility.
+C. Transport Features for Algorithm Discovery
+The path-ranking function operates on transport-specific
+quantities computed by trusted deterministic components from
+the current topology and telemetry state.
+For request k, admitting it over path p would produce the
+projected utilization of link e ∈p:
+ue(k, p) = le + bk
+Ce
+.
+(27)
+The projected bottleneck utilization of path p is
+umax
+k,p = max
+e∈p ue(k, p).
+(28)
+The normalized path-latency consumption is
+ρk,p = Dk,p
+Lmax
+k
+,
+(29)
+where smaller values indicate greater latency headroom.
+The normalized residual-capacity slack after admitting
+request k is defined as
+sk,p = min
+e∈p
+Ce −le −bk
+Ce
+
+.
+(30)
+To characterize how evenly residual capacity is distributed
+across a candidate path, let
+re(k, p) = Ce −le −bk
+Ce
+(31)
+denote normalized residual capacity on link e after the
+prospective allocation. We define path fragmentation as
+ϕk,p = 1
+|p|
+X
+e∈p
+(re(k, p) −¯rk,p)2 ,
+(32)
+where
+¯rk,p = 1
+|p|
+X
+e∈p
+re(k, p).
+(33)
+A larger value of ϕk,p indicates a more uneven residual-resource
+profile and therefore a potentially more fragmented path.
+When operational-risk information is available, the path-risk
+feature is defined as
+qp = 1
+|p|
+X
+e∈p
+qe.
+(34)
+
+
+--- Page 7 ---
+7
+The normalized hop count is
+ηp =
+|p|
+Hmax ,
+(35)
+where Hmax is the maximum candidate-path length considered
+in the current topology.
+The resulting path-level feature vector is
+f path
+k,p
+=
+
+umax
+k,p , ρk,p, sk,p, ϕk,p, qp, ηp, creconf
+k,p
+
+,
+(36)
+where creconf
+k,p
+is included only when the corresponding intent
+considers reconfiguration cost.
+All quantities in (19)–(36) are read-only from the perspective
+of the generated algorithm. The candidate can use them
+to construct its ranking policy but cannot directly alter the
+topology, capacity values, telemetry, or feasibility criteria.
+D. Trusted Allocation Semantics
+The generated algorithm determines prioritization, whereas
+resource allocation itself remains inside a trusted deterministic
+component.
+Let
+σA = sort↓(R; hord)
+(37)
+denote the request sequence produced by candidate algorithm
+A, with larger request scores processed first. For each request
+k in this sequence, its prevalidated candidate paths are ordered
+according to
+ΓA
+k = sort↑(Pk; hpath(k, ·)) .
+(38)
+Smaller path scores are preferred; candidate identifiers provide
+a deterministic final tie-break.
+The trusted allocator evaluates the paths in ΓA
+k sequentially.
+A candidate path p can be committed only if
+le + bk ≤Ce,
+∀e ∈p.
+(39)
+Since paths violating
+Dk,p ≤Lmax
+k
+(40)
+have already been removed during candidate-path construction,
+a path passing (39) satisfies both the link-capacity and latency
+requirements.
+When such a path is found, the trusted state transition is
+le ←le + bk,
+∀e ∈p,
+(41)
+and the request is marked as admitted. If no path in ΓA
+k satisfies
+the feasibility conditions, request k is rejected.
+Therefore, hord determines which request receives earlier
+access to scarce resources and hpath determines which feasible
+route is preferred, but neither function can directly commit an
+infeasible allocation.
+E. Feasibility-Preservation Property
+The trusted execution boundary provides a feasibility prop-
+erty that is independent of the quality of the generated
+algorithm.
+Proposition 1 (Feasibility Preservation): Assume that:
+1) the initial network state satisfies le ≤Ce for every e ∈E;
+2) every candidate path p ∈Pk is loop-free, connects sk to
+tk, and satisfies Dk,p ≤Lmax
+k
+;
+3) the trusted allocator admits request k on path p only if
+(39) is satisfied; and
+4) resource-state updates in (41) are atomic.
+Then every allocation returned by the trusted allocator satisfies
+path validity, request-level latency constraints, single-path
+assignment, and link-capacity constraints, independently of
+the structure or parameters of hord and hpath.
+Proof. By Assumption 2, every path exposed to a generated
+algorithm is already a valid, loop-free path connecting the
+corresponding source and destination and satisfying its latency
+bound. Hence, path validity and latency feasibility cannot be
+violated by path ranking.
+Consider the sequence σA of requests generated by hord. The
+initial state is feasible by Assumption 1. Before admitting any
+request k on path p, the trusted allocator checks (39). Therefore,
+if all link loads satisfy their capacity limits before the admission,
+they continue to satisfy them after the atomic update in (41). By
+induction over all admitted requests, link-capacity feasibility
+is preserved throughout the allocation sequence.
+Finally, the allocator commits at most one candidate path for
+each request, while rejected requests receive no path. Hence,
+the single-path-assignment condition is also satisfied.
+Proposition 1 establishes feasibility preservation, not opti-
+mality or complete correctness of the generated algorithm. A
+candidate may still make poor admission choices, create un-
+necessarily high utilization, produce excessive reconfiguration,
+disadvantage lower-priority services, or generalize poorly to
+unseen network states. These properties cannot be guaranteed
+by the trusted allocator alone. They are therefore evaluated
+through the verification-guided evolutionary process introduced
+in Section V.
+V. VERIFICATION-GUIDED LLM EVOLUTION
+Section IV defines the bounded algorithm space within which
+an LLM is permitted to modify transport-resource allocation
+logic. We now describe how candidate algorithms are generated,
+verified, evaluated, and iteratively improved. The key design
+principle is that the LLM does not directly optimize a single
+network instance or issue network-control actions. Instead, it
+acts as a semantic variation operator over a bounded algorithm
+representation, while deterministic verification and evaluation
+components determine whether the resulting candidate is
+admissible and useful.
+Fig. 2 summarizes the discovery loop. Starting from the
+compiled intent IIR, a set of seed algorithms, and a collec-
+tion of discovery scenarios, the LLM proposes new request-
+ordering and path-ranking programs. Each candidate first passes
+structural and runtime verification. Valid candidates are then
+executed through the trusted allocator defined in Section IV-D.
+
+
+--- Page 8 ---
+8
+Their behavior is evaluated against the intent objectives, and,
+for tractable instances, compared with the exact optimization
+oracle in Section III-B. Instead of returning only a scalar
+fitness value, the evaluator extracts structured failure witnesses
+identifying where and why a candidate underperforms. These
+witnesses are supplied to subsequent LLM calls to guide
+mutation, recombination, or repair.
+1. Compile intent
+objective, constraints,
+allowed features
+2. Generate candidate
+ordering + path-score
+functions
+3. Verify program
+syntax, AST, types,
+runtime bounds
+4. Evaluate solution
+exact gap, feasibility,
+robustness
+5. Construct feedback
+counterexample +
+performance summary
+6. Select and evolve
+Pareto archive, diversity,
+mutation / recombination
+Final candidate
+(validation-selected)
+budget exhausted
+/ converged
+parents + witnesses
+(next generation)
+Fig. 2. Verification-guided discovery loop. Candidate generation (violet) is
+untrusted; deterministic verification (red) and evaluation (green) determine
+promotion into the archive (orange). Elite and structurally diverse archive
+members are returned, together with structured failure witnesses, to generate
+the next round of candidates. The loop terminates when the search budget
+is exhausted or performance converges, yielding the validation-selected final
+candidate.
+A. Discovery Scenario Partitioning
+To separate algorithm discovery from final performance
+assessment, the available scenario set is partitioned as
+S = Strain ∪Sval ∪Stest,
+(42)
+with pairwise-disjoint subsets. A scenario s ∈S contains a
+topology, link state, transport-request set, active intent, and,
+where applicable, failure or telemetry perturbations.
+The evolutionary loop receives performance feedback only
+from Strain. The validation set Sval is used to select the final
+algorithm from the discovery archive, while Stest remains
+unseen until the final experimental evaluation. In cross-topology
+experiments, complete topology families rather than only traffic
+seeds are held out, preventing the LLM from adapting its
+algorithm to the structure of the test graph.
+We further define
+Soracle ⊆S
+(43)
+as the subset of scenarios for which the reference optimization
+problem can be solved to certified optimality within the
+prescribed solver budget. Oracle results from Soracle
+train
+may be
+used to generate discovery feedback, whereas oracle results
+from held-out test scenarios are used only for final reporting.
+B. LLM-Based Candidate Generation
+Let P(g) denote the population of candidate algorithms at
+generation g. Each candidate
+A(g)
+i
+=
+
+h(g)
+ord,i, h(g)
+path,i
+
+(44)
+is represented as a typed expression tree conforming to the
+domain- specific language in (25).
+The LLM receives a constrained generation context
+CLLM = (IIR, GDSL, Aparent, Mparent, Wparent) ,
+(45)
+where GDSL is the permitted grammar, Aparent contains one or
+more parent algorithms, Mparent summarizes their measured
+performance, and Wparent contains selected failure witnesses
+defined in Section V-F.
+The LLM is instructed to return a structured abstract syntax
+tree (AST) rather than unrestricted executable source code. A
+candidate output has the conceptual structure
+A = {request_ordering : Tord,
+path_ranking : Tpath},
+(46)
+where Tord and Tpath are typed expression trees composed
+only of operators and features allowed by IIR.
+Candidate generation supports the following bounded trans-
+formations:
+1) parameter mutation: modification of constants, coeffi-
+cients, or thresholds;
+2) feature mutation: insertion, removal, or replacement of
+permitted request/path features;
+3) operator mutation: replacement of an arithmetic, compar-
+ison, aggregation, or conditional operator;
+4) branch mutation: addition, removal, or modification of a
+bounded conditional branch;
+5) subtree recombination: combination of compatible subex-
+pressions from two parent algorithms; and
+6) repair: targeted modification of an algorithm in response
+to a structured failure witness.
+This representation allows structural algorithm variation
+while preventing the LLM from generating arbitrary network-
+controller code. The originating LLM is not required when a
+candidate is subsequently executed because the accepted AST
+is serialized and replayed deterministically.
+C. Structural and Runtime Verification
+Every generated candidate is verified before it is exposed to
+a network scenario. We distinguish structural verification from
+network feasibility preservation.
+Let
+Vstat(A) ∈{0, 1}
+(47)
+denote the static program verifier. A candidate is accepted by
+Vstat only if all of the following conditions hold:
+
+
+--- Page 9 ---
+9
+TABLE I
+VERIFICATION AND EVALUATION STAGES IN VERA-TN
+Stage
+Purpose
+Typical feedback
+Static verifier
+Check
+DSL/schema/type
+and complexity rules
+Invalid operator, undeclared fea-
+ture, excessive depth
+Runtime verifier
+Detect numerical and ex-
+ecution failures
+NaN/Inf, timeout, exception, non-
+determinism
+Trusted alloca-
+tor
+Preserve network feasi-
+bility
+Rejected path/request and respon-
+sible resource
+Scenario evalua-
+tor
+Measure intent perfor-
+mance
+Admission loss, congestion, re-
+configuration, runtime
+Exact oracle
+Assess solution quality
+on tractable cases
+Optimality gap and differing ad-
+mission/path decisions
+NDT check
+Assess robustness
+Failure sensitivity, SLA violation,
+recovery cost
+1) the AST conforms to the declared schema and contains
+only whitelisted DSL operators;
+2) all referenced features belong to F;
+3) expression inputs and outputs satisfy their declared types;
+4) constants and thresholds lie inside predefined numerical
+bounds;
+5) the AST depth and total number of nodes do not exceed
+the configured complexity limits; and
+6) no prohibited capabilities, including external calls, file
+access, mutable network state, recursion, or unbounded
+iteration, are present.
+For structurally valid candidates, a trusted compiler converts
+the AST into an executable scoring function. The resulting
+program is evaluated inside a restricted runtime environment.
+Define
+Vrun(A) ∈{0, 1}
+(48)
+as the runtime verifier. It evaluates the candidate on a set
+Smicro of adversarial micro-instances designed to expose invalid
+numerical or computational behavior:
+Vrun(A) = 1 ⇐⇒outputs are finite and deterministic,
+with no exception or budget violation.
+(49)
+A candidate is executable only if
+Vprog(A) = Vstat(A)Vrun(A) = 1.
+(50)
+Program verification and network feasibility serve different
+purposes. Equation (50) determines whether generated decision
+logic is safe to execute, whereas Proposition 1 guarantees that a
+program executed through the trusted allocator cannot directly
+violate the modeled capacity, latency, path-validity, or single-
+path constraints.
+D. Scenario-Based Performance Evaluation
+For every executable candidate A and discovery scenario
+s ∈Strain, the trusted allocator produces
+XA,s = T (A, s),
+(51)
+where XA,s contains admission decisions, selected paths,
+resulting link states, and an execution trace recording the
+ordering and ranking decisions made by A.
+The normalized priority-weighted admission utility is
+Uadm(A, s) =
+P
+k∈Rs πkaA,s
+k
+P
+k∈Rs πk
+.
+(52)
+Peak post-allocation utilization is
+Umax(A, s) = max
+e∈Es
+lA,s
+e
+Ce
+.
+(53)
+When a scenario contains an existing allocation, reconfigu-
+ration cost is represented as
+Creconf(A, s) =
+X
+k∈Rs
+1
+h
+pA,s
+k̸
+= pprev
+k
+i
+,
+(54)
+where the indicator is evaluated only for previously admitted
+services.
+For dynamic or network-digital-twin scenarios, the realized
+SLA violation ratio is
+VSLA(A, s) =
+P
+k∈Rs 1
+
+Drealized
+k
+> Lmax
+k
+
+max(1, |Radm
+s
+|)
+.
+(55)
+The analytical model does not use VSLA as an independent
+feasibility metric because latency-infeasible paths have already
+been removed. Instead, (55) captures model mismatch and
+dynamic behavior observed in an emulated or digital-twin
+environment.
+Candidate execution time is denoted by Texec(A, s). The
+scenario-level metric vector is therefore
+m(A, s) = [Uadm, −VSLA, −Umax, −Creconf, −Texec] , (56)
+with inactive metrics omitted when they are not specified by
+the corresponding intent.
+Rather than imposing a universal weighted sum, VERA-TN
+derives the candidate ordering from the objective hierarchy O
+in IIR. For a scenario set S′, let
+M(A; S′) = Aggregates∈S′ m(A, s)
+(57)
+denote the corresponding aggregate metric vector. Candidate
+algorithms are compared using the lexicographic or Pareto
+ordering specified by O, while program validity always
+dominates performance.
+E. Exact-Oracle Comparison
+For scenarios in Soracle, the optimization problem in Sec-
+tion III-B provides an external quality reference independent
+of the LLM.
+For scenario s, let J⋆
+s denote the certified optimal objective
+and J(A, s) the corresponding objective obtained by candidate
+A. The candidate’s relative optimality loss is
+Gap(A, s) = J⋆
+s −J(A, s)
+max(|J⋆s |, ϵ) .
+(58)
+The oracle is used for two purposes. First, it provides
+an objective benchmark for evaluating whether discovered
+algorithms approach the quality of exact optimization. Second,
+on training instances only, the difference between the candidate
+and oracle allocation can be converted into structured feedback
+identifying decisions responsible for the quality loss.
+
+
+--- Page 10 ---
+10
+If the solver terminates without a certificate of optimality, its
+incumbent solution is not denoted by J⋆
+s . Instead, the incumbent
+and solver bound are recorded separately, and the corresponding
+instance is excluded from exact optimality-gap claims.
+F. Structured Failure Witnesses
+A scalar objective reveals whether a candidate performs
+poorly but provides little information about how its decision
+logic should change. VERA-TN therefore converts verification
+and evaluation failures into a structured failure witness
+w = (s, ζ, Rw, Ew, yobs, yref, ξ) ,
+(59)
+where s identifies the scenario, ζ is the failure type, Rw and
+Ew contain affected requests and links, yobs is the observed
+candidate behavior, yref is a reference behavior when available,
+and ξ is a compact deterministic explanation generated by the
+evaluator.
+Witnesses can originate from several sources.
+Program witness: a candidate violates the DSL, produces a
+non-finite score, times out, or raises an exception.
+Admission-regret witness: a high-priority request is rejected
+while an oracle or stronger reference allocation admits it. For
+an oracle-solvable scenario, request-level admission regret is
+∆adm
+k
+= a⋆
+k −aA
+k ,
+(60)
+and requests with ∆adm
+k
+= 1 are traced back to the ordering and
+path-ranking decisions that exhausted the required resources.
+Congestion witness: the candidate creates a substantially
+larger peak utilization than a reference solution. The most
+critical link is
+e† = arg max
+e∈E
+lA
+e
+Ce
+.
+(61)
+The witness includes the requests routed through e† and the
+alternative paths that were available when those decisions were
+made.
+Robustness witness: a failure, demand shift, or telemetry
+perturbation causes an excessive loss in admission, SLA
+compliance, or recovery performance.
+Reconfiguration witness: the candidate achieves only a
+marginal utility improvement while causing excessive path
+churn.
+The evaluator ranks witnesses according to their effect on the
+current intent hierarchy and retains at most Nw representative
+witnesses per parent. This limits prompt length and prevents
+large scenario traces from being passed directly to the LLM.
+We use the term failure witness rather than claiming a
+formal counterexample in the program-verification sense. These
+witnesses guide evolution by identifying observed deficiencies
+over the evaluated scenario set; they do not constitute a proof
+that the candidate fails for every network state.
+G. Verification-Guided Repair and Evolution
+At generation g, the evaluator first removes candidates
+for which Vprog(A) = 0. Remaining candidates are ranked
+according to their training performance under the intent-defined
+ordering.
+Let
+E(g) ⊆P(g)
+(62)
+denote the elite subset. Parent algorithms are selected from both
+high-performing and structurally diverse candidates. To prevent
+the population from collapsing to nearly identical expression
+trees, we associate each candidate with a structural signature
+consisting of the set of features, operators, thresholds, and
+branch structures appearing in its AST.
+For two candidate algorithms Ai and Aj, a normalized
+structural diversity measure can be expressed as
+dstr(Ai, Aj) = λdtree(Ai, Aj) + (1 −λ)
+
+1 −|Ψi ∩Ψj|
+|Ψi ∪Ψj|
+
+,
+(63)
+where dtree is normalized tree-edit distance, Ψi and Ψj are the
+sets of operators and features used by the two candidates, and
+λ ∈[0, 1] controls the relative contribution of tree structure
+and feature/operator overlap.
+The next candidate population is generated by
+P(g+1) = Select
+
+E(g) ∪C(g); O, dstr
+
+,
+(64)
+where C(g) denotes the set of newly generated children.
+Selection first enforces program validity, then ranks candidates
+by the intent-defined objective ordering, while reserving part
+of the population for structurally distinct candidates above a
+minimum diversity threshold.
+For repair-oriented generation, the LLM receives the parent
+algorithm together with a bounded set of witnesses and
+is explicitly instructed to modify only the decision logic
+relevant to the observed deficiency. For example, if a high-
+priority request is rejected because earlier low-priority requests
+consume a bottleneck link, the feedback identifies the affected
+requests, the bottleneck, and the parent ranking behavior. The
+LLM may respond by changing request ordering, introducing a
+conditional rule for tight resources, or modifying path ranking
+to preserve bottleneck capacity.
+This process is counterexample-guided in spirit, but we
+do not claim equivalence to formal counterexample-guided
+inductive synthesis (CEGIS). The feedback is obtained from
+finite network scenarios and optimization/digital-twin evalua-
+tion rather than from exhaustive symbolic verification of the
+complete program state space.
+H. Initialization, Termination, and Final Selection
+The initial population combines human-designed seeds and
+LLM-generated candidates. Human seeds include shortest-path,
+latency-aware, bandwidth-aware, and load-balancing heuristics.
+A restricted linear candidate of the form
+h(f) = θTf
+(65)
+is also included. This candidate is important as an ablation
+because it isolates coefficient optimization from structural
+algorithm discovery.
+Discovery terminates when any of the following conditions
+is reached:
+1) the maximum generation count Gmax is reached;
+2) the candidate-evaluation budget Bmax is exhausted; or
+
+
+--- Page 11 ---
+11
+Algorithm 1 Verification-Guided LLM Algorithm Evolution
+Require: Intent IR IIR, training scenarios Strain, validation
+scenarios Sval, population size N, generation limit Gmax,
+evaluation budget Bmax
+Ensure: Selected transport-allocation algorithm A⋆
+1: Initialize seed population P(0)
+2: H ←∅
+▷archive
+3: B ←0
+4: for g = 0, . . . , Gmax −1 do
+5:
+for all A ∈P(g) do
+6:
+if Vstat(A) = 0 then
+7:
+Record structural witness for A
+8:
+continue
+9:
+end if
+10:
+if Vrun(A) = 0 then
+11:
+Record runtime witness for A
+12:
+continue
+13:
+end if
+14:
+Execute A using trusted allocator on Strain
+15:
+Compute M(A; Strain)
+16:
+Compare with exact oracle where available
+17:
+Extract bounded witness set WA
+18:
+Add (A, M, WA) to archive H
+19:
+B ←B + |Strain|
+20:
+if B ≥Bmax then
+21:
+break
+22:
+end if
+23:
+end for
+24:
+if B ≥Bmax then
+25:
+break
+26:
+end if
+27:
+Select elite and diversity-preserving parents
+28:
+C(g) ←∅
+29:
+while |C(g)| < N do
+30:
+Select parent(s) Ap from P(g)
+31:
+Build constrained LLM context using IIR, Ap,
+metrics, and witnesses
+32:
+Generate mutation, recombination, or repair Ac
+33:
+Deduplicate using canonical AST hash
+34:
+C(g) ←C(g) ∪{Ac}
+35:
+end while
+36:
+Form P(g+1) according to (64)
+37: end for
+38: Evaluate non-dominated archive candidates on Sval
+39: Select A⋆using the intent-defined validation ordering
+40: return A⋆
+3) no validation-eligible improvement is observed for Gstall
+consecutive generations.
+The test set is not used to determine the stopping point.
+After evolution, a compact set of non-dominated candidates
+from the archive H is evaluated on Sval. The final algorithm
+is selected as
+A⋆= arg
+max
+A∈Hvalid F (A | I, Sval) .
+(66)
+Only after A⋆has been fixed is it evaluated on Stest. The
+LLM therefore receives neither the test scenarios nor their
+performance traces during discovery.
+I. Computational Complexity and Deployment Cost
+Let R = |R| denote the number of transport requests,
+K the maximum number of candidate paths per request,
+and H the maximum number of links in a candidate path.
+For an already discovered algorithm, request sorting requires
+O(R log R) operations. Ranking at most K candidate paths
+for every request requires O(RK log K) score comparisons,
+while feasibility checking over at most H links per candidate
+contributes O(RKH).
+The resulting trusted online-allocation complexity is there-
+fore
+O (R log R + RK log K + RKH) .
+(67)
+Importantly, this online execution does not require an LLM
+call. LLM inference is confined to the offline or near-line
+discovery process.
+Let N denote population size, G the number of generations,
+and Str
+= |Strain|. Excluding exact-oracle computation,
+discovery requires at most
+O (NGStr [R log R + RK log K + RKH])
+(68)
+candidate-scenario evaluation work, in addition to the LLM-
+generation calls.
+Exact optimization is intentionally excluded from the online
+complexity in (67). The reference problem includes unsplittable
+path admission and can become combinatorial with network
+size; it is therefore used as a discovery/evaluation oracle only
+where a certified solution can be obtained within the configured
+solver budget.
+J. Reproducibility of the Discovery Process
+For every LLM-generated candidate, VERA-TN records the
+model identifier and version, generation parameters, prompt-
+template version, parent candidate hashes, generation index,
+mutation type, serialized AST, structural-verification result,
+runtime-verification result, scenario metrics, failure witnesses,
+token usage, wall-clock generation time, and random seed
+where applicable.
+Accepted and rejected candidates are both retained. This is
+important because reporting only successful programs would
+obscure the reliability and computational cost of LLM-based
+discovery. The complete archive therefore enables measurement
+of
+Mrepro = {valid-program and runtime-success rates,
+time to first/best algorithm,
+evaluations to convergence,
+LLM token and compute cost}.
+(69)
+Because the executable representation of every accepted
+candidate is stored independently of the originating language
+model, final transport allocation experiments can be determinis-
+tically replayed without re-querying the LLM. This separation
+permits the stochasticity of algorithm discovery to be analyzed
+independently from the runtime behavior of the discovered
+network algorithm.
+
+
+--- Page 12 ---
+12
+VI. IMPLEMENTATION AND REPRODUCIBILITY
+This section separates the reference architecture in Sec-
+tions IV–V from the released proof-of-concept. The architecture
+specifies typed AST generation, static checks, sandboxed
+execution, and model-connected repair. The current artifact
+implements the trusted allocator, exact oracle, deterministic
+scenario generator, bounded candidate evaluator, numerical
+evolutionary search, perturbation tests, and result archive. It
+does not execute arbitrary model-generated Python, issue live
+LLM calls, or establish a multi-provider typed-AST comparison.
+This distinction keeps the implementation claim aligned with
+the released code while preserving the full design contract for
+the next model-connected stage.
+A. Topology and Workload
+TEFNET24 motivates the hierarchical structure of the
+representative graph [9]. The public reference describes a multi-
+layer packet-optical network inspired by operational Telef´onica
+deployments; its data interface is available separately [21]. The
+present artifact instead uses the deterministic 28-node, 54-link
+graph in Fig. 3, which preserves access aggregation, metro
+rings, redundant interconnection, dual homing, and a connected
+national/core layer. Capacities and delays are generated once
+per seed from tier-specific ranges.
+C0
+C1
+C2
+C3
+M0
+M1
+M2
+M3
+M4
+M5
+M6
+M7
+A0
+A1
+A2
+A3
+A4
+A5
+A6
+A7
+A8
+A9
+A10
+A11
+A12
+A13
+A14
+A15
+CORE
+Access
+Metro
+Core
+Fig. 3. Representative TEFNET24-derived hierarchy used by the released
+proof-of-concept with 28 nodes, 54 bidirectional links. Capacities, delays,
+and workloads are deterministic experimental inputs rather than operator
+measurements.
+Each request contains ingress, egress, bandwidth, latency
+bound, and an integer service priority. Up to four simple paths
+are generated deterministically and paths exceeding the latency
+bound are removed before ranking. Evaluation loads scale
+nominal demands by factors {1.0, 1.4, 1.8, 2.2, 2.5}. Perturbed
+scenarios remove links and vary capacities using archived seeds.
+TABLE II
+RELEASED PROOF-OF-CONCEPT CONFIGURATION
+Item
+Configuration
+Topology
+28 nodes, 54 bidirectional links
+Candidate paths
+Up to K = 4, loop-free and latency-feasible
+Candidate representation
+Bounded ten-parameter numerical vector
+Evolution
+Population 24; 14 generations
+Oracle
+Path-based binary MILP; recorded certificate status
+Validation
+Nominal plus analytical link/capacity perturbations
+Evaluation seeds
+30 per load; 30 failed-link cases; 10 for K sensitivity
+Online LLM inference
+None
+B. Released Prototype
+The numerical candidate is a ten-parameter vector controlling
+request priority/order and path features including projected
+utilization, latency, residual slack, and risk. Evolution uses a
+population of 24 candidates for 14 generations. A performance-
+only search is evaluated on nominal scenarios; the VERA-TN
+prototype additionally uses perturbed scenarios and an overload
+penalty. Both execute through the same trusted allocator, so
+candidate logic returns scores but never commits resource state.
+The exact reference is the path-based binary model in (8)–
+(11), solved with SciPy’s MILP interface. The implementation
+records solver success, status, objective, message, and MIP gap.
+A row is called oracle-optimal only when the solver reports
+success and zero recorded gap within numerical tolerance.
+VII. EVALUATION
+A. Scope, Questions, and Metrics
+The study asks seven questions. RQ1 measures priority
+utility under increasing contention. RQ2 tests whether evo-
+lution improves on priority-greedy routing and equal-budget
+random search. RQ3 compares congestion with MILP-C, which
+minimizes the same metric at maximum priority utility. RQ4
+tests failure-aware search on held-out failed-link cases. RQ5
+tests whether three training intents yield specialized candidates.
+RQ6 tests whether intent behavior transfers from the official
+national topology to unseen metro-regional topologies. The
+synthetic intent-transfer test uses resilience as its third intent,
+whereas the official-data study uses admitted volume. The
+two transfer tests are therefore interpreted separately. RQ7
+measures K sensitivity and separates online heuristic scaling
+from exact-solver tractability.
+The primary metric is priority utility divided by MILP-U
+utility. Secondary metrics are peak link utilization, accepted
+requests, the fraction of cases that reach exact priority utility,
+rejected priority under failure, and runtime. All methods use
+the same path sets and trusted allocator. Capacity and latency
+violations are therefore checked as invariants, not treated as
+performance metrics.
+B. Baselines and Statistical Protocol
+Shortest path uses arrival order and the first feasible path.
+Load-balanced KSP ranks paths with a fixed bottleneck-oriented
+score. Priority-greedy orders requests by descending priority,
+breaks ties by ascending bandwidth, and chooses the path
+with minimum projected bottleneck utilization. Equal-budget
+
+
+--- Page 13 ---
+13
+random search controls for the number of sampled parameter
+vectors. Evolutionary search uses the same candidate budget.
+MILP-U and MILP-C are offline references, not deployment
+baselines.
+Table values aggregate 150 paired test cases. Mean utility
+and utilization use 10,000-resample bootstrap 95% confidence
+intervals. Runtime is reported as median and interquartile range
+(IQR). Pre-specified paired Wilcoxon tests compare evolution
+and random search with priority-greedy, and evolution with
+random search. Holm correction is applied across the six utility
+and utilization tests. Paired rank-biserial correlation is the
+effect size. For the official-data study, each of eight discovery
+seeds is the inferential unit. The 16 national or 48 metro
+scores are first averaged within a seed. Paired Wilcoxon tests
+then compare each intent-matched candidate with the two off-
+diagonal candidates. Holm correction is applied across six
+contrasts per domain, and bootstrap intervals resample the
+eight seed-level means. This avoids treating repeated replay
+scenarios as independent discovery runs.
+C. Motivating Toy Example
+Before presenting aggregate results, we use a small con-
+structed example to illustrate the mechanism through which
+request ordering and path ranking can affect priority utility.
+Both policies in Fig. 4 operate on the same topology and
+candidate paths and are subject to exactly the same capacity
+and latency checks. The only difference is the order in which
+requests and feasible paths are considered. Under arrival-
+order shortest-path allocation, early routing decisions consume
+resources that could otherwise support higher-value demand,
+yielding total priority utility 6. The bounded VERA-TN
+prototype changes the ordering/ranking decisions and reaches
+utility 8, equal to the reference MILP utility for this constructed
+instance. Thus, the illustration isolates the mechanism targeted
+by algorithm discovery: the gain arises from how scarce feasible
+resources are prioritized, not from relaxing network constraints.
+14
+14
+10
+8
+8
+8
+10
+10
+S1
+S2
+X
+Z
+Y
+T1
+T2
+Shortest-path baseline: utility 6
+14
+14
+10
+8
+8
+8
+10
+10
+S1
+S2
+X
+Z
+Y
+T1
+T2
+VERA-TN prototype: utility 8 (MILP-equivalent)
+Colored routes show admitted requests; critical requests are red/purple, premium blue, and best-effort gray.
+Fig. 4. Constructed contention illustration. The example shows why request
+ordering and path ranking matter; it is not part of the statistical evaluation.
+D. Priority Utility and Congestion
+Table III and Fig. 5 answer RQ1–RQ3. The higher demand
+levels avoid the ceiling effect observed in the earlier evaluation.
+Evolutionary search reaches mean utility ratio 0.958, compared
+with 0.940 for priority-greedy and 0.952 for equal-budget
+random search. Its mean paired gain over priority-greedy is
+0.0187 (Holm-adjusted p = 1.3 × 10−6, rank-biserial r =
+0.658). The gain over random search is 0.00635 (p = 0.0083,
+r = 0.434). The effect is statistically detectable but small.
+Evolution reaches exact priority utility in 50 of 150 cases.
+The heuristic does not improve congestion over MILP-C.
+MILP-C reaches mean peak utilization 0.939; evolutionary
+search reaches 0.961. Moreover, the candidate is priority-
+optimal in only one third of the cases. On those 50 cases,
+its mean utilization regret relative to MILP-C is 0.058. The
+earlier latency-tie-break MILP is not used as a congestion
+reference.
+E. Failure Training and Intent Transfer
+On 30 held-out failed-link scenarios, failure-aware search
+reaches mean utility ratio 0.934 and 10th-percentile ratio
+0.862. Search without failure scenarios reaches 0.919 and
+0.844, respectively. The paired mean difference is 0.0151 with
+bootstrap CI [0.0031,0.0288], but the Wilcoxon test gives
+p = 0.051. This test therefore does not establish a robustness
+gain. Removing the utilization feature lowers the mean to 0.914.
+Removing the nearly zero slack coefficient has no observed
+effect.
+The intent-transfer test shows no intent-specific specializa-
+tion. Three searches use priority, congestion, and resilience
+scores, but the priority-trained vector has the best held-out
+score under all three objectives. Fig. 7 reports regret from the
+best candidate for each target objective. Different weights alone
+do not establish intent-conditioned specialization. The present
+evaluation therefore does not support a claim of structural
+algorithm discovery.
+F. Official Cross-Topology Check
+The official-data study also shows no intent-specific spe-
+cialization. Discovery on the national graph does not produce
+a stable intent-matched diagonal. Across the three national
+targets, the largest absolute matched contrast is below 0.0006
+and no adjusted test is significant.
+Fig. 8 replays all 24 selected candidates without retraining
+on 48 workloads from 12 unseen metro components. The
+congestion-trained candidates have the best mean score under
+all three metro targets. None of the 12 intent-matched contrasts
+is significant; every Holm-adjusted p-value equals 1.0. Priority-
+greedy obtains mean priority ratios 0.9785 nationally and
+0.6126 on the metro cases, close to 0.9794 and 0.6134 for the
+priority-trained candidates. All 1,536 candidate replays satisfy
+the trusted capacity and latency checks.
+G. Sensitivity and Tractability
+Increasing K raises median replay time from 0.53 ms at
+K = 1 to 4.46 ms at K = 16. Mean utility does not improve
+monotonically: it is 0.974 at K = 1, 0.947 at K = 4, and 0.934
+at K = 16 on the ten sensitivity seeds. The fixed candidate was
+selected with K = 4 and does not automatically use additional
+paths well.
+Fig. 10 separates online replay from exact optimization.
+Across 28–504 nodes, fitted runtime exponents are 0.99 for
+evolutionary replay and 1.14 for priority-greedy under this joint
+
+
+--- Page 14 ---
+14
+TABLE III
+HELD-OUT RESULTS ACROSS FIVE LOADS AND 30 SEEDS PER LOAD (n = 150 PER METHOD)
+Method
+Utility ratio, mean±SD [95% CI]
+Peak util.
+Accepted
+Runtime ms, median [IQR]
+Priority-opt.
+Shortest path
+0.805 ± 0.115 [0.787,0.823]
+0.974
+16.71
+0.198 [0.190,0.207]
+5.3%
+Load-balanced KSP
+0.830 ± 0.120 [0.811,0.849]
+0.955
+17.27
+1.564 [1.503,1.656]
+13.3%
+Priority-greedy
+0.940 ± 0.050 [0.932,0.947]
+0.948
+17.51
+0.350 [0.334,0.372]
+20.0%
+Equal-budget random
+0.952 ± 0.046 [0.945,0.959]
+0.963
+17.79
+1.583 [1.518,1.667]
+26.7%
+Evolutionary search
+0.958 ± 0.041 [0.952,0.965]
+0.961
+17.95
+1.573 [1.522,1.669]
+33.3%
+MILP-U
+1.000 ± 0.000 [1.000,1.000]
+0.977
+19.03
+26.358 [17.076,37.689]
+100%
+MILP-C
+1.000 ± 0.000 [1.000,1.000]
+0.939
+19.03
+84.957 [34.833,176.536]
+100%
+1.0
+1.4
+1.8
+2.2
+2.5
+Demand scale
+0.6
+0.7
+0.8
+0.9
+1.0
+Priority utility / MILP-U
+(a) Priority-weighted solution quality
+1.0
+1.4
+1.8
+2.2
+2.5
+Demand scale
+0.75
+0.80
+0.85
+0.90
+0.95
+1.00
+Peak link utilization
+(b) Congestion exposure
+Shortest path
+Load-balanced KSP
+Priority-greedy
+Equal-budget random search
+Evolutionary search
+MILP-C
+Fig. 5. Held-out priority utility and peak utilization. Shaded bands in (a) are bootstrap 95% confidence intervals. MILP-C is the fair congestion reference
+because it preserves MILP-U priority utility.
+Full search
+No failures
+No utilization
+No slack
+0.78
+0.80
+0.82
+0.84
+0.86
+0.88
+0.90
+0.92
+0.94
+0.96
+Utility / MILP-U
+Held-out failed-link scenarios
+Mean
+10th percentile
+Fig. 6. Mean and 10th-percentile utility over 30 held-out failed-link cases.
+Failure-aware search improves the observed mean and tail, but the paired
+Wilcoxon result is marginal.
+graph/request scaling. These are empirical fits, not asymptotic
+proofs. With a two-second MILP-U budget, all five cases are
+certified at 28 and 56 nodes, three of five at 84 nodes, one of
+five at 112 nodes, and none at 168 or 224 nodes. Uncertified
+cases are excluded from Table III; the separate curve shows
+where the exact reference stops being dependable within that
+budget.
+Priority
+Congestion
+Resilience
+Held-out target intent
+Priority
+Congestion
+Resilience
+Training intent
+0.000
+0.000
+0.000
+0.017
+0.017
+0.239
+0.029
+0.028
+0.347
+Intent-transfer test
+0.00
+0.05
+0.10
+0.15
+0.20
+0.25
+0.30
+Score regret (lower is better)
+Fig. 7. Intent-transfer score regret on 60 held-out nominal and failed cases.
+Zero is best. The diagonal does not dominate, so the numerical representation
+does not validate intent-specific specialization.
+VIII. DISCUSSION
+The evidence supports two claims. First, the trust boundary
+preserves the modeled allocation constraints independently of
+the ranking parameters. Second, under a fixed evaluation budget,
+numerical evolution gives a small held-out utility gain over
+random sampling and a larger gain over the priority-greedy
+baseline. The study does not support three stronger claims: the
+evolved candidate is not congestion-optimal, failure training is
+not significant at α = 0.05, and intent-specific candidates do
+not specialize on held-out tests.
+The study has several limitations. It uses batch allocation,
+analytical failures, one parameterized representation, and one
+
+
+--- Page 15 ---
+15
+Priority
+Congestion
+Volume
+Held-out target intent
+Priority
+Congestion
+Volume
+Discovery intent
+0.0000
+0.0000
+0.0000
+0.0003
+0.0004
+0.0006
+0.0006
+0.0007
+0.0000
+(a) National held-out workloads
+Priority
+Congestion
+Volume
+Held-out target intent
+Priority
+Congestion
+Volume
+Discovery intent
+0.0011
+0.0008
+0.0016
+0.0000
+0.0000
+0.0000
+0.0053
+0.0036
+0.0006
+(b) Unseen metro regions
+0.000
+0.001
+0.002
+0.003
+0.004
+0.005
+Score regret (lower is better)
+Fig. 8. Official TEFNET24 intent-transfer check. Each cell is regret from the best mean score for its target objective. Discovery uses eight seeds on the
+national graph; metro evaluation uses 12 unseen components and 48 workloads without retraining. The diagonal does not dominate in either domain. Inferential
+tests use discovery-seed means, not individual replay rows.
+1
+2
+4
+8
+16
+Candidate-path limit K
+0.93
+0.94
+0.95
+0.96
+0.97
+Mean utility / MILP-U
+Candidate-path sensitivity
+Utility ratio
+Runtime
+0.5
+1.0
+1.5
+2.0
+2.5
+3.0
+3.5
+4.0
+4.5
+Median runtime (ms)
+Fig. 9. Candidate-path sensitivity over ten seeds. Larger path sets increase
+replay time but do not improve this fixed candidate monotonically.
+machine. The official-data check spans national and metro
+graphs from one topology family; it does not establish transfer
+to an independent operator or network family. Its link capacities
+are assumed, and the public traffic matrix determines end-
+point marginals rather than per-request bandwidth. Concurrent
+arrivals, reconfiguration cost, digital-twin fidelity, controller
+behavior, and physical-network effects are not tested. The typed-
+AST and LLM extension is specified but not implemented. A
+direct comparison with genetic programming on the same
+grammar is required before making a structural-search claim.
+The next empirical step should be a controlled structural
+study: implement the typed grammar, compare GP and at least
+two model generators under the same candidate budget, archive
+all rejected programs, and evaluate on independent public
+topology families. Dynamic multi-epoch tests are also needed
+before reporting reconfiguration or operational resilience.
+IX. CONCLUSION
+This paper introduced VERA-TN, a verification-guided ar-
+chitecture for turning declarative transport intents into bounded,
+reusable request-ordering and path-ranking procedures. The
+central safety property is architectural: a candidate may rank
+prevalidated choices, while a trusted allocator retains path
+construction, resource accounting, hard-constraint enforcement,
+and actuation. Proposition 1 establishes allocation feasibility
+under explicit assumptions, and Lemma 1 gives a sufficient
+bound for the exact model’s latency tie-break.
+Across 150 certified held-out cases, numerical evolution
+reaches mean priority utility ratio 0.958, compared with 0.952
+for equal-budget random search and 0.940 for priority-greedy
+routing. The gain over random search is small but statistically
+detectable. The candidate does not match the congestion oracle,
+and its intent-transfer test does not show specialization. Failure-
+aware search improves the observed mean and tail, but its
+paired test is marginal. This larger study separates statistically
+supported gains from null results.
+Eight repeated searches on the official national graph and
+replay on 12 unseen metro-regional graphs also show the limits
+of the ten-parameter representation: no stable intent-matched
+diagonal appears.
+The present contribution is the trust boundary and its
+reproducible numerical evaluation. It is not evidence that an
+LLM improves heuristic design. That question requires a typed
+structural implementation, equal-budget GP and model controls,
+independent topology families, and operational validation.
+ACKNOWLEDGMENT
+This
+work
+is
+partially
+funded
+by
+the
+Juan
+de
+la
+Cierva (JDC) Grant under reference (JDC2024-053571-I),
+the SHINE (PID2024-159781OB-I00) project funded by MI-
+CIU/AEI/10.13039/501100011033 and by ERDF/EU.
+REFERENCES
+[1] A. Leivadeas and M. Falkner, “A survey on intent-based networking,”
+IEEE Communications Surveys & Tutorials, vol. 25, no. 1, pp. 625–655,
+2023.
+[2] B. Ojaghi, R. Vilalta, and R. Mu˜noz, “IBNS: Optimizing intent-based 6G
+network slicing for conflict detection and mitigation,” IEEE Transactions
+on Network and Service Management, vol. 23, pp. 2818–2831, 2026.
+[3] B. Ojaghi, R. Mu˜noz, and R. Vilalta, “Intent-based network slicing in
+6G: Optimization approach for conflict resolution,” IEEE Transactions
+on Mobile Computing, 2026.
+
+
+--- Page 16 ---
+16
+285684112
+168
+224
+336
+504
+Topology nodes
+100
+101
+Runtime (ms)
+(a) Online heuristic: median and IQR
+Priority-greedy
+Evolutionary search
+50
+100
+150
+200
+Topology nodes
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+Certified within 2 s
+(b) MILP-U tractability
+0
+500
+1000
+1500
+2000
+2500
+Median solver time (ms)
+Fig. 10. Runtime scaling. (a) Online replay uses 30 repetitions per point; bands show IQR. (b) MILP-U reports the certified fraction and median elapsed time
+for five cases per size under a two-second limit.
+[4] B. Romera-Paredes, M. Barekatain, A. Novikov, M. Balog, M. P. Kumar,
+E. Dupont, F. J. R. Ruiz et al., “Mathematical discoveries from program
+search with large language models,” Nature, vol. 625, pp. 468–475, 2024.
+[5] F. Liu, X. Tong, M. Yuan, X. Lin, F. Luo, Z. Wang, Z. Lu, and Q. Zhang,
+“Evolution of heuristics: Towards efficient automatic algorithm design
+using large language model,” in Proc. 41st Int. Conf. Machine Learning
+(ICML), vol. 235, 2024, pp. 32 201–32 223.
+[6] H. Ye, J. Wang, Z. Cao, F. Berto, C. Hua, H. Kim, J. Park, and
+G. Song, “ReEvo: Large language models as hyper-heuristics with
+reflective evolution,” in Advances in Neural Information Processing
+Systems, vol. 37, 2024.
+[7] N. van Stein and T. B¨ack, “LLaMEA: A large language model
+evolutionary algorithm for automatically generating metaheuristics,” IEEE
+Transactions on Evolutionary Computation, vol. 29, no. 2, pp. 331–345,
+2025.
+[8] A. Novikov, N. V˜u, M. Eisenberger, E. Dupont, P.-S. Huang, A. Z.
+Wagner, S. Shirobokov, B. Kozlovskii, F. J. R. Ruiz, A. Mehrabian et al.,
+“AlphaEvolve: A coding agent for scientific and algorithmic discovery,”
+arXiv preprint arXiv:2506.13131, 2025.
+[9] J. M. Rivas-Moscoso, F. Arpanaei, G. Otero P´erez, J. D. Mart´ınez Jim´enez,
+J. P. Fern´andez-Palacios,
+´O. Gonz´alez de Dios, L. M. Contreras,
+A. S´anchez-Maci´an, J. A. Hern´andez, D. Larrabeiti, and J. Folgueira,
+“TEFNET24: Reference packet optical network topology for edge to core
+transport,” Journal of Optical Communications and Networking, vol. 16,
+no. 11, pp. G28–G39, 2024.
+[10] F. Liu, R. Zhang, Z. Xie, R. Sun, K. Li, X. Lin, Z. Wang, Z. Lu,
+and Q. Zhang, “LLM4AD: A platform for algorithm design with large
+language models,” arXiv preprint arXiv:2412.17287, 2024.
+[11] F. Liu, Y. Yao, P. Guo, Z. Yang, X. Lin, Z. Zhao, X. Tong, K. Mao,
+Z. Lu, Z. Wang, M. Yuan, and Q. Zhang, “A systematic survey on large
+language models for algorithm design,” ACM Computing Surveys, vol. 58,
+no. 8, pp. 1–32, 2026.
+[12] D. Wu, X. Wang, Y. Qiao, Z. Wang, J. Jiang, S. Cui, and F. Wang,
+“NetLLM: Adapting large language models for networking,” in Proc.
+ACM SIGCOMM, 2024, pp. 661–678.
+[13] H. Noh, B. Shim, and H. J. Yang, “Adaptive resource allocation opti-
+mization using large language models in dynamic wireless environments,”
+IEEE Transactions on Vehicular Technology, vol. 74, no. 10, pp. 16 630–
+16 635, 2025.
+[14] B. Ojaghi, R. Vilalta, and R. Mu˜noz, “Intent-based network resource
+slicing in 6G,” in Proc. IEEE Network of the Future, 2024.
+[15] B. Ojaghi, R. Vilalta, and R. Munoz, “Optimizing throughput and energy
+with intent-based 6G network slicing: Conflict handling,” in Proc. IEEE
+International Conference on Communications, 2025.
+[16] B. Fortz and M. Thorup, “Internet traffic engineering by optimizing
+OSPF weights,” in Proc. IEEE INFOCOM, 2000, pp. 519–528.
+[17] J. Y. Yen, “Finding the K shortest loopless paths in a network,”
+Management Science, vol. 17, no. 11, pp. 712–716, 1971.
+[18] A. Solar-Lezama, L. Tancau, R. Bodik, S. Seshia, and V. Saraswat,
+“Combinatorial sketching for finite programs,” in Proc. 12th Int. Conf.
+Architectural Support for Programming Languages and Operating
+Systems, 2006, pp. 404–415.
+[19] N. P. Kuruvatti, M. A. Habibi, S. Partani, B. Han, A. Fellan, and H. D.
+Schotten, “Empowering 6G communication systems with digital twin
+technology: A comprehensive survey,” IEEE Access, vol. 10, pp. 112 158–
+112 186, 2022.
+[20] R. Munoz, R. Vilalta, R. Casellas et al., “TeraFlow: Secured autonomic
+traffic management for a tera of SDN flows,” in Proc. Joint European
+Conference on Networks and Communications and 6G Summit, 2021.
+[21] Telef´onica Research and Development and Universidad Carlos III de
+Madrid, “TEFNET24 dataset,” 2024.

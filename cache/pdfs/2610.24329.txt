@@ -1,0 +1,1677 @@
+--- Page 1 ---
+VERAS: Verification-Guided Adaptive Search for Reliable Operations
+Research
+Minbo Ma1 *, Honglin Zhang1 *, Bangtao Zhou2, Chunguang Yu2,
+Dasheng Ju2, Yichen Shen3, Fengli Xu1, Yong Li1 †
+1Tsinghua University, Beijing, China
+2Meituan, Beijing, China
+3Shanghai Jiaotong University, Shanghai, China
+Abstract
+Advances in reasoning, coding, and tool use
+enable LLM agents to solve operations re-
+search (OR) problems through iterative prob-
+lem modeling, program construction, and ver-
+ification. Yet passing self-authored verifica-
+tion does not ensure that the solutions satisfy
+task constraints and meet optimization qual-
+ity. This gap can arise from correlated speci-
+fication errors, where the generated program
+and its checks share omissions or misinterpre-
+tations of task requirements, alongside incom-
+plete verification coverage and ineffective op-
+timization strategies. We propose VERAS, a
+verification-guided adaptive search harness for
+reliable OR that uses verification evidence to
+prioritize feasibility repair, constraint-coverage
+review, and solution-quality improvement. VE-
+RAS combines task-specific solution checkers
+with a separate verification agent to examine
+candidate solutions against the task require-
+ments. It uses verification feedback to guide
+feasibility repair, additional constraint check-
+ing, and objective improvement, while candi-
+date acceptance criteria screen revisions for de-
+terioration in output validity or constraint satis-
+faction. On ORAgentBench, VERAS achieves
+a 42.99% pass rate, exceeding the reported
+35.51% of Codex using the same LLM. Across
+two industrial-scale OR problems, VERAS
+reduces inter-datacenter peak bandwidth by
+10.34% relative to native Codex and lowers
+annualized distribution network planning costs
+by 6.28% compared with expert-designed so-
+lutions. Code and evidence are available at
+https://github.com/holimario/VERAS.
+1
+Introduction
+Operations research (OR) underpins decision op-
+timization across diverse domains, such as trans-
+portation dispatch (Vazifeh et al., 2018), energy
+*Equal contribution.
+†Corresponding author:liyong07@tsinghua.edu.cn
+planning (An et al., 2025), and computing work-
+load scheduling (Colangelo et al., 2026). Realiz-
+ing these benefits requires an iterative workflow
+spanning task understanding, problem formula-
+tion, model solving, solution validation, and model
+refinement (Williams, 2013). This iterative pro-
+cess is expertise-intensive, requiring substantial
+domain knowledge and optimization expertise at
+each stage.
+Recent advances in large language models
+(LLMs) reasoning, coding, and tool use have
+opened new opportunities for automated OR prob-
+lem solving (Yao et al., 2022; Guo et al., 2025).
+Early studies focus on translating problem de-
+scriptions into mathematical formulations and
+solver code, supported by domain-specific train-
+ing (Huang et al., 2024). Agentic systems such as
+CoE (Xiao et al., 2024), OptiMUS (Ahmaditeshnizi
+et al., 2024), and NEMO (Song et al., 2026) have
+extended these capabilities toward end-to-end OR
+solving by integrating problem modeling, program
+execution, and feedback-driven refinement. In par-
+allel, FunSearch (Romera-Paredes et al., 2024)
+and AlphaEvolve (Novikov et al., 2025) leverage
+evaluation-guided program evolution to discover
+and improve heuristics and algorithms. While these
+approaches differ in their emphasis on mathemat-
+ical modeling and solver-based execution versus
+algorithm design, both rely on executable programs
+and iterative evaluation feedback.
+The effectiveness of such refinement depends
+on the reliability of evaluation feedback. When
+OR agents build their own checks to verify can-
+didate solutions, these self-authored verifications
+may inherit the interpretation of task requirements
+as the generated program. This creates the risk
+of correlated specification errors, where the pro-
+gram and its checks share the same omissions or
+misinterpretations, allowing incorrect solutions to
+pass internal verification. Figure 1 illustrates this
+failure through an agent trajectory on ORAgent-
+1
+arXiv:2610.24329v1  [cs.SE]  16 Oct 2026
+
+
+--- Page 2 ---
+Task: Schedule 36 elective surgeries across 12 operating blocks under 12 uncertainty
+scenarios. Choose assignments, sequences, start times, or deferrals to minimize 
+scheduling costs, expected operating costs, and risk while satisfying clinical, timing, 
+staff, equipment, and recovery requirements. The single robotic_scope unit is shared 
+across rooms; its occupancy intervals, including turnaround, must not overlap.
+Solver program
+Daily equipment counts 
+within-block timing
+Self-authored 
+verification
+Each block checked 
+separately
+Both omit cross-room 
+equipment occupancy
+Solving agent
+Equipment
+Start
+Day
+Surgery
+robotic_scope
+15
+3
+S023
+robotic_scope
+15
+3
+S024
+2 Simulatneous 
+uses > 1 unit
+Independent verification
+Figure 1: Correlated specification errors in OR agent. The optimization objective (yellow), the task constraints
+(green). The solver program and its self-authored verification both omit cross-room equipment occupancy, allowing
+an infeasible schedule to pass internal checks but failing in independent evaluation.
+Bench (Li et al., 2026), in which both the generated
+optimization program and its self-authored checks
+overlook shared-equipment occupancy across op-
+erating rooms, allowing the same equipment unit
+to be assigned to overlapping surgeries. Such feed-
+back hardly exposes the shared omission and there-
+fore provides no basis for correcting it. This raises
+a broader question: how can verification grounded
+in task requirements guide agents to correct errors
+and improve solution quality?
+Addressing this question involves three chal-
+lenges. First, self-authored verification is sus-
+ceptible to incomplete coverage. Generated pro-
+grams and verification may share specification er-
+rors, leaving some task requirements unexamined
+and internal verification results inconclusive. Sec-
+ond, verification feedback often provides insuffi-
+cient guidance for refinement. Limited diagnostic
+evidence makes it difficult to distinguish modeling
+errors, unverified requirements, and opportunities
+for solution-quality improvement. Third, itera-
+tive revisions may undermine previously veri-
+fied properties. Revisions intended to repair errors
+or improve the objective may introduce new vio-
+lations or degrade solution quality, undermining
+previously established progress.
+To address these challenges, we propose VE-
+RAS, a verification-guided adaptive search harness
+for reliable OR problem solving. Built upon a
+general-purpose coding agent, VERAS checks can-
+didate solutions against task requirements using
+output validity checks and task-specific solution
+checkers, and conditionally invokes a separate ver-
+ification agent to examine requirements beyond
+existing checks.
+Candidate status and verifica-
+tion feedback guide feasibility repair and solution-
+quality improvement through revisions to models,
+algorithms, and programs. Candidate acceptance
+criteria then compare output validity and checked
+constraint violations with the previous candidate,
+retaining the update or restoring the previous solu-
+tion. These mechanisms integrate solution verifica-
+tion, targeted revision, and candidate selection into
+a unified solving workflow.
+Our contributions are threefold:
+• We identify correlated specification errors in
+program construction and self-authored verifica-
+tion, and introduce task-grounded verification to
+expose constraint violations and coverage gaps.
+• We introduce VERAS, a verification-guided
+adaptive search harness that uses verification
+evidence to steer OR solving refinement while
+rejecting updates that worsen verified constraint
+satisfaction.
+• We evaluate VERAS on ORAgentBench and
+two industrial OR case studies spanning heuris-
+tic algorithm design and mathematical program-
+ming, demonstrating improvements in task suc-
+cess and solution quality.
+2
+
+
+--- Page 3 ---
+2
+Related Work
+LLMs for OR Modeling and Algorithm De-
+sign.
+Recent LLM-based approaches to opera-
+tions research (OR) have explored different ways
+of constructing executable optimization programs.
+In mathematical programming, CoE (Xiao et al.,
+2024) coordinates specialized agents for model-
+ing and code generation, while OptiMUS (Ahma-
+diteshnizi et al., 2024) and OR-LLM-Agent (Zhang
+et al., 2025) integrate formulation, solver execu-
+tion, and iterative refinement. Another line of re-
+search focuses on algorithm design, where EoH
+and ReEvo employ LLM-guided evolution to de-
+velop optimization heuristics (Liu et al., 2024; Ye
+et al., 2024). Despite their different approaches,
+both lines of work construct executable programs
+that produce optimization decisions and can be it-
+eratively improved through feedback.
+Evaluation-Guided Program Search and Ver-
+ification.
+Evaluation feedback plays a central
+role in refining generated programs. FunSearch
+and AlphaEvolve employ automated evaluators to
+guide evolutionary search toward improved algo-
+rithms (Romera-Paredes et al., 2024; Novikov et al.,
+2025). In automated OR modeling, verification ad-
+ditionally concerns whether generated formulations
+and decisions faithfully satisfy task requirements.
+NEMO employs independently generated optimiza-
+tion and simulation programs for execution-based
+validation (Song et al., 2026), while TriVAL and
+Opt-Verifier examine modeling correctness through
+stage-wise validation and complementary checks
+of model structure and solutions (Fang et al., 2026;
+Liu et al., 2026). ORAgentBench further assesses
+end-to-end OR agents through independent evalu-
+ation of decision feasibility and quality (Li et al.,
+2026). These studies establish the importance of
+execution feedback and verification, while VERAS
+focuses on how verification evidence can guide
+subsequent search. By distinguishing witnessed vi-
+olations from gaps in verification coverage, VERAS
+adapts program refinement and controls candidate
+acceptance based on the available evidence.
+3
+VERAS
+3.1
+Overview
+VERAS guides iterative OR problem solving by
+distinguishing detected constraint violations from
+incomplete verification coverage, thereby directing
+subsequent actions toward feasibility restoration,
+additional auditing, or objective improvement.
+Given an OR instance I comprising a task de-
+scription and instance data, we formulate the opti-
+mization problem as
+min
+x
+f(x; I)
+s.t.
+cj(x; I) = 1,
+j ∈J ,
+(1)
+where x denotes the decision variables, f the objec-
+tive, and cj the constraint satisfaction predicates.
+As illustrated in Figure 2, a general-purpose cod-
+ing agent formulates the problem, constructs an ex-
+ecutable optimization program, and executes it to
+produce a decision artifact. VERAS organizes this
+process through three mechanisms. Task-Grounded
+Verification establishes evidence of constraint vio-
+lations and verification coverage. Evidence-Guided
+Refinement determines subsequent solving actions
+based on this evidence. Verification-filtered Update
+controls candidate acceptance to preserve estab-
+lished progress. At iteration t, the retained pro-
+gram Pt, its decision artifact at, and verification
+evidence Et constitute the incumbent state.
+3.2
+Task-Grounded Verification
+Task-grounded verification establishes evidence of
+candidate correctness by examining exported de-
+cisions against the original task requirements and
+instance data. For a decision artifact at, the verifi-
+cation process produces
+Et = Verify(I, at),
+(2)
+which captures structural validity, witnessed con-
+straint violations, and verification coverage.
+Structural Review.
+The structural review estab-
+lishes whether the decision artifact conforms to
+the task-specific output specification. It examines
+the required files, decision fields, data types, and
+completeness of the submitted records. Structural
+defects are reported with their affected fields or
+records, providing localized feedback for correct-
+ing missing or malformed outputs.
+Deterministic Observer.
+The deterministic ob-
+server evaluates candidate decisions against task
+constraints reconstructed from the task require-
+ments and instance data. For each supported con-
+straint, the observer computes its satisfaction status
+and reports witnessed violations with affected de-
+cisions and numerical residuals where applicable.
+Each observer also records its verification scope,
+3
+
+
+--- Page 4 ---
+OR task
+Task 
+description
+Data
+Problem 
+formulation
+Program
+generation
+Program
+execution
+Decision
+artifact
+Ojbective
+Constraint 
+Variable
+Solver code
+Heuristic code
+Log
+Solution
+Identifier
+structure
+Task-grounded verification
+Structural review
+Deterministic observer
+Isolated challenger
+Witnessed 
+violations
+Coverage
+gap
+𝑃!
+𝛼"
+ℰ!
+Evidence-guided refinement
+Restore
+Audit
+Improve
+Route
+{1,2,3}
+1
+2
+3
+k!
+Retained incumbent
+Checkpoint
+Verification-filter update
+Reverification
+Admit(𝜀̃!"#, 𝜀!, 𝑘!)
+update
+discard
+ℰ!#$
+𝑃ℰ𝛼
+𝒕+ 𝟏
+Figure 2: Overview of the VERAS framework. A coding agent constructs and executes OR programs, while task-
+grounded verification guides conditional refinement, and verification-filtered updates retain accepted candidates.
+identifying the constraint families and conditions
+covered by its checks. These records distinguish
+observed violations from gaps in verification cover-
+age and provide structured evidence for subsequent
+refinement.
+Isolated Challenger.
+The isolated challenger ex-
+tends verification by investigating requirements
+that remain insufficiently examined. Operating
+in a fresh context, it independently examines the
+task specification, instance data, and candidate de-
+cisions to search for diagnostic counterexamples.
+The resulting findings supplement deterministic
+observations and provide additional evidence for
+subsequent program correction.
+3.3
+Evidence-Guided Refinement
+Evidence-guided refinement employs rule-based
+diagnosis and ordered conditional routing to adapt
+subsequent solving actions to the candidate’s veri-
+fication state.
+Evidence-Based Diagnosis.
+VERAS evaluates
+structural validity, witnessed constraint violations,
+and verification coverage to determine the next
+action. The controller conditionally activates three
+stages in a predefined order,
+Routek(E, b) =
+(
+k,
+gk(E, b) = 1,
+skip,
+otherwise,
+k : restore →audit →improve,
+(3)
+where gk denotes the rule-based activation condi-
+tion for stage k, determined by the latest verifi-
+cation evidence E and remaining budget b. Each
+stage is evaluated in order and skipped when its
+condition is unmet. Program revisions are rever-
+ified before subsequent decisions, while auditing
+augments the available verification evidence.
+Feasibility Restoration.
+Structural defects or
+witnessed constraint violations trigger feasibility
+restoration. VERAS provides the coding agent
+with localized diagnostic evidence, including vi-
+olated requirements and available residuals. The
+agent revises the mathematical formulation, heuris-
+tic strategy, or program implementation to address
+these defects. The revised program is executed and
+reverified before candidate admission.
+Coverage-Aware Auditing.
+For viable candi-
+dates with incomplete verification coverage, VE-
+RAS invokes the isolated challenger described in
+Section 3.2. Its findings supplement the verification
+evidence and provide diagnostic feedback for sub-
+sequent refinement. Auditing extends the available
+evidence without directly modifying the optimiza-
+tion program.
+Performance Improvement.
+Viable candidates
+enter performance improvement when sufficient
+budget remains. The coding agent uses accumu-
+lated verification feedback to improve the original
+objective f(x; I) through formulation refinement,
+4
+
+
+--- Page 5 ---
+heuristic improvement, or additional optimization.
+Each proposed revision is executed and verified
+before candidate admission.
+3.4
+Verification-filtered Update
+Verification-filtered update controls candidate ac-
+ceptance by reusing the structural review and deter-
+ministic observers from Section 3.2.
+Candidate Admission.
+For each proposed pro-
+gram ePt+1, VERAS executes it to obtain a decision
+artifact eat+1 and collects verification evidence eEt+1.
+The admission decision is defined as
+ut = Admit(eEt+1, Et, kt) ∈{0, 1},
+(4)
+where ut = 1 indicates acceptance and kt de-
+notes the current refinement phase. Admission
+requires non-regression in structural validity and
+supported constraint violations. Restoration per-
+mits incremental feasibility improvements, while
+performance-oriented updates additionally require
+valid artifacts without detected violations under
+supported checks.
+Incumbent Retention.
+The incumbent is up-
+dated according to
+(Pt+1, at+1, Et+1)
+=
+(
+( ePt+1, eat+1, eEt+1),
+ut = 1,
+(Pt, at, Et),
+ut = 0.
+(5)
+Accepted candidates replace the incumbent for sub-
+sequent refinement, while rejected candidates are
+discarded. The retained program and its decision
+artifact constitute the final output.
+4
+Experimental Setup
+We evaluate VERAS on ORAgentBench and two
+industrial-scale OR problems to assess its reliabil-
+ity and optimization performance across hetero-
+geneous tasks. ORAgentBench evaluates end-to-
+end problem solving, while the industrial studies
+examine heuristic inter-datacenter placement and
+mathematical programming for active distribution
+network planning.
+4.1
+Benchmark Study
+Task.
+ORAgentBench (Li et al., 2026) comprises
+107 OR tasks (32 easy, 41 medium, and 34 hard in-
+stances) across eight application families, spanning
+static, stochastic, robust, and multi-stage optimiza-
+tion. Agents construct executable optimization pro-
+grams and submit complete decision artifacts from
+task requirements and instance data. Multi-stage
+tasks additionally require later decisions to respect
+previously committed state; the benchmark reveals
+the next event only after the preceding stage meets
+its reward gate. Evaluation concerns the exported
+decisions, rather than the plausibility of the gener-
+ated formulation alone.
+Agent configuration.
+We use GPT-5.4 with high
+reasoning effort and two concurrent task workers.
+Each worker operates in an isolated environment
+with Python, PySCIPOpt, and SCIP. The task-stage
+wall-clock ceiling is 2,700 seconds; candidate SCIP
+calls have a 300-second ceiling and a target relative
+gap of 5 × 10−4. The controller reserves a fraction
+of 0.30 for recovery, with a minimum recovery al-
+location of 120 seconds, and allocates a fraction
+of 0.22 of the remaining budget to the challenger.
+These are conditional allocations, not fixed num-
+bers of refinement rounds. Appendix A.3 lists the
+remaining runtime settings.
+Verification and scoring.
+Agents receive the
+public statement, instance data, and output tem-
+plates, but not the benchmark evaluator or refer-
+ence artifacts. Structural checks and determinis-
+tic observers inspect exported decisions against
+supported public constraints; the challenger sup-
+plies additional diagnostic evidence. These online
+checks guide refinement but do not replace the ex-
+ternal evaluator. For task i, let Fi and Qi denote
+its externally evaluated feasibility and normalized
+quality. We report
+PassRate = 100
+107
+107
+X
+i=1
+I[Fi > 0 ∧Qi > 0.4]. (6)
+Quality follows the benchmark’s task-specific nor-
+malization against a verified reference objective
+and, when available, a valid global bound. It is dis-
+tinct from both the raw objective and the solver’s
+reported optimality gap. Successful program execu-
+tion alone does not establish constraint feasibility
+or adequate normalized objective quality. Incom-
+plete or infeasible submissions receive zero credit.
+Overall feasibility and quality are means over tasks,
+equivalent to weighting the three difficulty splits
+by 32, 41, and 34; they are not unweighted means
+of the split averages. For multi-stage tasks, the ag-
+gregation unit is the complete required trajectory,
+not an individual successful stage.
+Comparisons.
+The Codex and Claude Code rows
+in Table 1 are published benchmark results, not
+5
+
+
+--- Page 6 ---
+Table 1: Main results on ORAgentBench (107 tasks). Overall feasibility and quality are task-count-weighted across
+the easy, medium, and hard splits. Rows are grouped by harness and ordered by Overall pass rate within each group
+(ties are broken by Overall quality). Bold and underline denote the best and second-best results in each column,
+respectively.
+Harness
+Model
+Feasibility ↑
+Quality ↑
+Pass rate (%) ↑
+Easy Medium Hard Overall Easy Medium Hard Overall Easy
+Medium
+Hard
+Overall
+Codex
+GPT-5.4
+0.69
+0.68
+0.32
+0.57
+0.45
+0.31
+0.21
+0.32
+46.88
+39.02
+20.59
+35.51
+GPT-5.3-Codex
+0.50
+0.68
+0.32
+0.51
+0.30
+0.37
+0.19
+0.29
+31.25
+43.90
+20.59
+32.71
+GPT-5.4-mini
+0.62
+0.54
+0.21
+0.46
+0.43
+0.24
+0.07
+0.24
+43.75
+29.27
+5.88
+26.17
+Claude Code
+Claude Opus 4.6
+0.66
+0.59
+0.21
+0.49
+0.49
+0.32
+0.14
+0.31
+50.00
+39.02
+14.71
+34.58
+DeepSeek V4 Pro
+0.55
+0.46
+0.23
+0.41
+0.38
+0.25
+0.14
+0.25
+39.58
+28.46
+13.73
+27.10
+Kimi K2.6
+0.50
+0.51
+0.26
+0.43
+0.29
+0.25
+0.13
+0.22
+31.25
+36.59
+11.76
+27.10
+GLM 5.1
+0.53
+0.46
+0.15
+0.38
+0.37
+0.29
+0.10
+0.25
+37.50
+31.71
+8.82
+26.17
+DeepSeek V4 Flash
+0.62
+0.41
+0.15
+0.39
+0.45
+0.21
+0.09
+0.24
+46.88
+26.83
+5.88
+26.17
+Claude Sonnet 4.6
+0.47
+0.51
+0.26
+0.42
+0.31
+0.23
+0.14
+0.23
+31.25
+29.27
+14.71
+25.23
+VERAS
+GPT-5.4
+0.84
+0.68
+0.50
+0.67
+0.55
+0.34
+0.31
+0.39
+56.25
+39.02
+35.29
+42.99
+new baseline runs. They use the same official scor-
+ing criteria, but this comparison does not control
+realized inference compute. The six-Hard-task ab-
+lation uses the same per-stage limits and evaluation
+protocol, retains the original VERAS results, and
+evaluates component variants in separate runs (Sec-
+tion ??). It is a diagnostic comparison rather than
+a repeated-run estimate of each component’s effect.
+Benchmark outcomes informed harness develop-
+ment; the full suite therefore serves as a develop-
+ment benchmark.
+4.2
+Case Study: Inter-Datacenter Bandwidth
+Optimization
+Task.
+This study optimizes the placement of
+625,191 tasks across Zhongwei and Huailai, China.
+Task assignments determine table locations and
+cross-region transfers. The objective is to mini-
+mize peak inter-datacenter bandwidth subject to
+regional vCore and memory capacities; migration
+volume is an auxiliary operational metric. Each
+candidate is an executable placement program, not
+only a saved task-to-region mapping.
+Protocol.
+We compare Operational Mapping,
+the Historical-Majority Heuristic, native Codex,
+and VERAS. Operational Mapping preserves the
+archived assignments. The historical heuristic as-
+signs each task to its most frequently observed exe-
+cution region, defaulting to Zhongwei when no his-
+tory is available. All methods use the same place-
+ment constraints and bandwidth metrics. Agent-
+generated programs must regenerate their assign-
+ments within the 120-second dispatcher limit; this
+execution limit is distinct from the agent’s search
+budget.
+Industrial task inputs are agent-visible but are
+not redistributed; the source-replay results refer to
+checks performed with those inputs available (Ap-
+pendix A.5). The case uses August 2025 traces.
+August 8–9 records are available for program con-
+struction, while August 10 event records are ex-
+cluded from agent inputs and used for evaluation.
+Regional resource limits are fixed constants derived
+from capacity peaks over August 7–10. Both agent
+systems use GPT-5.6 Sol with xhigh reasoning ef-
+fort, a timeout multiplier of three, and a 19,800-
+second runtime limit. The comparison pairs an
+archived VERAS run with a later native Codex run;
+matching hashes establish identical task inputs and
+evaluator versions. Earlier development inspected
+August 10 scores, so this is a retrospective compar-
+ison, not an untouched temporal test.
+4.3
+Case Study: Active Distribution Network
+Planning
+Task.
+This study addresses mixed-integer second-
+order-cone planning for a 54-bus active distribution
+network with 63 branches, four scenarios, and 24
+hourly periods. The objective minimizes annual-
+ized investment, operation, and maintenance costs
+through joint infrastructure and operating decisions
+under electrical and operational constraints. Agents
+construct executable optimization programs that ex-
+port complete planning and operational decisions.
+Protocol.
+We compare two expert-designed mod-
+els, Hourly MISOCP and Varying-Timestep MIS-
+OCP, with native Codex and VERAS on the same
+physical instance. Both agent systems use GPT-5.6
+6
+
+
+--- Page 7 ---
+Sol with xhigh reasoning effort, identical task in-
+puts, and the same independent evaluation protocol.
+Solver execution is limited to four threads and 900
+seconds. The VERAS profile has a 15,360-second
+agent wall-time limit and a timeout multiplier of
+two. The reported VERAS solution is a separately
+selected run, rather than the VERAS arm executed
+alongside native Codex.
+Both reported agent solutions are regenerated
+from the agent-visible task data using a stricter 750-
+second solver limit. Replay time includes setup and
+artifact generation, so it can exceed 750 seconds
+without violating the solver limit. Replaying a
+fixed program tests artifact reproducibility; it is not
+a repetition of the full agent search. Independent
+audits recompute constraints and objectives from
+the exported decisions.
+The
+Hourly
+MISOCP
+model
+uses
+MAT-
+LAB/YALMIP with MOSEK. It jointly optimizes
+line and substation investments, discrete stor-
+age/PV/wind capacities, and hourly operations
+across four scenarios.
+In the fault scenario,
+branches 34 and 44 are disconnected during hours
+7–8, with reduced substation capacities. Varying-
+Timestep MISOCP adds five-minute storage charg-
+ing, discharging, and state-of-charge decisions
+during this window, coupled to hourly decisions
+through boundary states, energy consistency, and
+power headroom. It is therefore a finer-grained
+operating formulation, not merely another solver
+configuration for the hourly model.
+5
+Results and Discussion
+5.1
+Benchmark Study Results
+On ORAgentBench, VERAS passes 46 of 107 tasks
+(42.99%), exceeding the published GPT-5.4 Codex
+baseline of 38 tasks (35.51%) by 7.48 percentage
+points under the same official evaluation criteria
+(Table 1). The largest improvement occurs on Hard
+tasks, where the pass count increases from 7/34
+to 12/34, while Medium performance remains un-
+changed at 16/41. Mean feasibility increases from
+0.57 to 0.67, accompanied by an improvement in
+normalized solution quality from 0.32 to 0.39.
+Execution trajectories further illustrate how task-
+grounded verification supports program refinement.
+Across 117 task stages, VERAS records 15 struc-
+tural restorations and three reductions in witnessed
+constraint residuals. In online electric-bus depot
+replanning, deterministic observers identify 42 trip-
+row nullability violations, all resolved through
+restoration. The controller also invokes isolated
+challengers for 103 tasks and admits 114 of 132 per-
+formance revisions, demonstrating the integration
+of independent auditing and verification-filtered
+updates into the solving process.
+Hard tasks remain challenging, with 17/34 pro-
+ducing feasible solutions but only 12/34 satisfying
+the solution-quality threshold. In addition, four
+tasks fail to complete all required stages. These re-
+sults highlight the distinct challenges of constraint
+feasibility, solution quality, and multi-stage com-
+pletion, motivating the controlled ablation study
+that follows.
+5.2
+Ablation Study
+We conduct an ablation study on six Hard tasks us-
+ing GPT-5.4, comparing VERAS against four vari-
+ants that disable the isolated challenger, determin-
+istic observers, feasibility restoration routing, and
+verification-filtered admission, respectively. VE-
+RAS uses frozen results from the original evalua-
+tion, while the four ablations are evaluated in sepa-
+rate runs, with API-affected trials replaced based
+on run validity.
+Figure 3 shows that VERAS achieves the highest
+task success and solution quality, passing 5/6 tasks
+with a mean normalized quality of 0.621. Remov-
+ing the isolated challenger reduces the pass count
+from five to zero and quality to 0.054, highlighting
+the importance of additional constraint auditing.
+Disabling the deterministic observer reduces feasi-
+ble tasks from five to four, passes from five to three,
+and quality to 0.466. Without feasibility restora-
+tion routing, only two tasks remain feasible and
+pass, with quality dropping to 0.237. Finally, re-
+moving verification-filtered admission preserves
+five feasible tasks but reduces the pass count to two
+and quality to 0.409, indicating its role in retaining
+higher-quality solutions. Together, these results
+demonstrate the complementary contributions of
+task-grounded verification, evidence-guided refine-
+ment, and verification-filtered updates.
+5.3
+Case Study: Inter-datacenter placement
+Table 2 shows that VERAS achieves the lowest
+peak inter-datacenter bandwidth of 1,110.603 Gbps,
+reducing the peak by 10.34% compared with native
+Codex (1,238.625 Gbps). Both agent-generated
+programs independently reproduce their respective
+archived placement outputs byte-for-byte from pub-
+lic inputs within the 120-second dispatcher limit.
+The expert-designed mappings exhibit substantially
+7
+
+
+--- Page 8 ---
+VERAS
+w/o
+Challenger
+w/o
+Observer
+w/o
+Routing
+w/o
+Admission
+0
+1
+2
+3
+4
+5
+6
+Tasks (out of 6)
+5
+1
+3
+3
+3
+1
+2
+2
+4
+2
+3
+1
+(a) Feasibility and task success
+Passed
+Feasible, not passed
+No feasibility credit
+VERAS
+w/o
+Challenger
+w/o
+Observer
+w/o
+Routing
+w/o
+Admission
+0.0
+0.2
+0.4
+0.6
+0.8
+Mean normalized quality
+0.621
+0.054
+0.466
+0.237
+0.409
+(b) Solution quality
+Figure 3: Ablation study on six Hard tasks. (a) Fea-
+sibility and pass outcomes across variates. (b) Mean
+normalized solution quality. VERAS reports the frozen
+original evaluation results.
+higher bandwidth peaks, ranging from 18,276.071
+to 19,495.167 Gbps. VERAS incurs slightly higher
+migration than native Codex (25.901 versus 25.473
+PB), reflecting a trade-off between bandwidth re-
+duction and data movement, with migration treated
+as an auxiliary metric.
+The comparison uses an archived VERAS re-
+sult and a subsequent native Codex run. A sep-
+arate VERAS run achieves 1,567.303 Gbps (Ap-
+pendix A.4.2), illustrating variability across opti-
+mization runs.
+Table 2: Inter-datacenter placement results. Lower peak
+bandwidth and migration are better.
+Method
+Peak (Gbps) ↓
+Migration (PB) ↓
+Operational mapping
+19,495.167
+0.000
+Historical-majority heuristic
+18,276.071
+0.333
+Native Codex
+1,238.625
+25.473
+VERAS
+1,110.603
+25.901
+5.4
+Case Study: 54-bus Active distribution
+network
+Table 3 shows that VERAS achieves the lowest
+annualized total cost of USD 39.424M/year, re-
+ducing costs by 6.28% and 13.71% compared
+with the expert-designed Hourly MISOCP and
+native Codex, respectively.
+The improvement
+over the expert model is primarily driven by
+lower investment costs (USD 16.154M versus
+USD 18.984M), despite a slightly higher operat-
+ing cost (USD 23.269M versus USD 23.081M).
+Compared with native Codex, VERAS reduces
+both investment and operating costs. Both agent-
+generated solutions pass independent constraint
+and objective audits and can be regenerated from
+public inputs.
+Table 3: Annualized costs for 54-bus active distribu-
+tion network planning and fault restoration (million
+USD/year). Lower is better.
+Method
+Total ↓
+Investment ↓
+Operation ↓
+Hourly MISOCP
+42.065
+18.984
+23.081
+Varying-timestep MISOCP
+42.923
+19.012
+23.911
+Native Codex
+45.690
+18.490
+27.200
+VERAS
+39.424
+16.154
+23.269
+6
+Conclusion
+We presented VERAS, a verification-guided adap-
+tive search harness for reliable operations research
+algorithm discovery.
+VERAS integrates task-
+grounded verification, evidence-guided refinement,
+and verification-filtered updates to identify con-
+straint violations, distinguish gaps in verification
+coverage, and guide subsequent program improve-
+ment while preserving established verification ev-
+idence. Experiments on ORAgentBench and two
+industrial optimization problems demonstrate its ef-
+fectiveness across mathematical programming and
+heuristic algorithm design. These findings high-
+light the importance of moving beyond pass-or-fail
+evaluation toward evidence-driven search, provid-
+ing a practical direction for developing more reli-
+able and effective OR agents.
+Limitations
+Evaluation scope.
+ORAgentBench informed har-
+ness development, including inspection of task-
+level failures. The reported aggregate is therefore
+performance on a development benchmark, not an
+unbiased estimate for unseen tasks or optimization
+domains. Published baselines use the same scoring
+criteria but were not rerun as part of this study. The
+six-task ablation uses separate runs and a frozen
+VERAS reference, and is too small to establish re-
+liable component-level effect sizes. Shared time
+ceilings also do not imply equal realized inference
+compute.
+8
+
+
+--- Page 9 ---
+Application comparisons.
+The industrial stud-
+ies cover one datacenter setting and one fixed
+distribution-network instance. The datacenter com-
+parison is retrospective: August 10 records are
+withheld within runs, but earlier development in-
+spected scores from that date, and resource limits
+use a capacity envelope that includes it. The addi-
+tional VERAS run does not preserve the archived
+run’s advantage over native Codex. The grid com-
+parison likewise reports a separately selected VE-
+RAS run, while the expert models differ in tempo-
+ral resolution. These studies demonstrate the re-
+ported programs’ outcomes, rather than an average
+advantage under repeated, prospectively matched
+experiments.
+Verification coverage.
+Deterministic observers
+check only implemented constraint families. A
+zero residual establishes consistency with those
+checks, not correctness with respect to every task
+requirement. A fresh challenger context reduces
+shared execution history but does not eliminate
+model-level biases or guarantee that omitted con-
+straints will be found. Admission filtering pre-
+serves properties covered by the checks; it does
+not establish monotonic objective improvement
+or global optimality. Generated optimization pro-
+grams still require domain-specific validation be-
+fore operational use.
+Reproducibility.
+The experiments rely on pro-
+prietary model services, and the reported source
+replays reproduce fixed programs rather than entire
+agent trajectories. The released industrial sum-
+maries and code do not include the original oper-
+ational input rows or generated decision archives,
+which limits independent reproduction of the appli-
+cation results. The current comparisons also do not
+establish cost-effectiveness under a common token
+or monetary budget.
+References
+Ali Ahmaditeshnizi, Wenzhi Gao, and Madeleine Udell.
+2024. OptiMUS: Scalable optimization modeling
+with (MI)LP solvers and large language models. In
+Proceedings of the 41st International Conference on
+Machine Learning, volume 235 of Proceedings of
+Machine Learning Research, pages 577–596. PMLR.
+Kangxin An, Xinzhu Zheng, Jianxiang Shen, Canyang
+Xie, Can Wang, Wenjia Cai, and Chujie Bu. 2025.
+Repositioning coal power to accelerate net-zero tran-
+sition of china’s power system. Nature Communica-
+tions, 16(1):2311.
+Philip Colangelo, Ayse K. Coskun, Jack Megrue, Cia-
+ran Roberts, Shayan Sengupta, Varun Sivaram, Ethan
+Tiao, Aroon Vijaykar, Chris Williams, Daniel C. Wil-
+son, Brandon Records, Zack MacFarland, Daniel
+Dreiling, Nathan Morey, Anuja Ratnayake, and
+Baskar Vairamohan. 2026. AI data centres as grid-
+interactive assets. Nature Energy, 11(2):254–261.
+Ziyang Fang, JinXi Wang, Jinghui Zhong, and Yew-
+Soon Ong. 2026. TriVAL: A tri-validation frame-
+work for faithful automatic optimization modeling.
+arXiv preprint arXiv:2605.23966.
+Daya Guo, Dejian Yang, Haowei Zhang, Junxiao Song,
+Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu Zhang,
+Shirong Ma, Xiao Bi, et al. 2025. Deepseek-r1 in-
+centivizes reasoning in llms through reinforcement
+learning. Nature, 645(8081):633–638.
+Chenyu Huang, Zhengyang Tang, Shixi Hu, Ruoqing
+Jiang, Xin Zheng, Dongdong Ge, Benyou Wang, and
+Zizhuo Wang. 2024. ORLM: A customizable frame-
+work in training large models for automated optimiza-
+tion modeling. arXiv preprint arXiv:2405.17743.
+Jiajun Li, Mingshu Cai, Yixuan Li, Yu Ding, Ran Hou,
+Guanyu Nie, Xiongwei Han, and Wanyuan Wang.
+2026. ORAgentBench: Can LLM agents solve chal-
+lenging operations research tasks end to end? arXiv
+preprint arXiv:2606.19787.
+Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo,
+Zhenkun Wang, Zhichao Lu, and Qingfu Zhang.
+2024. Evolution of heuristics: Towards efficient au-
+tomatic algorithm design using large language model.
+In Proceedings of the 41st International Conference
+on Machine Learning, volume 235 of Proceedings
+of Machine Learning Research, pages 32201–32223.
+PMLR.
+Haoyang Liu, Jie Wang, Boxuan Niu, Xiongwei Han,
+Yian Xu, Mingxuan Ye, Zijie Geng, Fangzhou Zhu,
+Tao Zhong, Mingxuan Yuan, and Jianye Hao. 2026.
+Opt-Verifier: Unleashing the power of LLMs for op-
+timization modeling via dual-side verification. arXiv
+preprint arXiv:2605.29556.
+Alexander Novikov, Ngân V˜u, Marvin Eisenberger, Em-
+ilien Dupont, Po-Sen Huang, Adam Zsolt Wagner,
+Sergey Shirobokov, Borislav Kozlovskii, Francisco
+J. R. Ruiz, Abbas Mehrabian, M. Pawan Kumar, Abi-
+gail See, Swarat Chaudhuri, George Holland, Alex
+Davies, Sebastian Nowozin, Pushmeet Kohli, and
+Matej Balog. 2025. AlphaEvolve: A coding agent for
+scientific and algorithmic discovery. arXiv preprint
+arXiv:2506.13131.
+Bernardino
+Romera-Paredes,
+Mohammadamin
+Barekatain,
+Alexander Novikov,
+Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R.
+Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar
+Fawzi, Pushmeet Kohli, and Alhussein Fawzi. 2024.
+Mathematical discoveries from program search with
+large language models. Nature, 625:468–475.
+9
+
+
+--- Page 10 ---
+Yang Song, Anoushka Vyas, Zirui Wei, Sina Khoshfe-
+trat Pakazad, Henrik Ohlsson, and Graham Neubig.
+2026. Nemo: Execution-aware optimization model-
+ing via autonomous coding agents. arXiv preprint
+arXiv:2601.21372.
+Mohammad M Vazifeh, Paolo Santi, Giovanni Resta,
+Steven H Strogatz, and Carlo Ratti. 2018. Address-
+ing the minimum fleet problem in on-demand urban
+mobility. Nature, 557(7706):534–538.
+H. Paul Williams. 2013. Model Building in Mathemati-
+cal Programming, 5 edition. John Wiley & Sons.
+Ziyang Xiao, Dongxiang Zhang, Yangjun Wu, Lilin
+Xu, Yuan Wang, Xiongwei Han, Xiaojin Fu, Tao
+Zhong, Jia Zeng, Mingli Song, and Gang Chen. 2024.
+Chain-of-Experts: When LLMs meet complex opera-
+tions research problems. In International Conference
+on Learning Representations, volume 2024, pages
+48519–48537.
+Shunyu Yao, Jeffrey Zhao, Dian Yu, Nan Du, Izhak
+Shafran, Karthik Narasimhan, and Yuan Cao. 2022.
+React: Synergizing reasoning and acting in language
+models. arXiv preprint arXiv:2210.03629.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto,
+Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and Guo-
+jie Song. 2024. ReEvo: Large language models as
+hyper-heuristics with reflective evolution.
+In Ad-
+vances in Neural Information Processing Systems,
+volume 37, pages 43571–43608.
+Bowen Zhang, Pengcheng Luo, Genke Yang, Boon-Hee
+Soong, and Chau Yuen. 2025. OR-LLM-Agent: Au-
+tomating modeling and solving of operations research
+optimization problems with reasoning LLM. arXiv
+preprint arXiv:2503.10009.
+10
+
+
+--- Page 11 ---
+A
+Extended Experimental Details
+A.1
+Information Available During Evaluation
+The controller revises candidates using the task ma-
+terials, exported decisions, and online verification
+reports. These reports are distinct from benchmark
+scores. Table 4 lists the inputs and outputs of each
+role. In multi-stage benchmark tasks, a stage-level
+reward gate determines whether the next event is
+revealed (Li et al., 2026); this does not expose the
+hidden evaluator code or reference solutions to the
+agent.
+Table 4: Inputs and outputs of the solving and evaluation
+roles. Evaluation scores a submitted artifact; it is not a
+replacement for the controller’s online checks.
+Role
+Input and output
+Producer
+Task packet, prior-stage artifacts, and refine-
+ment feedback; executable program and de-
+cisions
+Observer
+Task inputs and exported artifact; structural
+checks, constraint residuals, and declared
+coverage
+Challenger
+Task packet, candidate artifact, and observer
+evidence; read-only search for counterexam-
+ples
+Evaluator
+Submitted artifact and evaluation instance;
+feasibility and quality scores
+On ORAgentBench, agents receive the public
+statement, instance data, and output templates, to-
+gether with Python, PySCIPOpt, and SCIP. De-
+terministic observers check supported constraints
+on exported decisions and record their scope. A
+zero residual refers only to that scope. For a viable
+candidate with incomplete coverage and sufficient
+remaining time, the controller can request a read-
+only challenger review. Final task outcomes require
+completion of all mandatory stages.
+In the datacenter study, August 8–9, 2025 trans-
+fer records are visible to the agents, but August 10
+event records are not. Resource limits are fixed
+constants derived from the August 7–10 capacity
+envelope. Table 2 compares an archived VERAS
+run with a later native Codex run using matched in-
+puts and evaluation code. The archive was selected
+after earlier August 10 feedback. Thus, withhold-
+ing event records within a run does not make the
+development process independent of that evalua-
+tion date.
+For both industrial studies, agent-visible inputs
+refers to data supplied to the agents during the
+experiment, not necessarily data available in the
+public release. Release restrictions are described
+in Appendix A.5.
+A.2
+Prompt Construction
+The initial prompt combines the task instruction, a
+runtime note, and deterministic guidance selected
+by public task family. Subsequent prompts are
+conditional on the controller state and include seri-
+alized structural audits and constraint observations.
+The released harness contains the prompt text; the
+descriptions below summarize its role in the search
+procedure.
+Feasibility restoration.
+When an artifact is miss-
+ing, structurally invalid, or violates an observed
+constraint, the restoration prompt supplies the cor-
+responding audit. It prioritizes feasibility and spec-
+ifies an elastic Phase-I formulation when the ex-
+act model has no incumbent. The revised artifact
+is checked before it is considered for admission;
+requesting a repair does not itself establish that
+feasibility has been restored.
+Challenger review.
+The challenger operates in
+a separate, read-only context.
+It examines the
+task specification and candidate artifact for require-
+ments not adequately covered by the observers. A
+counterexample report identifies the relevant rule,
+affected records, observed values, and applicable
+bounds. The report informs subsequent refinement
+and is not treated as an external benchmark score.
+Objective
+improvement.
+The
+performance
+prompt continues from the current files and
+retained incumbent.
+It incorporates challenger
+findings and requests objective improvement
+subject to recomputing constraints on the exported
+artifact. The admission check evaluates structural
+validity and non-regression under supported con-
+straint checks. The request for a better objective
+is separate from this feasibility-based acceptance
+criterion, as specified in Section 3.4.
+The industrial profiles add task-specific instruc-
+tions to this phase. Datacenter search uses the
+two visible days and examines daily peaks and
+remaining resource capacity. Grid search retains
+the planning decisions as optimization variables
+and requires source replay under the 900-second
+solver and four-thread contract. Neither addition
+introduces another controller stage.
+A.3
+Runtime Configuration
+The six-task ablation uses GPT-5.4/high, the same
+2,700-second task-stage ceiling, public inputs, eval-
+11
+
+
+--- Page 12 ---
+Table 5: VERAS configuration for the 107-task ORA-
+gentBench evaluation.
+Parameter
+Value
+Model / reasoning effort
+GPT-5.4 / high
+Concurrent task workers
+2
+Task-stage wall-clock ceiling
+2,700 s
+Timeout scale
+1.00
+Reserved recovery fraction
+0.30
+Challenger fraction of remaining budget
+0.22
+Minimum recovery allocation
+120 s
+Harness-side local solver cap
+180 s
+Maximum transient transport attempts
+4
+Candidate SCIP call ceiling
+300 s
+Target SCIP relative gap
+5 × 10−4
+uator, and solver environment, with one worker per
+configuration. The VERAS reference is retained
+from the original evaluation. Runs interrupted by
+provider limits or transport failures were selectively
+rerun; completed infeasible or low-quality outputs
+were retained. Equal configured limits do not imply
+identical token consumption or elapsed time.
+Both industrial profiles use the verification, rout-
+ing, and admission mechanisms described in Sec-
+tion 3.2–3.4. Relative to the benchmark profile,
+they differ in model, time limits, recovery allo-
+cation, challenger limits, and task-specific perfor-
+mance instructions, as listed in Tables 5 and 6. The
+selected grid solver leaves all eight integer deci-
+sion families unfixed and uses starts derived from
+the task data. The agent search budget, solver-call
+limit, and end-to-end source-replay time measure
+different parts of the experiment.
+A.4
+Solution Examples and Replay Results
+A.4.1
+Scenario-Dependent eVTOL Recovery
+Figure 4 shows a VERAS solution for a Hard OR-
+AgentBench task. The artifact contains 49 first-
+stage acceptance decisions, of which 13 accept a
+request. Each accepted request has one flight in
+each of three weather scenarios, giving 39 flight
+rows; the artifact also includes eight charging rows.
+The acceptance decisions are shared across sce-
+narios, whereas flight and charging schedules can
+vary. The timeline observer examines 33 aircraft–
+scenario timelines and reports no violations of re-
+lease times, turnaround requirements, non-overlap,
+or location continuity within its implemented scope.
+This observation does not certify constraint fami-
+lies outside that scope.
+A12
+A11
+A10
+A08
+A07
+A06
+A05
+A04
+A03
+A02
+A01
+(a) Clear
+022
+046
+017
+025
+006
+021
+018
+026
+005
+045
+A12
+A11
+A10
+A08
+A07
+A06
+A05
+A04
+A03
+A02
+A01
+(b) Storm cells
+023
+022
+046
+035
+017
+025
+006
+024
+021
+018
+026
+005
+045
+0
+5
+10
+15
+20
+25
+30
+Time slot
+A12
+A11
+A10
+A08
+A07
+A06
+A05
+A04
+A03
+A02
+A01
+(c) North wind
+023
+022
+046
+035
+017
+025
+006
+024
+021
+018
+026
+005
+045
+Passenger flight
+Charging
+Figure 4: VERAS schedules for eVTOL vertiport re-
+covery. Blue intervals denote passenger flights and gold
+intervals denote charging. Flight labels are request iden-
+tifiers with the leading “R” omitted. The accepted re-
+quest set is shared across scenarios; operational sched-
+ules vary with the weather scenario.
+A.4.2
+Inter-Datacenter Placement
+The archived VERAS assignment in Table 2 has
+August 10 directional peaks of 1,110.603 Gbps
+from Huailai to Zhongwei and 907.866 Gbps in
+the reverse direction. Peak vCore and memory uti-
+lization ratios are 0.294 and 0.428 in Huailai, and
+0.979 and 0.965 in Zhongwei. Figure 5 compares
+these outcomes with the later native Codex run. In
+the recorded source replays, both programs pro-
+duce resource-feasible assignments and regenerate
+their Parquet artifacts byte-for-byte from the agent-
+visible inputs. Migration is reported separately
+12
+
+
+--- Page 13 ---
+Table 6: Configurations of the selected VERAS application runs. Source replay includes setup and artifact generation;
+its elapsed time is not the solver-only time.
+Parameter
+Inter-datacenter placement
+54-bus network planning
+Model / reasoning effort
+GPT-5.6 Sol / xhigh
+GPT-5.6 Sol / xhigh
+Agent wall-time limit
+19,800 s
+15,360 s
+Timeout scale
+3.0
+2.0
+Recovery reserve / challenger cap
+0.40 / 180 s
+0.40 / 480 s
+Candidate execution contract
+120-s output generator
+900-s solver; at most four threads
+Selected source replay
+45.842 s
+829.552 s (750-s solver limit)
+Agent-visible instance
+August 8–9, 2025 transfers
+Fixed 54-bus instance
+External evaluation
+August 10, 2025 replay
+Constraint and objective audit
+from the bandwidth objective.
+Additional VERAS run.
+A new VERAS run
+with the same performance instructions yields
+1,567.303 Gbps on August 10, compared with
+1,238.625 Gbps for native Codex. Both VERAS
+runs and the native run satisfy the resource con-
+straints and regenerate their assignments within
+120 seconds.
+This additional run reverses the
+ranking of the archived comparison; the reported
+10.34% reduction is therefore specific to the se-
+lected archived run.
+A.4.3
+54-Bus Planning and Fault Operation
+Table 3 reports a separately selected VERAS run
+with annualized cost USD 39.424M. The VERAS
+arm executed alongside native Codex instead ob-
+tains USD 42.613M. The selected VERAS and
+USD 45.690M native solutions use the same task in-
+stance, LLM backend, evaluator, four-thread limit,
+and 900-second solver contract; they are not out-
+puts of the same paired comparison. With a 750-
+second solver limit for source replay, their end-to-
+end times are 829.552 and 823.924 seconds, respec-
+tively. Both replayed artifacts pass the independent
+constraint and objective audit.
+The selected VERAS solution installs stor-
+age at buses {8, 9, 13, 16, 17, 32, 50},
+photo-
+voltaics at {5, 8, 10, 26, 30, 33, 37}, and wind at
+{12, 14, 17, 24, 39, 47}.
+Figure 6 shows the in-
+stalled integer units and aggregate active power
+in scenario 1, converted to MW using a 10-MVA
+base. Independently reconstructed load shedding
+during fault hours 7 and 8 is 1.209 and 1.330 MW,
+respectively.
+The selected run reports a best bound of
+USD 37.404M and a 5.122% solver gap for its
+optimization model. This is a feasible incumbent,
+not a proof of global optimality. The objective re-
+constructed from the saved decisions agrees with
+0
+250
+500
+750
+1000 1250 1500
+Gbps
+Native Codex
+VERAS
+1,239
+1,111
+(a) Directional peak
+0
+5
+10
+15
+20
+25
+30
+PB
+Native Codex
+VERAS
+25.47
+25.90
+(b) Migration volume
+0
+50
+100
+Peak capacity used (%)
+HL vCore
+HL memory
+ZW vCore
+ZW memory
+(c) Resource utilization
+Native Codex
+VERAS
+Capacity
+Figure 5: August 10 replay of archived VERAS and
+the later native Codex run: (a) maximum directional
+bandwidth peak; (b) migration volume; and (c) resource
+utilization. All four utilization ratios are below the
+capacity limit.
+the reported value; the integrality residual is zero
+and the maximum normalized constraint residual
+is 8.54 × 10−10. The recorded source replay repro-
+duces the NPZ artifact byte-for-byte. These checks
+validate the fixed program and exported solution,
+not the repeatability of the preceding agent search.
+13
+
+
+--- Page 14 ---
+1
+10
+20
+30
+40
+50
+Bus index
+0
+20
+40
+50
+Installed units
+(a) Planning assets
+1
+4
+7 8
+12
+16
+20
+24
+Hour in scenario 1
+0
+5
+10
+15
+20
+25
+30
+35
+Active power (MW)
+(b) Fault-period operation
+Storage
+PV
+Wind
+Substation supply
+Wind
+PV
+Storage (net)
+Load shedding
+Figure 6: Selected VERAS grid solution: (a) installed
+integer units by technology and bus; and (b) scenario-1
+active power, with the fault interval (hours 7–8) shaded.
+Positive net storage power denotes discharge. Load
+shedding is reconstructed from the saved decisions.
+A.5
+Released Materials and Reproducibility
+The benchmark release contains task-level scores
+for all 107 instances and raw event streams for
+34 tasks. The application records include solver
+source code, task-input hashes, and replay audits.
+The manuscript project also includes aggregate dat-
+acenter and grid summaries used by the case-study
+plotting script. These summaries support checks of
+the reported aggregate values, but do not replace
+the original decision artifacts or constraint audits.
+Operational input rows and generated Par-
+quet/NPZ artifacts are not redistributed. Conse-
+quently, independently reproducing the industrial
+results requires access to the original task data in
+addition to the released programs. The replay re-
+sults above describe checks performed with those
+inputs available; they do not imply that the public
+archive alone is sufficient to rerun the applications.
+14

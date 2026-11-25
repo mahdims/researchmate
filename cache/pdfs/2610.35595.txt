@@ -1,0 +1,3238 @@
+--- Page 1 ---
+Preprint
+AGENTIC ALGORITHM DESIGN: LLMS THAT PROPOSE,
+FORMALISE, AND PROVE RUNTIME BOUNDS FOR EVO-
+LUTIONARY ALGORITHMS IN LEAN
+Per Kristian Lehre
+School of Computer Science
+University of Birmingham, UK
+p.k.lehre@bham.ac.uk
+ABSTRACT
+LLMs now prove hard theorems in Lean. Can they also design algorithms and
+prove their correctness and efficiency? LLM-guided design of optimisation heuris-
+tics (such as AlphaEvolve) is purely empirical. Automated theorem provers with
+LLMs prove given statements. So far, there has been little evidence that LLMs can
+do both: design an algorithm and guarantee its efficiency by a mathematical proof.
+We present a staged pipeline modelled after research methodology in design and
+analysis of evolutionary algorithms. The agent proposes black-box optimisation
+algorithms, and Lean guards filter out flawed designs. The agent then defines
+a potential function and proves drift bounds that guarantee an expected runtime
+improvement over the baseline algorithm. At no point in the pipeline are the
+algorithms compared empirically. The agent generates a black-box optimisation
+algorithm with expected runtime O(n2) on a CYCLEUNCOVER problem, where
+the classical (1+1) EA needs runtime eΩ(n). The pipeline also designs and analyses
+a black-box optimisation algorithm for integer-valued submodular minimisation
+with expected runtime O(n2+2c), and it achieves the classical runtime O(n2) on
+LEADINGONES. Across 8 problem classes, 12 of 15 runs with frontier models
+complete the pipeline with a machine-checked expected-runtime bound. In 9 of
+them the bound is polynomial without relying on offline computation, which the
+black-box model does not charge. An ablation study shows that removing the
+staging and asking the agent to zero-shot an algorithmic design with a runtime
+guarantee leads to a copy of the seeded baseline algorithm (random search) or to
+incomplete proofs. Open-weight models (Goedel-Prover-V2-32B and Gemma 4)
+did not complete the pipeline. Our study suggests that machine-checked specifica-
+tions in Lean can replace empirical evaluation in open-ended algorithm discovery.
+To the best of our knowledge, this is the first example of an automated pipeline that
+designs efficient black-box optimisation algorithms with machine-checked runtime
+bounds in Lean.
+1
+INTRODUCTION
+From the perspective of theoretical computer science, algorithm design must produce two artefacts:
+First, the algorithm itself, a finite sequence of instructions that when executed in a computational
+model transforms within a finite number of steps any problem instance (the input) into an output
+(the solution) (Knuth, 1997). Secondly, the analysis of the algorithm, a mathematical proof that the
+algorithm produces the correct output on every problem instance, and a guarantee for the amount of
+computational resources required by the algorithm to produce that output (its complexity). In the
+context of machine learning, analysis also involves guaranteeing additional algorithmic properties,
+such as convergence rates, and regret and/or generalisation bounds. Inventing new and better
+algorithms involves an iterative developmental process between the two artefacts: a new candidate
+design drives the analysis in a certain direction, and obstacles in completion of the analysis can lead
+to insights into problem structure which motivate alterations to the algorithm design. The high cost
+and deep expertise needed for traditional algorithmic design have motivated research into automated
+1
+arXiv:2610.35595v2  [cs.AI]  27 Oct 2026
+
+
+--- Page 2 ---
+Preprint
+design of heuristics. Recent LLM-based heuristic design approaches evaluate a candidate pool of
+heuristics on benchmark functions, and well-performing heuristics are varied through LLM-prompts
+to produce better ones. While this has been successful in many domains, the methodology is highly
+empirical and does not lead to any guarantees on the correctness or performance of the heuristics
+produced.
+It is a significant open problem whether AI agents can carry out algorithmic design as seen from
+theoretical computer science. It has been argued that automated theorem proving (ATP) is challenging
+for AI, because proofs are either correct or incorrect, not in-between. Furthermore, the space of
+proofs is infinitely large (Buzzard, 2024). Formal algorithmic design goes beyond ATP, because it
+requires both navigating a space of algorithmic designs and automatically proving properties about
+these. Yet, the improvement in mathematical capability of frontier AI models over the last years has
+been remarkable. Long-standing conjectures have been closed using publicly available reasoning
+models with Lean-checked proof certificates (Sothanaphan, 2026). The time and cost needed to
+rigorously prove non-trivial mathematical statements have fallen significantly.
+We take inspiration from the field of runtime analysis of evolutionary algorithms which has a
+well-defined approach to design and analysis. The field requires that algorithms fit in a black-box
+optimisation framework (Droste et al., 2006) (more often called the query model in TCS) where
+optimisation is formulated as an interaction between an oracle which knows the function to be
+optimised, and an algorithm which queries the oracle for fitness values. The field has developed a
+small number of highly generic mathematical tools that aid in the analysis. In particular, we build on
+drift analysis (Hajek, 1982; He & Yao, 2001) which measures the progress of the algorithm with a
+potential function. The potential function, which is introduced for the purpose of the analysis and
+is not part of the algorithm itself, maps the state of the algorithm into a potential value. Bounds on
+the runtime can be obtained from properties of the distribution of the drift (change in potential per
+oracle query). The black-box model allows for an enormous variety of algorithms, most of which are
+useless. To constrain algorithm search, we use Lean guards to filter out provably flawed designs. We
+only allow algorithms that are able to visit all parts of the search space, that use randomness, and that
+take into account fitness responses from the oracle. The full staged pipeline is shown in Figure 2.
+The pipeline is seeded with a problem card that provides the definition of the problem, its problem
+instances, and basic properties. Additionally, the pipeline is seeded with an initial algorithmic design
+with a stated runtime bound. In all the experiments described here, we use uniform random search as
+the initial algorithm, with expected runtime O(2n). The staged pipeline consists of some informal
+stages where an informal model produces one or more prose descriptions of designs. There are also
+formal stages where the agent needs to synthesise a definition or a proof that is then verified by
+Lean. In case Lean reports a failure, the formal stage is repeated, until it backtracks (determined
+by a Luby sequence (Luby et al., 1993)), or the formal stage passes. Some formal stages are gates
+to filter out flawed designs, others collect definitions that are used later, e.g., the definition of the
+algorithm or the potential. If a run reaches the end of the pipeline, it obtains an algorithm Ai+1 with a
+guaranteed improved runtime compared to algorithm Ai. The pipeline can be looped, e.g., producing
+an algorithm Ai+2 which beats Ai+1, and so on. In most of the experiments described here, we make
+one iteration of the loop; two runs iterate it for three and five generations.
+Contributions.
+To our knowledge, we propose the first automated system for formal design and
+analysis of black-box algorithms for pseudo-Boolean optimisation. The system does not involve any
+empirical evaluation or comparison of algorithms. The entire design process is driven by informal
+algorithm proposals followed by mathematical formalisation and analysis in Lean. Our contributions
+are:
+• We formalise the human process of designing and analysing black-box optimisation algo-
+rithms through a staged pipeline which combines LLMs with Lean.
+• We demonstrate that an agent using the staged pipeline is able to design efficient black-box
+algorithms with associated machine-checked runtime bounds in Lean for a range of problems.
+On CYCLEUNCOVER, the constructed algorithm has expected polynomial runtime, whereas
+the classical (1+1) EA has exponential runtime. The agent is able to exploit structure in
+anonymised problem classes.
+• We show through ablation studies that without the staged pipeline, the agent fails to construct
+efficient algorithms.
+2
+
+
+--- Page 3 ---
+Preprint
+Table 1: Overview of some related work in automating the design and formal analysis of algorithms.
+The first group machine-checks analyses of human-designed algorithms. The second group produces
+machine-checked proofs, but of a theorem or specification given to it. The third group discovers
+algorithms, but validates them only empirically. This work lies at the intersection: the algorithm is
+proposed by an LLM, its analysis is produced by an LLM, and the property machine-checked is the
+expected runtime of a stochastic process.
+Work
+Algorithmic
+artefact
+Process
+Designed
+by
+Analysed
+by
+Machine-checked
+property
+Li et al. (2024)
+first-order convex
+methods
+deterministic
+human
+human
+convergence rate
+Vajjha et al. (2021)
+value / policy
+iteration
+stochastic (MDP)
+human
+human
+convergence
+Sch¨affeler &
+Abdulaziz (2025)
+approximate policy
+iteration
+stochastic (MDP)
+human
+human
+convergence
+Ospanov et al.
+(2025);
+Varambally et al.
+(2025); Li et al.
+(2026)
+(proof / code search)
+n/a
+n/a
+LLM
+given theorem or
+code specification
+Romera-Paredes
+et al. (2024);
+Novikov et al.
+(2025); Lange
+et al. (2025)
+heuristics,
+constructions
+—
+LLM
+—
+none (empirical
+validation)
+van Stein & B¨ack
+(2025)
+black-box
+optimisation
+algorithms
+(metaheuristics)
+stochastic
+LLM
+—
+none (empirical
+benchmarking)
+This work
+black-box
+optimisation
+algorithms
+stochastic
+LLM
+LLM
+correctness &
+expected runtime
+2
+RELATED WORK
+Research on automating the design and analysis of algorithms can be classified according to the level
+of automation in the design and the level of automation and rigour in the analysis (see Table 1). Firstly,
+there are efforts to formalise existing (informal) mathematical analyses of algorithms manually in
+proof assistants such as Lean, Coq or Isabelle/HOL. These contributions have the same strong benefits
+as formalising any other type of informal mathematics in Lean, including enabling machine-checked
+proofs, curation of a digital library of mathematical results, and providing a foundation for machine-
+generated mathematics (Buzzard, 2024). Recent efforts in this direction include Li et al. (2024)
+who focused on first-order convex optimisation methods, with Lean proofs of convergence rates for
+some function classes. They considered deterministic algorithms, and the proofs therefore avoid
+technical challenges arising from stochasticity. In contrast, there are also Isabelle/HOL formalisations
+of complexity analysis of randomised tree data structures (Eberl et al., 2020). Kaminski et al. (2017)
+introduced a calculus for formally deriving the expected runtime of probabilistic programs, such as
+the coupon collector process. Recent formalisations in machine learning also consider stochastic
+effects (Vajjha et al., 2021). Sch¨affeler & Abdulaziz (2025) analysed convergence of value and
+policy iteration for finite-state Markov decision processes. Other work considers properties of neural
+networks, e.g., formalising a classic result about the expressive power of depth in neural networks
+(Cohen et al., 2016; Bentkamp et al., 2019). In contrast to our work, these works consider pre-
+existing algorithms and proofs, and proofs are human-designed. Secondly, the area of LLM-assisted
+automated theorem proving in Lean has gained significant momentum recently, with breakthrough
+results announced during Summer/Autumn 2026. There are recent examples of semi-automatic
+algorithm design and proof generation where humans with assistance from frontier models design
+new algorithms with Lean proofs. Thirdly, there is a large body of research where algorithm design is
+3
+
+
+--- Page 4 ---
+Preprint
+automated via LLMs, but where evaluation of candidate algorithms lacks machine-checked proofs
+and is entirely empirical (Liu et al., 2026). Systems such as AlphaEvolve (Novikov et al., 2025),
+ShinkaEvolve (Lange et al., 2025), LLaMEA (van Stein & B¨ack, 2025), and EoH (Liu et al., 2024)
+formulate algorithm design as a search problem where candidate algorithms are evaluated empirically
+on a set of benchmark functions, and an LLM is used to generate algorithm variants. These systems
+do not provide any machine-checked guarantees. Related approaches in highly restricted problem
+domains where correctness can be checked without formal proofs include AlphaTensor, which
+optimises matrix multiplication algorithms via reinforcement learning (Fawzi et al., 2022).
+Apart from automation of algorithmic design and analysis, there are other relevant works. An orthog-
+onal task to algorithm design is problem formulation and modelling. Robbins et al. (2026) proposed
+FLARE to certify in Lean the correctness of mixed integer linear program (MILP) reformulations
+of combinatorial optimisation problems. Another related area is automated software verification.
+Here, the goal is to synthesise proofs (e.g., in Lean) that a piece of software satisfies a specification
+(pre-condition and post-condition) (Li et al., 2026). More ambitiously, vericoding studies AI systems
+that take formal specifications as inputs and produce software along with proofs that the software
+satisfies the specification (Bursuc et al., 2025).
+3
+RUNTIME ANALYSIS OF BLACK-BOX OPTIMISATION ALGORITHMS
+3.1
+BLACK-BOX OPTIMISATION ALGORITHMS
+To formally define a design space of optimisation algorithms, we will adopt the so-called black-box
+scenario from theory of discrete evolutionary algorithms (Droste et al., 2006), also called query (or
+decision tree) complexity in theoretical computer science (Buhrman & de Wolf, 2002). This scenario
+describes a broad class of algorithms by defining the goal of the algorithm, what information is
+available to an algorithm, what actions the algorithm can take, and how its runtime is measured. The
+algorithm is given a class of real-valued fitness functions F over a search space X. An adversary
+picks a function f ∈F, f : X →R, and the goal of the algorithm is to find an optimal search point x∗
+such that f(x) ≤f(x∗) for all x (i.e., maximisation of f). In each iteration t, the algorithm queries a
+search point xt based on its previous history, and obtains from the oracle the function value f(xt).
+The search point xt along with its fitness f(xt) is added to the history, and the process repeats until an
+optimum is found. The running time of the algorithm is defined as the number of times the algorithm
+queries the oracle until the algorithm queries an optimal search point for the first time. This definition
+is based on the assumption that the evaluation of the fitness function is the most time-consuming
+part of the algorithm. Following the literature on runtime analysis of evolutionary algorithms, the
+algorithm does not specify a termination criterion. A termination criterion could be specified, but it
+would not impact the runtime of the algorithm as defined below. The entire interaction between the
+oracle and the optimisation algorithm is given in Algorithm 1. Within the black-box scenario, the
+algorithm design is fully specified by a tuple A = (Y, init, query, step), which will be described
+below. Executing an algorithm A involves executing Algorithm 1 with the given tuple A.
+Algorithm 1 Black-Box Optimisation Algorithm
+Require: Fitness function f : X →R; random sequence z0, z1, . . . ∈Z with zt(i) ∼Unif([0, 1])
+i.i.d. for all t, i ∈N; algorithm A = (Y, init, query, step) with init : Z →Y,
+step : Z × Y × R →Y and query : Y →X.
+1: Initialise algorithm state y0 := init(z0)
+2: for t = 0 to ∞do
+3:
+Select search point xt := query(yt)
+4:
+Query oracle to obtain fitness ft := f(xt)
+5:
+Compute the next state yt+1 := step(zt+1, yt, ft)
+6: end for
+To allow the algorithm to make random decisions, the algorithm is provided with a two-way infinite
+random source (zt)t∈N, where for each time step t ∈N and index i ∈N, zt(i) is a uniformly
+distributed value in [0, 1]. We assume an underlying probability triple (Ω, G , Pr) and a filtration
+(Gt)t∈N to which (zt)t∈N is adapted. An algorithm A is associated with a state space Y where yt ∈Y
+corresponds to the memory accessible to the algorithm at iteration t. The initial state is obtained
+4
+
+
+--- Page 5 ---
+Preprint
+directly using the random source init(z0). In every iteration t, the algorithm uses the current state
+yt to decide which search point xt to query next. The algorithm transitions to the next state yt+1 by
+taking into account the next random value zt+1, the previous state yt, and the objective value f(xt)
+of the query corresponding to the current state.
+Following (Droste et al., 2006), the running time of algorithm A on f can then be defined by
+TA,f = min{t ∈N | ∀x ∈X, f(xt) ≥f(x)}. By construction (xt)t∈N and (yt)t∈N are adapted to
+(Gt)t∈N, and TA,f is a stopping time. The worst-case expected running time of A over a class of
+functions F is then TA,F = maxf∈F E [TA,f] . All aspects of the above formalisation are indexed
+by an implicit problem instance size n ∈N. In particular, for each instance size n, we assume a
+corresponding search space Xn, a fitness function fn : Xn →R, an algorithm An, and a worst-case
+expected running time TAn,Fn. We are primarily interested in the asymptotic growth of TAn,Fn as a
+function of n. Note that this formalisation guarantees that the algorithm is truly black box: it must be
+defined independently of the objective function f. Yet, due to the free choice of Y and init, query,
+step, the framework is highly general and can express most commonly used black-box optimisation
+algorithms, such as simulated annealing, population-based evolutionary algorithms, and estimation of
+distribution algorithms.
+3.2
+DRIFT ANALYSIS
+Drift analysis (Hajek, 1982; He & Yao, 2001) is the main technique used to derive bounds on the
+runtime TA, and it is incorporated into our pipeline. Most evolutionary algorithms are Markov
+processes over their state space Y: the state yt ∈Y of the algorithm at iteration t completely
+determines the distribution of the state yt+1 in the next iteration. In principle, Markov chain theory
+could be applied to estimate the hitting time of the process from its state transition matrix. However,
+the state spaces induced by the algorithms are often so large that this approach becomes impractical.
+Instead, one can introduce a potential function Φ : Y →R which given the current state of the
+algorithm measures how far the algorithm is from reaching its goal, i.e. Zt = Φ(yt). Note that the
+potential function is not part of the design of the algorithm, but is only used for the drift analysis.
+Designing a good potential function is often the most challenging part of the analysis of the algorithm.
+Given information about the distribution of the change in potential per time step, i.e., the drift
+Zt+1 −Zt of the process, drift theorems provide statements about the long term properties of the
+process. Informally, the additive drift theorem states that if the expected drift is at least ε, then the
+expected time to reach distance zero is Z0/ε. The proof of the theorem (see Corus et al., 2018) uses
+standard arguments from martingale theory; the precise statement is Theorem B.1 in Appendix B. A
+Lean formalisation of the general additive drift theorem will be published in a separate manuscript. It
+is proved in the Lean library on which the pipeline builds, not assumed: for every run in which we
+printed the axioms (rows 2–5 and 15 of Table 2), the final runtime theorem depends only on Lean’s
+standard axioms propext, Classical.choice and Quot.sound.
+Theorem B.1 requires evaluation of an expectation conditional on a σ-algebra. To shield the agent
+from proving theorems involving measure theory, we introduce the following simplified theorem
+which implies condition 1 in Theorem B.1. Proving drift condition 1 is now reduced to proving bounds
+on the probabilities of improving and worsening steps. To satisfy condition 2 in the additive drift
+theorem, we assume the potential is bounded in [0, 1]. Finally, to prove condition 3, i.e., integrability
+of the runtime, we require a lower bound of jumping directly to the target from every iteration. The set
+of conditions exposed in the pipeline is illustrated in Figure 1. Together, they yield the runtime bound
+4/(εp) used in the final stage of the pipeline. The proof of Corollary 3.1 is given in Appendix B.
+Note that the corollary states probabilities in terms of expectations of indicator random variables,
+while the Lean formalisation uses probabilities directly.
+Corollary 3.1. Assume that for all t ∈N, Xt ∈[0, 1] and
+(1)
+1{t<T } p ≤E
+
+1{t<T }1{Xt+1≤Xt−ε} | Gt
+
+,
+(2)
+E
+
+1{t<T }1{Xt<Xt+1} | Gt
+
+≤1{t<T } p/2,
+(3)
+E
+
+1{t<T }1{Xt+ε<Xt+1} | Gt
+
+≤1{t<T } εp/4.
+Then E
+
+1{t<T }(Xt+1 −Xt + εp/4) | Gt
+
+≤0 for all t ∈N.
+5
+
+
+--- Page 6 ---
+Preprint
+Good(y): Φ′ ≤Φ(y) −ε
+Worsen(y) ⊇{Φ′ > Φ(y)}
+BigWorsen(y) ⊇{Φ′ > Φ(y) + ε}
+no condition
+0
+Φ(y) −ε
+Φ(y)
+Φ(y) + ε
+1
+Φ
+Pr[Jump(y)] ≥pjump (next query optimal)
+Pr[Good(y)] ≥p
+Pr[BigWorsen(y)] ≤εp/4
+Pr[Worsen(y)] ≤p/2
+Figure 1: Drift conditions checked by the pipeline (Corollary 3.1, Stages 10f–10i) at a reachable,
+non-optimal state y. The sets of random draws Good(y), Worsen(y), BigWorsen(y) and Jump(y)
+are shown by where they send the next potential Φ′; the arrows give the required probability bounds,
+which together yield E [TA] ≤4/(εp).
+Informal design Ai+1
+Algorithm
+Ai
+Potential
+Φi
+Runtime
+E[TAi] ≤hi(n)
+Formal design Ai+1
+Informal potential Φi+1
+Formal potential Φi+1
+Φi+1 certificates
+Drift analysis
+Ai+1 certificates
+Algorithm
+Ai+1
+Potential
+Φi+1
+Runtime
+E[TAi+1] ≤hi+1(n) ≤(1 −δ )hi(n)
+0
+1
+1c-8
+9a
+9b
+9c-9f
+Informal
+drift argument
+10a
+10b-10j
+Problem card
+Figure 2: A simplified overview of the staged pipeline. The pipeline is seeded with a problem card,
+an algorithm Ai, and a proof of its running time. The pipeline produces a new algorithm Ai+1 with
+improved runtime bound relative to algorithm Ai. Table 3 provides detailed descriptions of the
+pipeline stages shown in red.
+4
+THE STAGED PIPELINE
+We now describe the motivation and details of the staged pipeline shown in Figure 2. The task of
+zero-shotting an algorithmic design along with its runtime analysis is challenging. We therefore break
+down this task into multiple stages according to how a human researcher in theory of evolutionary
+algorithms would solve the problem. Starting from an initial algorithmic design we want to improve,
+we make some informal design proposals. We describe the best algorithm formally in pseudo-code,
+then design a potential function which measures its progress, and finally apply a drift theorem. The
+most challenging aspects of this process are to design the algorithm and choose the potential function.
+The space of algorithmic designs allowed by our framework is vast. We therefore propose a staged
+pipeline where candidate designs are filtered through formal proof obligations via proof guards. The
+formal guards are designed to filter out flawed designs. The implementation, with its two backends
+(CLI and vLLM) and the Kimina Lean server, and the structure of the stage prompts are described in
+Appendix C.
+We now describe the stages in the pipeline informally. The pipeline has informal stages where the
+agent proposes in English an informal design (either of an algorithm or potential function), and formal
+stages that are either definitions or formal guards. Formal statements are stated fully in Table 3 in
+Appendix A.
+4.1
+ALGORITHM DESIGN (STAGES 0–8)
+Stages 0–8 produce an algorithmic design along with proofs about its properties.
+Stage 0
+(DesignLock): We ask the agent to provide an informal algorithm design along with justifi-
+cation why it would complete the full pipeline. When using frontier models (rows 1–15 in Table 2),
+6
+
+
+--- Page 7 ---
+Preprint
+the agent is asked to sketch at least one alternative design before committing to one design in a single
+response. With the open-weight models (rows 19–21 in Table 2), the informal model generates eight
+proposals sequentially. Each proposal is prompted with all previous ones and asked to differ from
+them. A winning proposal is then selected through a knockout tournament. The proposals were
+compared in pairs by the informal model, and the winners advance until one design remains. Stages 9a
+and 10a use the same procedure in these runs. Stage 1 (ConstructAlgorithmComponents):
+We ask the agent to formalise in Lean the algorithm as a tuple A = (Y, init, step, query). Stage 1c
+(StepMeasurability): We require that the step function is a measurable function. This condi-
+tion will be required for the drift analysis later in the pipeline. Stage 2 (Completeness1): We
+require that the algorithm must be able to query any search point in every iteration. More precisely, for
+every search point x ∈X, and for every reachable state y ∈Y, there exists a random input z ∈Z and
+fitness value f ∈R, such that if the algorithm receives fitness f for the query associated with state y,
+it will transition on random input z to a state where x is queried. This condition is satisfied by almost
+all evolutionary algorithms, e.g., those that involve bit-wise mutation. Note that the completeness
+condition can be trivially satisfied for an arbitrary algorithm by querying a uniform search point with
+some non-zero (but perhaps very small probability) in every step. The completeness condition is not
+always necessary for an efficient algorithmic design. However, the condition makes it straightforward
+to prove that the algorithm eventually queries the optimal search point (i.e., the algorithm is correct),
+and that for finite search spaces, the algorithm has a finite expected hitting time which is required
+by our formulation of the drift theorem. The extra assumption that y is a reachable state and not an
+arbitrary state was included to avoid imposing the condition on inconsistent states that the algorithm
+never visits. For example, the state of the UMDA algorithm is a probability vector p ∈[0, 1]n where
+pi, i ∈[n], is the probability of sampling a 1-bit in position i. The algorithm maintains the invariant
+pi ∈[1/n, 1 −1/n] in order not to get stuck in a particular bit-position. Stage 3 (NonAbsorbing):
+We require that the algorithm uses the random input. More precisely, for every reachable state y ∈Y,
+and any oracle response f ∈R, there exist two random inputs z1, z2 ∈Z such that the algorithm in
+the next iteration makes different queries on random input z1 and z2. This condition is not necessary
+to have an efficient algorithm. However, the condition filters out many poor algorithms, such as those
+that only return a constant value. Stage 4 (NotRandomSearch): We require that the algorithm
+can reach a state where the query distribution is different from the uniform distribution (random
+search). Random search has expected running time 2Ω(n), and any efficient algorithm must have
+a different query distribution than random search. We observed that weaker models applied to the
+pipeline with random search seeded as algorithm0 tended to produce designs that were essentially
+random search. In an early version of the pipeline, we did not include the reachable state assumption
+in the condition. We discovered that this would allow the model to cheat by devising a state space
+with unreachable witness states Y which could serve as witnesses for the NotRandomSearch
+and other properties. Stage 5 (Adaptiveness): We require that the state update of the algorithm
+depends on the fitness responses from the oracle. Clearly, no algorithm which completely ignores
+the oracle can be an effective optimiser on even simple problem classes such as ONEMAX. Stage 6
+(QueryNonInjectivity): We require that there exist two different states which lead to the
+same query, i.e., the function query is not injective. This condition ensures that the state carries
+information beyond the current query, such as the best search point or fitness seen so far, or a learned
+parameter, and filters out designs whose state is just the current search point. The remaining algorithm
+construction stages (Stages 7–8) are designed to package all the definitions into a Lean structure.
+This will allow the later proof infrastructure to process the algorithmic design as one mathematical
+object. These stages also include measurability requirements, e.g., that all the components of the
+algorithm are measurable functions. The next main part is the drift analysis. We would like the
+agent to prove that the three conditions of Corollary 3.1 are satisfied, where Xt corresponds to the
+potential of the algorithm at iteration t. The pipeline asks the agent to, for every state y, define three
+subsets of random inputs Good(y), Worsen(y), BigWorsen(y) corresponding to the three conditions
+respectively, drift parameters ε and p, and a jump probability lower bound pjump.
+4.2
+POTENTIAL FUNCTION (STAGES 9A–9F)
+Stages 9a–9f produce a potential function used to measure the progress of the algorithm. Stages 9a–
+9b (PotentialDesign and DefinePotential): In the informal Stage 9a, the agent produces
+several candidate potential functions together with the parameters above and an informal “drift
+story” explaining why the potential function applied to the algorithm has drift towards the optimum.
+For experiments with frontier models (Rows 1–15 in Table 2), the agent proposes three candidates
+7
+
+
+--- Page 8 ---
+Preprint
+one after another, each critiquing the earlier ones, and ends its response with a ranking. The
+top-ranked candidate is then formalised in Stage 9b. We require that the value of the potential is
+always in the interval [0, 1]. Although not required for drift analysis, this requirement which is
+not difficult to satisfy through normalisation simplifies the formal drift analysis machinery later
+in the pipeline. Stage 9c (PotentialOpt): We require that the potential of a state y is 0 if and
+only if the algorithm queries an optimal search point in state y. This is a necessary condition for
+the drift theorem to give a meaningful statement about the runtime of the algorithm. Stage 9d
+(PotentialFineGrained): The seeded design uses a potential function with only the values 0
+and 1, where 0 corresponds to optimal states and 1 all other states. This is sufficient to prove runtime
+bound for random search, however it will be insufficient to capture the gradual progress of an efficient
+algorithm. Experiments with weaker models often reproduced the two-valued potential function. We
+therefore added the formal guard that the potential function must contain a value between 0 and 1.
+Stage 9e (PotentialMeasurability): We require that the potential function is measurable.
+This property is needed for the later drift analysis. The remaining guards in this part of the pipeline
+involve proving measurability properties of the potential function, and packaging into a Lean structure
+for easy handling later (Stage 9f, ConstructPotentialStructure).
+4.3
+DRIFT CERTIFICATES AND RUNTIME BOUND (STAGES 10A–10J)
+Stages 10a–10j prove drift conditions for the potential and obtain a final runtime bound by applying
+a drift theorem. Stage 10f (PositiveDrift): We require that for any reachable, non-optimal
+state y, if the algorithm receives a random input z ∈Good(y), then the potential decreases by at
+least ε in the next iteration. Stage 10g (NegativeDriftAndJump): We require that for any non-
+optimal reachable state y and any random input z ∈Z, if the potential increases in the next iteration,
+then z belongs to Worsen(y), and if it increases by more than ε, then z belongs to BigWorsen(y).
+Furthermore, for any reachable state y, if the algorithm receives input z ∈Jump(y), then the
+potential in the next iteration is 0. In other words, the algorithm jumps directly to an optimal search
+point whenever it receives a random input in Jump(y). Stage 10h (DriftSetMass): We require
+that, for every reachable, non-optimal state y, the probabilities that the random input lies in Good(y),
+Worsen(y) and BigWorsen(y) satisfy conditions (1)–(3) of Corollary 3.1 (Figure 1). Stage 10i
+(JumpMass): We require that from all states y, pjump ≤Pr (z ∈Jump(y)). When satisfied, this
+condition implies that the runtime of the algorithm is stochastically dominated by a geometrically
+distributed random variable with success probability pjump. The expected runtime is therefore finite,
+which implies one of the conditions of the additive drift theorem. The only requirement on pjump is
+that it is positive. Stage 10j (RuntimeBound): The final stage is an application of a runtime bound
+E [TA] ≤4/(εp) that follows immediately from the previously collected proof certificates.
+5
+RESULTS
+Table 2 summarises all runs; Figure 4 in Appendix G shows how each run progressed through the
+pipeline. Across the completed runs, the drift and runtime stages (10a–10j) take about half of the
+wall-clock time, and the incomplete frontier-model runs all stop at a drift stage, most often the mass
+bound of Stage 10h (Appendix G).
+5.1
+THEORETICAL BENCHMARK FUNCTIONS
+Runtime analysis of new evolutionary algorithms is often initiated on simple theoretical bench-
+mark functions which have a clear structure. Here, we consider the three most common functions,
+ONEMAX, LEADINGONES, and JUMPk, which are defined in Appendix D.
+The ONEMAX value of a bitstring is the number of positions in which it differs from some hidden
+bitstring z. Standard evolutionary algorithms have expected runtime O(n log n), which can be seen
+via a multiplicative drift argument (Doerr et al., 2012): The probability that a random bit-flip in the
+current bitstring improves the fitness is proportional to the number of bits it has in common with z.
+The optimal algorithm runs in Θ(n/ log n) queries by querying the fitness of Θ(n/ log n) uniformly
+sampled bitstrings from which the hidden bitstring z, and the optimum, can be determined with high
+probability. One generation of the staged pipeline rediscovers a variant of the (1+1) EA with mutation
+rate 1/(n+1) rather than the standard 1/n. The true expected runtime of this algorithm is O(n log n),
+8
+
+
+--- Page 9 ---
+Preprint
+Table 2: All runs. Each row is one pipeline session driven by the named model. Rows 1–18 use
+the CLI backend, through which the model exchanges prompts and responses with the pipeline
+over stdin/stdout; rows 19–21 use the vLLM backend (Appendix C). “Staged” is the full pipeline
+of Table 3; “zero-shot” is the one-stage ablation of Section 5.5. Rows 16–21 are ablations: the
+zero-shot pipeline, or a weaker model; rows 19–21 use open-weight models run on HPC clusters
+(Appendix F.1). Complete means that every stage was machine-checked with no sorry; otherwise
+the last stage passed is given in parentheses (the run stopped at the following stage). Order is the
+order of the machine-checked bound on E [TA], which holds for all n ≥3 and every instance (for
+staged runs it is 4/(ε1p1)). Tokens is the number of output tokens (including reasoning) generated
+by the model that drove the run, from launch to the last accepted stage; n/r means not recorded.
+Lean is the number of lines of Lean code the model contributed to the accepted proof, excluding
+blank lines, comments, the prompt, the API and the problem card. LO is the fitness of the elitist
+reference point; the LEADINGONES card marked “e−1 lemma” additionally supplies the inequality
+e−m/(r−1) ≤(1 −1/r)m. k is the bandwidth for BANDWIDTHVC and the gap width for JUMPk,
+and nc bounds the values of a SUBMODULARMIN instance. #gen is the number of generations of
+the pipeline used to obtain the result; for a run with several generations, the row reports the last
+generation only (Tokens and Lean are those of that generation). Pseudocode, potentials and constants
+of every run are given in Appendix F.
+# Problem
+Model
+Pipeline
+#gen Algorithm
+Complete
+Order
+Tokens
+Lean
+App.
+1 ONEMAX
+Opus 5
+staged
+1
+(1+1) EA, rate
+1
+n+1
+yes
+O(n3)
+n/r
+2,036
+F.2
+2 LEADINGONES
+Opus 5.5
+staged
+1
+fitness-dependent rate
+1
+LO+2
+yes
+O(n3)
+160k
+1,262
+F.3
+3 LEADINGONES, e−1
+lemma
+Opus 5.5§
+staged
+1
+fitness-dependent rate
+1
+LO+2
+yes
+O(n2)
+191k
+1,553
+F.4
+4 JUMPk
+Opus 5.5
+staged
+1
+(1+1) EA, rate
+1
+n+1
+yes
+O(nk+2)
+144k
+1,086
+F.5
+5 JUMPk, e−1 lemma
+Opus 5.5
+staged
+3
+rate cycling with a learned
+phase bit
+yes
+O(nk+1)
+396k
+1,335
+F.6
+6 CYCLEUNCOVER
+Fable 5.1
+staged
+1
+cycle walk
+(learn-then-solve)
+yes
+O(n2)
+538k
+2,373
+F.7
+7 WELLCOVEREDVC
+Fable 5.1
+staged
+1
+fitness-directed asym.
+mutation
+yes
+O(n4)
+366k
+1,756
+F.19
+8 WELLCOVEREDVC,
+anonymised card
+Fable 5.1
+staged
+1
+polarity-adaptive asym.
+mutation
+no (10g)
+–
+275k
+1,282
+F.17
+9 WELLCOVEREDVC,
+anonymised card
+Opus 5.5‡
+staged
+1
+regime-switching asym.
+mutation
+yes
+O(n4)
+245k
+1,530
+F.18
+10 VERTEXCOVER,
+flat fitness
+Fable 5.1
+staged
+1
+edge probing + exact
+solve
+yes
+O(n3)
+400k
+1,889
+F.10
+11 BANDWIDTHVC,
+flat fitness
+Fable 5.1
+staged
+1
+window probing + exact
+solve
+yes
+O(kn)
+460k
+1,658
+F.11
+12 BANDWIDTHVC
+Fable 5.1
+staged
+1
+direction-adaptive asym.
+mutation
+no (10g)
+–
+402k
+1,202
+F.12
+13 BANDWIDTHVC
+Fable 5.1
+staged
+1
+fill-then-prune mutation
+no (10b)
+–
+192k
+510
+F.14
+14 BANDWIDTHVC
+Opus 5.5
+staged
+1
+window-repair random
+search
+yes
+Θ(2n)
+283k
+1,784
+F.15
+15 SUBMODULARMIN,
+integer-valued
+Opus 5.5
+staged
+5
+Lov´asz subgradient
+descent
+yes
+O(n2+2c)
+1.1M
+2,901
+F.16
+16 CYCLEUNCOVER
+Fable 5.1
+zero-shot
+1
+random search
+yes
+Θ(2n)
+41k
+404
+F.8
+17 CYCLEUNCOVER
+Sonnet†
+staged
+1
+elitist bit-flip (5 designs)
+no (10g)
+–
+n/r
+1,146
+F.9
+18 BANDWIDTHVC
+Fable 5.1
+zero-shot
+1
+(1+1) EA, rate 1
+n
+no
+–
+172k
+112
+F.13
+19 ONEMAX
+Goedel-
+Prover-
+V2-32B
++
+Gemma 4¶
+staged
+1
+per-bit learned bias
+(PBIL-like)
+no (3)
+–
+25.1M
+375
+F.1
+20 ONEMAX
+Goedel-
+Prover-
+V2-32B
++
+Gemma 4¶
+staged
+1
+per-bit learned bias
+(PBIL-like)
+no (3)
+–
+73.1M
+316
+F.1
+21 ONEMAX
+Goedel-
+Prover-
+V2-32B
++
+Gemma 4¶
+staged
+1
+random search (fixed
+biases 1
+2 )
+no (9c)∥
+–
+124.3M
+725
+F.1
+† Model version not recorded in the artefacts. ‡ Candidates for the last five stages were pre-checked directly against the Lean server. §
+Candidates for the last three stages were pre-checked in the same way. ¶ Goedel-Prover-V2-32B for the formal stages (pass@256), Gemma 4
+26B-A4B for the prose stages; earlier versions of the staged pipeline with the same 28 stages; tokens are those of all logged samples of the
+formal model. ∥Passed Stage 4 only through a loophole in that pipeline version (see Appendix F.1). In rows 1–18, all models are Claude models.
+9
+
+
+--- Page 10 ---
+Preprint
+however the agent obtains the weaker (but still mathematically correct) upper bound O(n3). As
+potential function, the agent uses essentially the normalised Hamming-distance to the optimum. The
+weak runtime bound is partly due to the pipeline which forces the agent to use Corollary 3.1 which
+does not allow for multiplicative drift.
+The LEADINGONES value of a bitstring is the number of consecutive bits it has in common with some
+hidden bitstring z, when the bit positions are ordered by a hidden permutation σ. Typical evolutionary
+algorithms have runtime O(n2) which can be seen by an additive drift argument: a random bit-flip in
+a selected bitstring improves its fitness with probability Θ(1/n), and Θ(n) improvements are needed
+to reach the optimum. One generation of the staged pipeline discovers a variant of (1+1) EA, but
+where the mutation rate is chosen as 1/(f(x)+2) where f(x) is the fitness of x. This fitness-adaptive
+mutation rate is nearly identical to the optimal adaptive mutation rate of 1/(f(x) + 1) (B¨ottcher et al.,
+2010). For this algorithm, the agent obtains a sub-optimal runtime of 4(n + 1)(n + 2)2 = O(n3),
+while the true runtime for this algorithm is (e/4)n2(1 + o(1)) (Theorem 5 in (B¨ottcher et al., 2010)).
+When inspecting the drift analysis of the agent, we observed that the missing factor n comes from the
+weak lower bound 1/n ≤(1 −1/r)n−1. We therefore created another problem card which provided
+the inequality 1 −1/r ≥exp(−1/(r −1)). The agent now produced a (1+1) EA-type algorithm
+with the same fitness-dependent mutation rate and runtime 4e(n + 1)(n + 2) = O(n2).
+The JUMPk function takes the value k +ONEMAX, except for non-optimal search points at Hamming
+distance d < k from the optimum which take the value n −ONEMAX. The problem therefore has a
+fitness gap (a local optimum) at distance k from the optimum. Typical evolutionary algorithms have
+runtime O(nk) because they need to flip k bits simultaneously to jump from the local optimum to
+the global optimum. By using more sophisticated diversity and variation operators, it is possible to
+reduce the runtime further. One generation of the staged pipeline discovered a variant of (1+1) EA
+with fixed mutation rate 1/(n + 1). The agent proved a runtime bound of O(nk+2) which is a factor
+of n2 weaker than the true runtime for this algorithm which is O(nk). A factor n was lost due to
+using a weak lower bound pk(1 −p)n ≥pk+1 for p = 1/(n + 1). In a second set of experiments,
+we ran the pipeline for three generations and added the inequality 1 −1/r ≥exp(−1/(r −1)) to the
+problem card. This produced an algorithm with machine-checked runtime O(nk+1).
+5.2
+CYCLEUNCOVER
+The runtime analyses of evolutionary algorithms on ONEMAX, LEADINGONES, and JUMPk are
+widely known. It is likely that the LLMs used in this study have seen many of these during their
+pre-training (although their Lean formalisations are as far as we know not available at the time of
+writing). To rule out the possibility that the agent simply restates Lean formalisations of well-known
+algorithms and analyses, we would like to test the agent on a new problem not previously discussed
+in the literature. We therefore designed CYCLEUNCOVER (defined in Figure 3), which is a problem
+solvable in polynomial time, but not by a typical evolutionary algorithm. The problem is independent
+set on a cycle graph, where the length of the cycle is even by construction. The fitness function is
+defined such that infeasible solutions lead to a deceptive trap at large Hamming distance from the
+optimum. Given the hidden permutation σ, a solution is simply to choose every second vertex along
+the permutation cycle.
+The following theorem states that the classical (1+1) EA has expected exponential runtime on this
+problem (see Appendix E for a proof).
+Theorem 5.1. The expected runtime of the (1+1) EA on CYCLEUNCOVER is eΩ(n).
+The agent produced an algorithm for CYCLEUNCOVER with a machine-checked expected runtime of
+O(n2) (row 6 of Table 2). The algorithm works differently from an evolutionary algorithm: it builds
+up a two-colouring of the graph, and then queries the optimum. The two-colouring is obtained by
+keeping a current vertex u which is coloured, and then by repeatedly sampling uniformly at random a
+vertex v until v is both uncoloured and adjacent to u. This newly found vertex is coloured oppositely
+to u and becomes the new current vertex. To determine whether two vertices u and v are adjacent
+in the graph, the algorithm queries the fitness of the bitstring where only u and v are selected. As
+shown in Figure 3, the fitness is 2 if and only if u and v are connected. After the first step, u has
+at most one uncoloured neighbour, and the probability of sampling one is Ω(1/n). The algorithm
+therefore needs O(n) queries in expectation to obtain the next vertex v. Repeating this procedure
+O(n) times, the algorithm obtains a two-colouring after O(n2) queries in expectation. From the
+10
+
+
+--- Page 11 ---
+Preprint
+σ(1)
+σ(2)
+σ( n
+2 )
+σ( n
+2 + 1) σ( n
+2 + 2)
+σ(n)
+Given a permutation σ : [n] →[n], let h := ⌊n/2⌋
+and define
+count(x) :=
+h
+X
+j=1
+ xσ(j) + xσ(h+j)
+
+guard(x) := ∀j ∈[h], xσ(j) + xσ(h+j) ≤1
+∧xσ(j) + xσ(h+(j mod h)+1) ≤1
+eval(x) :=
+2h + count(x)
+if guard(x)
+count(x)
+otherwise
+Figure 3: CYCLEUNCOVER. Right: problem definition in human-readable form. Left: visualisation
+of an instance for even n (not shown to the agent). The vertices σ(1), . . . , σ(2h) form a cycle of
+even length 2h; for odd n, bit σ(n) does not affect the fitness. The problem is to find a maximum
+independent set of the cycle; an optimal selection, of value 3h, is shown in red.
+complete two-colouring, the algorithm can queries the optimum by choosing only vertices with the
+same colour. Since the cycle has even length, vertices of either colour class is optimal. This result
+suggests that, even for a problem that to our knowledge has not been studied in this form, the pipeline
+can identify the problem structure and provide a tailored and efficient algorithm.
+5.3
+VERTEXCOVER
+We now turn to instance classes of the NP-hard minimum VERTEXCOVER problem. Given an
+undirected graph G = (V, E), the minimum vertex cover problem asks for the smallest subset
+V ′ ⊆V of the vertices such that for each edge {u, v} ∈E, at least one of the vertices u and v
+belong to V ′. This problem is NP-hard, but a simple greedy algorithm returns a 2-approximate
+solution in polynomial time. We do not attempt to design approximation algorithms here, we focus
+on finding a globally optimal vertex cover. We adopt the conventional pseudo-Boolean representation
+of VERTEXCOVER instances. Given a graph with n vertices V = {1, 2, . . . , n}, we encode a subset
+of the vertices V ′ by a bitstring x ∈{0, 1}n, where xi = 1 if and only if vertex i ∈V ′. We adapt the
+multi-objective formulation from (Kratsch & Neumann, 2013) into a single-objective fitness function
+which counts the number of chosen vertices (first term), and the number of uncovered edges (second
+term).
+f(x) = −
+n
+X
+i=1
+xi −(n + 1)
+X
+{i,j}∈E
+(1 −xi)(1 −xj).
+(1)
+Classical EAs applied naively to VERTEXCOVER perform poorly. The (1+1) EA and variants
+thereof need at least exponential time to achieve an approximation factor better than (1 −ε)/ε for
+nδ−1 ≤ε ≤2, i.e., almost arbitrarily bad approximation ratio (Friedrich et al., 2010; Oliveto et al.,
+2008). In contrast, the trivial greedy algorithm obtains a 2-approximation in polynomial time. Using
+more sophisticated EAs and adding more problem-specific information can improve the performance.
+Kratsch & Neumann (2013) used the number of selected vertices as first objective, and the number of
+uncovered edges as second objective. With this formulation, a multi-objective EA obtains an optimal
+vertex cover in expected time O(OPT · n4 + n · 2OP T 2+OP T ), where OPT refers to the size of the
+smallest vertex cover. Using the ILP-relaxation as second objective leads to a lower runtime bound.
+Assuming only problem instances where OPT ≤k for some fixed parameter k yields a polynomial
+runtime, i.e., the algorithm is a fixed-parameter algorithm. OPT cannot be bounded by a constant in
+general instances, and the runtime bound is therefore exponential on the entire problem class.
+We would like to consider non-trivial combinatorial optimisation problems where the agent cannot
+rely on published results from the theoretical literature on black-box optimisation algorithms, or
+on formalisations in Mathlib. We also want to consider problems which we expect to be in P. We
+therefore chose the problem of computing a minimum vertex cover in well-covered graphs, which we
+call WELLCOVEREDVC. Recall that a vertex cover is minimum if the graph admits no vertex cover
+with fewer vertices. A vertex cover is called minimal (not to be confused with minimum) if no strict
+subset of V ′ is a vertex cover. By definition, a minimum vertex cover is always a minimal vertex
+11
+
+
+--- Page 12 ---
+Preprint
+cover, but the converse is not true for all graphs. Graphs where the minimum and minimal vertex
+covers coincide are called well-covered graphs.
+The fitness function in Eq. (1) combined with the choice of graph class gives the problem several
+structural properties that are helpful for search heuristics, and which are provided to the agent in
+the problem card. Given two search points with different number of uncovered edges, the one with
+fewer uncovered edges always has higher fitness (exposed as lemma wc F lt of uncovered lt
+in the problem card). Also, if {i, j} ∈E is an uncovered edge in x, then flipping bit xi reduces the
+number of uncovered edges (exposed as lemma wc uncovered flip lt in the problem card). It
+is also straightforward to see that f contains no local optima. Consider any non-optimal search point
+x. If x is not a vertex cover, then there must exist an uncovered edge {i, j}, and a search point x′
+obtained by flipping bit i or bit j in x has strictly higher fitness than x. Assume the other case, that x
+is a vertex cover but not a minimum vertex cover. Then since the graph is well-covered, x is also
+not a minimal vertex cover. Therefore, there exists a vertex i such that xi = 1 and flipping bit i in x
+produces a strictly fitter vertex cover x′. The fitness therefore increases.
+In a first set of experiments, we provided a problem card containing all the structural information
+described above. In this case, the agent produced an optimisation algorithm similar to a (1+1) EA, but
+with regime-changing asymmetric mutation rates. As long as the current search point is not a vertex
+cover (revealed by the fitness being less than −n), the mutation-rates were chosen asymmetrically
+so that flipping 0-bits into 1-bits was twice as likely as the reverse. Once the current search point
+represented a vertex cover, the mutation-rate was chosen asymmetrically in the opposite direction,
+making bit-flips from 1 into 0 twice as likely as bit-flips from 0 into 1. The overall runtime obtained
+was O(n4). The problem card in the first set of experiments revealed all the structural information
+needed to design an efficient algorithm. In a second set of experiments, we created an anonymised
+problem card which does not mention the terms vertex cover or well-covered graphs, only providing
+raw fitness definitions. An experiment with Fable 5.1 failed to obtain an algorithm in this setting.
+However, Opus 5.5 successfully generated a (1+1) EA with regime-changing mutation rates. This
+time, the asymmetry between the rates was more pronounced, with the high mutation rate a factor
+Θ(n) larger than the small rate. Overall, the obtained runtime was O(n4).
+The problem BANDWIDTHVC is VERTEXCOVER restricted to graphs with bandwidth at most k. A
+graph G = (V, E) with vertex set V = {0, 1, . . . n −1} is said to have bandwidth k if for all edges
+{u, v} ∈E, it holds |u −v| ≤k. A low bandwidth k implies that edges are only allowed between
+“nearby” vertices with respect to their numbering. In particular, k = 1 allows only subgraphs of the
+path 0, 1, . . . , n −1, while k = n −1 allows every graph.
+Since VERTEXCOVER is NP-hard, we did not expect the agent to produce a good algorithm for
+general graphs. With a flat fitness function, which only reveals whether a search point is a cover
+and its number of 1-bits (Appendix F), the agent instead came up with an algorithm that probes all
+the Θ(n2) potential edges in the graph to learn the problem instance, then without making further
+queries, computes offline the optimum for that instance, and finally queries the optimum (row 10,
+Appendix F.10). The overall runtime bound was O(n3). This demonstrates that the agent is able
+to “cheat” this evaluation framework by exploiting a well-known weakness in how algorithms are
+evaluated in the black-box scenario: Algorithms are only charged for making fitness queries, and
+not for offline computation. As the agent shows, the black-box complexity of NP-hard problems
+is polynomial. On BANDWIDTHVC with the same flat fitness function (row 11, Appendix F.11),
+the agent used the same strategy but exploited the bandwidth: it probes only the vertex pairs within
+distance k + 1, giving a runtime bound of O(kn). In both runs, the minimum cover is defined
+non-constructively in Lean, so the computation between queries is not bounded.
+With the graded fitness function (1), BANDWIDTHVC proved harder (rows 12–14). Two runs with
+Fable 5.1 designed asymmetric mutation operators but did not complete the pipeline: one stopped
+at the mass bound of Stage 10h, which is false for its design (Appendix F.12), and the other at
+Stage 10c (Appendix F.14). The run with Opus 5.5 completed with a window-repair random search
+(Appendix F.15), whose bound Θ(2n) improves on the random search baseline only by a constant
+factor.
+12
+
+
+--- Page 13 ---
+Preprint
+5.4
+SUB-MODULAR MINIMISATION
+We now turn to the problem of minimising sub-modular functions (SFM), a problem with important
+applications in machine learning. We represent any subset S ⊆[n] as a bitstring x ∈{0, 1}n in
+the natural way by setting xi = 1 if and only if i ∈S. We now call a pseudo-Boolean function
+f : {0, 1}n →R submodular if and only if for all subsets S ⊆T ⊆[n] and v̸ ∈T, it holds
+f(S ∪{v}) −f(S) ≥f(T ∪{v}) −f(T). We will assume that f is integer-valued with range in
+the interval [0, B] where B := nc for some unspecified constant c. There exist theoretical algorithms
+that minimise SFMs in O(n3 log log(n)/ log(n)) oracle queries (Jiang, 2023), i.e., independent of B.
+However, the more practically useful Fujishige-Wolfe algorithm has running time O(n2B2). We are
+not aware of runtime analyses of evolutionary algorithms for general SFM minimisation, but results
+for special cases such as the minimum spanning tree problem are available (Neumann & Wegener,
+2007).
+We expected this problem to be significantly more challenging than the previous problems. We
+therefore added to the problem card the advice that this is a challenging problem where a naive elitist
+hill-climber may not work, and where the agent needs to carefully design the potential function and
+exploit submodularity. Furthermore, we ran several generations of the pipeline. The algorithmic
+design and analysis produced in a first generation of the pipeline was seeded into the following
+generation, etc. Through all generations, the agent produced the same class of algorithm, which
+can be described as projected subgradient descent on the Lov´asz extension. The first generation
+returned a runtime bound of 12nB2(2n + 4)(n + 1) = O(n3+2c). The second generation improved
+the constant factor, reducing the runtime to 16n2B2(n + 2) = O(n3+2c). The third generation saw a
+factor-n speed-up, with a runtime of 32nB2(n + 1) = O(n2B2). Note that this is asymptotically
+the same as the Fujishige-Wolfe algorithm. Generation four and five only brought constant-factor
+improvements, leading to the approximate upper bound 8.13 · B2(n + 1)2.
+5.5
+ABLATION EXPERIMENTS
+To evaluate the impact of the staged pipeline, we developed an unstaged pipeline consisting of a
+single stage: Given a problem card, the agent is prompted to construct an algorithm for the problem
+which type-checks with the black-box framework, and which has better runtime than the seeded
+algorithm. The agent is not given the drift analysis API, the measurability toolkit, the proof cookbook,
+and most random stream properties. In order to be able to verify the algorithmic construction in Lean,
+we provided the agent with Lean-definitions of the black-box optimisation algorithm framework,
+and definitions of runtime. In order for the algorithm to be able to use the random source, we also
+provided basic clauses related to sampling from the random stream. Since the ablation only concerned
+the staged pipeline, we kept the problem cards unchanged. We also provided the agent with the
+definition of the seeded algorithm (random search).
+For CYCLEUNCOVER, Fable 5.1 reproduced the trivial random search algorithm (i.e., it copies the
+provided algorithm0 with minor syntactic changes). Note that this failure mode would have been
+caught by the NotRandomSearch guard in the staged pipeline. Instead of relying on drift analysis,
+the agent applied the tail-sum formula E [T] = P∞
+k=1 Pr (k ≤T) to the runtime variable T. The
+agent recognised that the problem involved a hidden permutation and two global optima, giving a
+runtime bound of 2n/2.
+For BANDWIDTHVC, Fable 5.1 constructed the (1+1) EA, and proved all formalisation properties.
+However, the model failed to produce a runtime bound. The model attempted to apply a fitness-level
+argument. This is one of the simplest-to-use techniques for analysing the runtime of the (1+1) EA
+introduced more than two decades ago (Wegener, 2002), but it has limited applicability to more
+complex algorithms and fitness landscapes.
+We then investigated weaker models.
+Claude Sonnet (row 17) passed Stages 0–10g on
+CYCLEUNCOVER, but needed between 54 and about 1,000 attempts per stage, and it did not pass the
+mass bound of Stage 10h, because its Good set is empty at some reachable states (Appendix F.9). The
+open-weight models, Goedel-Prover-V2-32B for the formal stages and Gemma 4 26B-A4B for the
+prose stages (vLLM backend, 256 samples per attempt), did not complete the pipeline on ONEMAX
+in any of 14 recent runs (Appendix F.1). Rows 19–21 of Table 2 are representative. Two runs stop
+at NotRandomSearch (Stage 4) after 13 and 24 batches of 256 samples, although the statement
+is true for their PBIL-like designs. The third passes Stage 4 only through a loophole of an earlier
+13
+
+
+--- Page 14 ---
+Preprint
+pipeline version, since its algorithm is random search, and then stops at PotentialFineGrained
+(Stage 9d), again on a true statement. Frontier models stop, if at all, at a drift stage, whereas the
+open-weight models stop much earlier (Appendix G), and they generate 25–124M output tokens per
+run, about two orders of magnitude more than the frontier-model runs.
+6
+CONCLUSION
+We have presented a staged pipeline in which an agent designs black-box optimisation algorithms
+and proves their expected runtime in Lean, with no empirical evaluation. Across 8 problem classes,
+12 of 15 runs with frontier models completed the pipeline. Nine of these give a polynomial bound
+for an algorithm whose computation between queries is explicit; of the other three, two learn
+a VERTEXCOVER instance with polynomially many queries and then solve it offline, at no cost
+in the black-box model, and one improves on random search only by a constant factor. The agent
+designed an O(n2) algorithm for CYCLEUNCOVER, on which the (1+1) EA needs eΩ(n), matched the
+O(n2) runtime of classical evolutionary algorithms on LEADINGONES, and rediscovered projected
+subgradient descent on the Lov´asz extension for integer-valued submodular minimisation, improving
+its own bound to O(n2+2c) over five generations. Without the staging, or with open-weight models,
+the pipeline did not produce efficient algorithms. The bounds are not yet state of the art; richer drift
+theorems, more iterations of the design loop, and continuous search spaces are natural next steps.
+Limitations.
+Only frontier models completed the pipeline. A more complete experimental design
+allowing for a statistical analysis was not feasible due to the high cost of the runs. The agent was
+only provided with a simplified drift theorem (Corollary 3.1). With standard potential functions, this
+theorem makes more precise variable drift analyses difficult, leading to non-tight runtime bounds
+such as O(n3) on ONEMAX for (1+1) EA variants. Furthermore, the search space is restricted to
+bitstrings.
+14
+
+
+--- Page 15 ---
+Preprint
+ACKNOWLEDGMENTS
+This research was partly supported by a Turing AI Fellowship (EPSRC grant ref EP/V025562/1).
+Calculations were performed using the Sulis Tier 2 HPC platform hosted by the Scientific Computing
+Research Technology Platform at the University of Warwick. Sulis is funded by EPSRC Grant
+EP/T022108/1 and the HPC Midlands+ consortium. The author also acknowledges the use of
+resources provided by the Isambard-AI National AI Research Resource (AIRR). Isambard-AI is
+operated by the University of Bristol and is funded by the UK Government’s Department for Science,
+Innovation and Technology (DSIT) via UK Research and Innovation; and the Science and Technology
+Facilities Council [ST/AIRR/I-A-I/1023].
+AI USE STATEMENT
+This paper addresses the scientific question of whether large language models can generate algorithms
+together with proofs of their efficiency, so LLMs were used extensively as the object of study. All
+synthesised algorithms, potential functions, drift certificates and their Lean proofs reported in Table 2
+were generated by the models named there (Claude Opus 5, Opus 5.5, Fable 5.1 and Sonnet; Goedel-
+Prover-V2-32B and Gemma 4), and every proof was checked by Lean. In addition, LLMs were used
+to help derive the combinatorial drift part of the Lean library used by the pipeline (Section 3), whose
+results are likewise checked by Lean; to translate the Lean definitions of the synthesised algorithms
+into the human-readable pseudo-code of Appendix F, and to collect the potentials and constants
+reported there, all of which we checked against the Lean artefacts; and to polish the writing. The
+author takes full responsibility for the content of the paper.
+REFERENCES
+Shumeet Baluja. Population-Based Incremental Learning: A Method for Integrating Genetic Search
+Based Function Optimization and Competitive Learning. Technical Report CMU-CS-94-163,
+School of Computer Science, Carnegie Mellon University, Pittsburgh, PA, June 1994. URL
+https://apps.dtic.mil/sti/pdfs/ADA282654.pdf.
+Alexander Bentkamp, Jasmin Christian Blanchette, and Dietrich Klakow. A Formal Proof of the
+Expressiveness of Deep Learning. Journal of Automated Reasoning, 63(2):347–368, August
+2019. ISSN 0168-7433, 1573-0670. doi: 10.1007/s10817-018-9481-5. URL http://link.
+springer.com/10.1007/s10817-018-9481-5.
+Harry Buhrman and Ronald de Wolf.
+Complexity measures and decision tree complexity: a
+survey. Theoretical Computer Science, 288(1):21–43, October 2002. ISSN 0304-3975. doi:
+10.1016/S0304-3975(01)00144-X. URL https://www.sciencedirect.com/science/
+article/pii/S030439750100144X.
+Sergiu Bursuc, Theodore Ehrenborg, Shaowei Lin, Lacramioara Astefanoaei, Ionel Emilian Chiosa,
+Jure Kukovec, Alok Singh, Oliver Butterley, Adem Bizid, Quinn Dougherty, Miranda Zhao,
+Max Tan, and Max Tegmark. A benchmark for vericoding: formally verified program synthesis,
+September 2025. URL https://arxiv.org/abs/2509.22908v1.
+Kevin Buzzard. Mathematical reasoning and the computer. Bulletin of the American Mathematical
+Society, 61(2):211–224, February 2024. ISSN 1088-9485, 0273-0979. doi: 10.1090/bull/1833.
+URL https://www.ams.org/bull/2024-61-02/S0273-0979-2024-01833-3/.
+S¨untje B¨ottcher, Benjamin Doerr, and Frank Neumann. Optimal Fixed and Adaptive Mutation
+Rates for the LeadingOnes Problem. In Robert Schaefer, Carlos Cotta, Joanna Kołodziej, and
+G¨unter Rudolph (eds.), Parallel Problem Solving from Nature, PPSN XI, pp. 1–10. Springer
+Berlin Heidelberg, Berlin, Heidelberg, 2010.
+ISBN 978-3-642-15843-8 978-3-642-15844-
+5. doi: 10.1007/978-3-642-15844-5 1. URL http://link.springer.com/10.1007/
+978-3-642-15844-5_1.
+Nadav Cohen, Or Sharir, and Amnon Shashua. On the Expressive Power of Deep Learning: A Tensor
+Analysis. Journal of Machine Learning Research, 49:1–31, 2016.
+15
+
+
+--- Page 16 ---
+Preprint
+Dogan Corus, Duc-Cuong Dang, Anton V. Eremeev, and Per Kristian Lehre. Level-Based Analysis of
+Genetic Algorithms and Other Search Processes. IEEE Transactions on Evolutionary Computation,
+22(5):707–719, October 2018. ISSN 1089-778X, 1089-778X, 1941-0026. doi: 10.1109/TEVC.
+2017.2753538. URL https://ieeexplore.ieee.org/document/8039236/.
+Benjamin Doerr, Daniel Johannsen, and Carola Winzen. Multiplicative Drift Analysis. Algorithmica,
+64(4):673–697, December 2012. ISSN 1432-0541. doi: 10.1007/s00453-012-9622-x. URL
+https://doi.org/10.1007/s00453-012-9622-x.
+Marco Dos Santos, Hugues de Saxc´e, Haiming Wang, Ran Wang, Mantas Baksys, Mert Unsal,
+Junqi Liu, Zhengying Liu, and Jia Li. Kimina Lean Server: A high-performance Lean server for
+large-scale verification. arXiv:2504.21230, 2025.
+Stefan Droste, Thomas Jansen, and Ingo Wegener. On the analysis of the (1+1) evolutionary algorithm.
+Theoretical Computer Science, 276(1–2):51–81, 2002.
+Stefan Droste, Thomas Jansen, and Ingo Wegener. Upper and Lower Bounds for Randomized Search
+Heuristics in Black-Box Optimization. Theory of Computing Systems, 39(4):525–544, July 2006.
+ISSN 1433-0490. doi: 10.1007/s00224-004-1177-z. URL https://doi.org/10.1007/
+s00224-004-1177-z.
+Manuel Eberl, Max W. Haslbeck, and Tobias Nipkow. Verified Analysis of Random Binary Tree
+Structures. Journal of Automated Reasoning, 64(5):879–910, June 2020. ISSN 1573-0670. doi: 10.
+1007/s10817-020-09545-0. URL https://doi.org/10.1007/s10817-020-09545-0.
+Alhussein Fawzi, Matej Balog, Aja Huang, Thomas Hubert, Bernardino Romera-Paredes, Moham-
+madamin Barekatain, Alexander Novikov, Francisco J. R. Ruiz, Julian Schrittwieser, Grzegorz
+Swirszcz, David Silver, Demis Hassabis, and Pushmeet Kohli. Discovering faster matrix mul-
+tiplication algorithms with reinforcement learning. Nature, 610(7930):47–53, October 2022.
+ISSN 1476-4687. doi: 10.1038/s41586-022-05172-4. URL https://www.nature.com/
+articles/s41586-022-05172-4.
+Tobias Friedrich, Jun He, Nils Hebbinghaus, Frank Neumann, and Carsten Witt. Approximating
+Covering Problems by Randomized Search Heuristics Using Multi-Objective Models. Evolutionary
+Computation, 18(4):617–633, December 2010. ISSN 1063-6560. doi: 10.1162/EVCO a 00003.
+URL https://doi.org/10.1162/EVCO_a_00003.
+Gemma Team. Gemma 4 Technical Report, July 2026. URL http://arxiv.org/abs/2607.
+02770. arXiv:2607.02770 [cs.CL].
+Bruce Hajek. Hitting-Time and Occupation-Time Bounds Implied by Drift Analysis with Applications.
+Advances in Applied Probability, 14(3):502–525, 1982. ISSN 0001-8678. doi: 10.2307/1426671.
+URL https://www.jstor.org/stable/1426671. Publisher: Applied Probability Trust.
+Jun He and Xin Yao.
+Drift analysis and average time complexity of evolutionary algo-
+rithms. Artificial Intelligence, 127(1):57–85, March 2001. ISSN 00043702. doi: 10.1016/
+S0004-3702(01)00058-3. URL http://linkinghub.elsevier.com/retrieve/pii/
+S0004370201000583.
+Haotian Jiang. Minimizing Convex Functions with Rational Minimizers. Journal of the ACM, 70
+(1):1–27, February 2023. ISSN 0004-5411, 1557-735X. doi: 10.1145/3566050. URL https:
+//dl.acm.org/doi/10.1145/3566050.
+Benjamin Lucien Kaminski, Joost-Pieter Katoen, Christoph Matheja, and Federico Olmedo. Weakest
+Precondition Reasoning for Expected Run-Times of Probabilistic Programs, November 2017. URL
+http://arxiv.org/abs/1601.01001. arXiv:1601.01001 [cs.LO].
+Donald E. Knuth. The art of computer programming, volume 1 (3rd ed.): fundamental algorithms.
+Addison Wesley Longman Publishing Co., Inc., USA, 1997. ISBN 0201896834.
+Stefan Kratsch and Frank Neumann. Fixed-Parameter Evolutionary Algorithms and the Vertex
+Cover Problem. Algorithmica, 65(4):754–771, April 2013. ISSN 1432-0541. doi: 10.1007/
+s00453-012-9660-4. URL https://doi.org/10.1007/s00453-012-9660-4.
+16
+
+
+--- Page 17 ---
+Preprint
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E.
+Gonzalez, Hao Zhang, and Ion Stoica. Efficient memory management for large language model
+serving with PagedAttention. In Proceedings of the 29th Symposium on Operating Systems
+Principles (SOSP), pp. 611–626, 2023.
+Robert Tjarko Lange, Yuki Imajuku, and Edoardo Cetin. ShinkaEvolve: Towards Open-Ended
+And Sample-Efficient Program Evolution, September 2025. URL http://arxiv.org/abs/
+2509.19349. arXiv:2509.19349 [cs].
+Chenyi Li, Ziyu Wang, Wanyi He, Yuxuan Wu, Shengyang Xu, and Zaiwen Wen. Formalization of
+Complexity Analysis of the First-order Algorithms for Convex Optimization, July 2024. URL
+http://arxiv.org/abs/2403.11437. arXiv:2403.11437 [math].
+Zenan Li, Ziran Yang, Deyuan He, Haoyu Zhao, Andrew Zhao, Shange Tang, Kaiyu Yang, Aarti
+Gupta, Zhendong Su, and Chi Jin. Goedel-Code-Prover: Hierarchical Proof Search for Open State-
+of-the-Art Code Verification, March 2026. URL http://arxiv.org/abs/2603.19329.
+arXiv:2603.19329 [cs.SE].
+Yong Lin, Shange Tang, Bohan Lyu, Ziran Yang, Jui-Hui Chung, Haoyu Zhao, Lai Jiang, Yihan
+Geng, Jiawei Ge, Jingruo Sun, Jiayun Wu, Jiri Gesi, Ximing Lu, David Acuna, Kaiyu Yang,
+Hongzhou Lin, Yejin Choi, Danqi Chen, Sanjeev Arora, and Chi Jin. Goedel-Prover-V2: Scaling
+Formal Theorem Proving with Scaffolded Data Synthesis and Self-Correction, August 2025. URL
+http://arxiv.org/abs/2508.03613. arXiv:2508.03613 [cs.CL].
+Fei Liu, Xialiang Tong, Mingxuan Yuan, Xi Lin, Fu Luo, Zhenkun Wang, Zhichao Lu, and Qingfu
+Zhang. Evolution of Heuristics: Towards Efficient Automatic Algorithm Design Using Large
+Language Model. In Proceedings of the 41st International Conference on Machine Learning,
+pp. 32201–32223. PMLR, July 2024. URL https://proceedings.mlr.press/v235/
+liu24bs.html.
+Fei Liu, Yiming Yao, Ping Guo, Zhiyuan Yang, Xi Lin, Zhe Zhao, Xialiang Tong, Kun Mao, Zhichao
+Lu, Zhenkun Wang, Mingxuan Yuan, and Qingfu Zhang. A Systematic Survey on Large Language
+Models for Algorithm Design. ACM Computing Surveys, 58(8):1–32, June 2026. ISSN 0360-
+0300, 1557-7341. doi: 10.1145/3787585. URL https://dl.acm.org/doi/10.1145/
+3787585.
+Michael Luby, Alistair Sinclair, and David Zuckerman. Optimal speedup of Las Vegas algorithms.
+Information Processing Letters, 47(4):173–180, 1993. ISSN 0020-0190. doi: https://doi.org/
+10.1016/0020-0190(93)90029-9. URL https://www.sciencedirect.com/science/
+article/pii/0020019093900299.
+Rajeev Motwani and Prabhakar Raghavan. Randomized Algorithms. Cambridge University Press,
+1995.
+Frank Neumann and Ingo Wegener. Randomized local search, evolutionary algorithms, and the
+minimum spanning tree problem. Theoretical Computer Science, 378(1):32–40, June 2007. ISSN
+0304-3975. doi: 10.1016/j.tcs.2006.11.002. URL https://www.sciencedirect.com/
+science/article/pii/S0304397506008589.
+Alexander Novikov, Ngˆan V˜u, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt Wag-
+ner, Sergey Shirobokov, Borislav Kozlovskii, Francisco J. R. Ruiz, Abbas Mehrabian, M. Pawan
+Kumar, Abigail See, Swarat Chaudhuri, George Holland, Alex Davies, Sebastian Nowozin, Push-
+meet Kohli, and Matej Balog. AlphaEvolve: A coding agent for scientific and algorithmic discovery,
+June 2025. URL http://arxiv.org/abs/2506.13131. arXiv:2506.13131 [cs].
+Pietro S. Oliveto, Jun He, and Xin Yao. Analysis of population-based evolutionary algorithms for the
+vertex cover problem. In 2008 IEEE Congress on Evolutionary Computation (IEEE World Congress
+on Computational Intelligence), pp. 1563–1570, June 2008. doi: 10.1109/CEC.2008.4631000.
+URL https://ieeexplore.ieee.org/abstract/document/4631000.
+Azim Ospanov, Farzan Farnia, and Roozbeh Yousefzadeh. APOLLO: Automated LLM and Lean
+Collaboration for Advanced Formal Reasoning, May 2025. URL https://arxiv.org/abs/
+2505.05758v5.
+17
+
+
+--- Page 18 ---
+Preprint
+Henry Robbins, Connor Lawless, Madeleine Udell, and Ellen Vitercik. FLARE: Verifying MILP
+Reformulations with LLM-Based Theorem Proving, August 2026. URL http://arxiv.org/
+abs/2608.25220. arXiv:2608.25220 [cs.AI].
+Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming
+Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from
+program search with large language models. Nature, 625(7995):468–475, January 2024. doi:
+10.1038/s41586-023-06924-6.
+Maximilian Sch¨affeler and Mohammad Abdulaziz. Formally Verified Approximate Policy Iteration.
+Proceedings of the AAAI Conference on Artificial Intelligence, 39(25):26659–26667, April 2025.
+ISSN 2374-3468. doi: 10.1609/aaai.v39i25.34868. URL https://ojs.aaai.org/index.
+php/AAAI/article/view/34868. Number: 25.
+Nat Sothanaphan. Resolution of Erd˝os Problem #728: a writeup of Aristotle’s Lean proof, January
+2026. URL http://arxiv.org/abs/2601.07421. arXiv:2601.07421 [math.NT].
+Koundinya Vajjha, Avraham Shinnar, Barry Trager, Vasily Pestun, and Nathan Fulton. CertRL:
+formalizing convergence proofs for value and policy iteration in Coq. In Proceedings of the
+10th ACM SIGPLAN International Conference on Certified Programs and Proofs, CPP 2021,
+pp. 18–31, New York, NY, USA, January 2021. Association for Computing Machinery. ISBN
+978-1-4503-8299-1. doi: 10.1145/3437992.3439927. URL https://dl.acm.org/doi/10.
+1145/3437992.3439927.
+Niki van Stein and Thomas B¨ack. LLaMEA: A Large Language Model Evolutionary Algorithm for
+Automatically Generating Metaheuristics. IEEE Transactions on Evolutionary Computation, 29
+(2):331–345, April 2025. ISSN 1941-0026. doi: 10.1109/TEVC.2024.3497793. URL https:
+//ieeexplore.ieee.org/abstract/document/10752628.
+Sumanth Varambally, Thomas Voice, Yanchao Sun, Zhifeng Chen, Rose Yu, and Ke Ye. Hilbert:
+Recursively Building Formal Proofs with Informal Reasoning, September 2025. URL https:
+//arxiv.org/abs/2509.22819v2.
+Ingo Wegener. Methods for the Analysis of Evolutionary Algorithms on Pseudo-Boolean Functions.
+In Ruhul Sarker, Masoud Mohammadian, and Xin Yao (eds.), Evolutionary Optimization, pp. 349–
+369. Springer US, Boston, MA, 2002. ISBN 978-0-306-48041-6. doi: 10.1007/0-306-48041-7 14.
+URL https://doi.org/10.1007/0-306-48041-7_14.
+18
+
+
+--- Page 19 ---
+Preprint
+A
+FORMAL STATEMENT OF THE PIPELINE STAGES
+Table 3 states every stage of the pipeline formally; the stages are described informally in Section 4.
+Table 3: The stages of the pipeline that generates one algorithm Ai+1 = (Y, init, step, query)
+and proves it faster than its predecessor, restated in the (X, Y, Z, R) formalism of Algorithm 1.
+[I] is an informal stage producing prose (no Lean code) with candidate selection (see Section 4.1
+and Section 4.2), [F*] is a formal stage that introduces new Lean definitions used by later stages,
+and [F-] a formal stage that only proves properties of definitions introduced earlier; in both, the
+Lean declarations produced are checked by Lean and carried forward. f ∈F denotes a fixed fitness
+function (an element of the problem class, e.g. ONEMAX composed with an unknown target bitstring),
+so that reachableWith(f, y) (as opposed to reachable(y)) restricts to states reachable when the
+true fitness fed to step is always f. z, z1, z2 ∈Z denote random draws; unif(z) ∈X is the bitstring
+obtained by sampling each coordinate of z against threshold 1/2. n is the bitstring length, and a
+‘prev’ subscript refers to the previous algorithm/potential pair in the outer self-improvement loop.
+Stage
+Name
+Formalisation
+Algorithm construction (Stages 0–8)
+0
+DesignLock
+[I]
+Commit to Y, init, step, query and a qualitative account of which
+component of y ∈Y tracks f; no numeric constants yet.
+1
+Construct-
+AlgorithmCom-
+ponents [F*]
+Define Y, init : Z →Y, step : Z × Y × R →Y, query : Y →X.
+1c
+StepMeasur-
+ability [F-]
+step is measurable.
+2
+Completeness1
+[F-]
+∀x
+∈
+X, ∀y
+∈
+Y,
+reachable(y)
+→
+∃z
+∈
+Z, ∃f
+∈
+R, query(step(z, y, f)) = x.
+3
+NonAbsorbing
+[F-]
+∀y
+∈
+Y,
+reachable(y)
+→
+∀f
+∈
+R,
+∃z1, z2
+∈
+Z, query(step(z1, y, f))̸ = query(step(z2, y, f)).
+4
+NotRandom-
+Search [F-]
+∃y ∈Y, reachable(y) ∧∃z ∈Z, ∃f ∈R, query(step(z, y, f))̸ =
+unif(z).
+5
+Adaptiveness
+[F-]
+∃y ∈Y, reachable(y) ∧∃z, z′ ∈Z, ∃f1, f2, f ∈R,
+query(step(z′, step(z, y, f1), f))̸
+=
+query(step(z′, step(z, y, f2), f))
+(a two-step strengthening of the usual one-step adaptiveness property:
+the fitness fed at the first step must still move the query one step later).
+6
+QueryNon-
+Injectivity
+[F-]
+∃y1, y2 ∈Y, y1̸ = y2 ∧query(y1) = query(y2).
+7
+AlgorithmInfra-
+structure [F*]
+Equip Y with the five instances (measurable space, topology, pseudo-
+metrizability, Borel σ-algebra, second-countability) the framework re-
+quires.
+7a
+InitMeasur-
+ability [F-]
+init is measurable.
+7b
+QueryMeasur-
+ability [F-]
+query is measurable.
+8
+Construct-
+AlgorithmStruc-
+ture [F*]
+Package A
+=
+(Y, init, step, query), together with the Stage
+1c/7/7a/7b witnesses, into a single algorithm record.
+Potential design (Stages 9a–9f)
+9a
+Potential-
+Design [I]
+Rank candidate potentials Φ : F × Y →[0, 1] by whether step can be
+shown, even informally, to decrease Φ faster than unif.
+9b
+Define-
+Potential [F*]
+Define Φ : F × Y →R with ∀f ∈F, ∀y ∈Y, 0 ≤Φ(f, y) ≤1.
+9c
+PotentialOpt
+[F-]
+∀f ∈F, ∀y ∈Y, Φ(f, y) ≤0 ⇐⇒∀x ∈X, f(x) ≤f(query(y))
+— Φ(f, ·) vanishes exactly at states whose query is f-optimal.
+9d
+PotentialFine-
+Grained [F-]
+∃f ∈F, ∃y ∈Y, 0 < Φ(f, y) < 1 — rules out a {0, 1}-valued
+(indicator) potential.
+9e
+PotentialMeas-
+urability [F-]
+∀f ∈F, Φ(f, ·) is measurable.
+19
+
+
+--- Page 20 ---
+Preprint
+(Table 3 continued)
+Stage
+Name
+Formalisation
+9f
+ConstructPoten-
+tialStructure
+[F*]
+Package Φ, together with the Stage 9b–9e witnesses, into a single poten-
+tial record.
+Drift design and runtime bound (Stages 10a–10j)
+10a
+DriftDesign
+[I]
+Work
+out
+closed
+forms,
+against
+the
+now-fixed
+A
+and
+Φ,
+for ε, p, pjump
+:
+N
+→
+R>0
+and for the four draw sets
+Good, Worsen, BigWorsen, Jump : F × Y →2Z below.
+10b
+DefineDrift-
+Constants [F*]
+Define ε(n), p(n), pjump(n) as closed-form expressions in n.
+10c
+DriftConstant-
+Properties [F-]
+ε(n) > 0, p(n) > 0, pjump(n) ∈(0, 1), and (the speed-up certificate)
+∃δ > 0, ∃n0, ∀n > n0,
+(1 + δ) εprev(n) pprev(n) < ε(n) p(n).
+10d
+DefineDrift-
+Sets [F*]
+Define Good, Worsen, BigWorsen, Jump : F × Y →2Z as explicit
+sets of draws.
+10e
+DriftSetMeas-
+urability [F-]
+For each S ∈{Good, Worsen, BigWorsen, Jump}: {(y, z) ∈Y ×
+Z : z ∈S(f, y)} is measurable.
+10f
+PositiveDrift
+[F-]
+∀y ∈Y, reachableWith(f, y) ∧Φ(f, y) > 0 →∀z ∈Good(f, y),
+Φ
+ f, step(z, y, f(query(y)))
+
+≤Φ(f, y) −ε(n).
+10g
+NegativeDrift-
+AndJump [F-]
+For y with reachableWith(f, y), Φ(f, y) > 0, and every z ∈Z:
+Φ(f, step(z, y, f(query(y)))) > Φ(f, y) →z ∈Worsen(f, y),
+Φ(f, step(z, y, f(query(y))))
+>
+Φ(f, y) + ε(n)
+→
+z
+∈
+BigWorsen(f, y);
+and,
+for
+every
+y
+with
+reachableWith(f, y):
+∀z
+∈
+Jump(f, y), Φ(f, step(z, y, f(query(y)))) = 0.
+10h
+DriftSetMass
+[F-]
+For
+reachableWith(f, y)
+with
+Φ(f, y)
+>
+0:
+p(n)
+≤
+Pr (z ∈Good(f, y)),
+Pr (z ∈Worsen(f, y)) ≤p(n)/2,
+Pr (z ∈BigWorsen(f, y)) ≤ε(n) p(n)/4.
+10i
+JumpMass
+[F-]
+∀y ∈Y, pjump(n) ≤Pr (z ∈Jump(f, y)) — holds at every y, unlike
+Stage 10h, since it underwrites integrability of the hitting time.
+10j
+RuntimeBound
+[F-]
+E [TA] ≤
+4
+ε(n) p(n).
+B
+PROOFS OF THE DRIFT CONDITION
+The additive drift theorem used in Section 3 is the following; a proof is given by Corus et al. (2018).
+Theorem B.1 (Additive drift theorem). Let (Zt)t∈N be a discrete-time stochastic process in [0, ∞)
+adapted to any filtration (Gt)t∈N. For any a ≥0, define Ta := min{t ∈N | Zt ≤a}. If for some
+ε > 0 and all t ∈N: (1) E [Zt+1 −Zt + ε ; t < Ta | Gt] ≤0, (2) E [Zt] < ∞, and (3) E [Ta] < ∞,
+then E [Ta | G0] ≤Z0/ε.
+We present the proof of Corollary 3.1. The Lean formalisation of this proof, which was developed as
+part of the staged pipeline, follows almost exactly this proof.
+Proof of Corollary 3.1. Define
+E1 := Xt+1 ≤Xt −ε
+E2 := Xt −ε < Xt+1 ≤Xt
+E3 := Xt < Xt+1 ≤Xt + ε
+E4 := Xt + ε < Xt+1
+Note that these definitions immediately imply
+1{t<T }1E1(Xt −Xt+1) ≥1{t<T }1E1ε
+(2)
+1{t<T }1E2(Xt −Xt+1) ≥0
+(3)
+1{t<T }1E3(Xt −Xt+1) ≥−1{t<T }1E3ε
+(4)
+1{t<T }1E4(Xt −Xt+1) ≥−1{t<T }1E4
+(5)
+20
+
+
+--- Page 21 ---
+Preprint
+where the last inequality follows because Xt ∈[0, 1] for all t. We now have
+1{t<T }(εp/4) = 1{t<T }(εp −εp/2 −εp/4)
+by assumptions 1-3
+≤E
+
+1{t<T }1E1ε | Gt
+
+−E
+
+1{t<T }1E3∪E4ε | Gt
+
+−E
+
+1{t<T }1E4 | Gt
+
+since 1E3∪E4 ≥1E3
+≤E
+
+1{t<T }1E1ε | Gt
+
+−E
+
+1{t<T }1E3ε | Gt
+
+−E
+
+1{t<T }1E4 | Gt
+
+by Eqs. (2), (4), and (5)
+≤E
+
+1{t<T }(1E1 + 1E3 + 1E4)(Xt −Xt+1) | Gt
+
+by Eq. (3) and 1E1 + 1E2 + 1E3 + 1E4 = 1
+≤E
+
+1{t<T }(Xt −Xt+1) | Gt
+
+.
+The result now follows by rearranging the inequality above.
+C
+IMPLEMENTATION AND PROMPT
+Implementation.
+The pipeline Python code was initially based on the Goedel-Prover-V2 codebase
+(Lin et al., 2025). Every candidate declaration is checked by Lean 4 on a Kimina Lean server
+(Dos Santos et al., 2025), and the Lean errors are returned to the model in the next attempt. The
+number of attempts allowed before backtracking to a previous stage is determined by a Luby sequence
+(Luby et al., 1993) L = (1, 1, 2, 1, 1, 2, 4, . . .). In particular, each stage has its own copy of the
+sequence with unit 3, so it is allowed 3, 3, 6, 3, 3, 6, 12, . . . attempts on successive visits. When a
+stage exhausts its allowance, the pipeline backtracks by one stage on the first failure of that stage,
+and by more stages one each further failure. In addition, the whole pipelinen is restarted from
+Stage 0 when 200, Lk attempts have been used in the k-th run of the pipeline, or earlier when 100
+consecutive attempts make no progress beyond the furthest stage reached. All runs in Table 2 use
+these parameters.
+The responses to the prompts of each stage come from a backend. With the CLI backend, the pipeline
+writes each prompt to standard output and reads the response from standard input, so that the pipeline
+can be driven by an external agent; rows 1–18 of Table 2 use this backend with Claude models. With
+the vLLM backend, the pipeline serves open-weight models itself with vLLM (Kwon et al., 2023),
+sampling many candidates per attempt; rows 19–21 use this backend with Goedel-Prover-V2-32B
+(Lin et al., 2025) for the formal stages and Gemma 4 26B-A4B (Gemma Team, 2026) for the prose
+stages. The stages, their Lean statements, and the checks are the same for both backends.
+The prompt.
+Every stage prompt starts with the same global block, followed by the accepted
+declarations so far and the task of the stage. The global block describes the framework: the black-box
+algorithm structure of Algorithm 1, the problem-class interface and the baseline algorithm, whose
+definitions the agent can use as a template. It then lists an API of library results, whose signatures are
+checked against the Lean build. These include samplers that turn the random source into bitstrings,
+with a fixed or a state-dependent per-bit bias, together with inverse lemmas that construct a random
+input producing any given bitstring. They also include lemmas about bitstrings, how to access
+elements of a bitstrings, etc. Furthermore, a measurability toolkit provides two tactics that decompose
+tuple-, if- and arithmetic-structured step and potential functions into leaves, and gives the idioms that
+close each kind of leaf. For the drift stages, the block describes the random source, the reachability
+predicates and an assembly theorem of Stage 10j, and it explains which properties of that theorem
+constrain the design, e.g. that a single ε and p must serve every reachable non-optimal state. The
+problem card (Appendices D and F) is spliced in as the only problem-specific part. Finally, a proof
+cookbook collects recurring Lean pitfalls and their fixes, such as if b then is preferred over
+if ¬ b, never to call decide on goals involving a symbolic n, how to show that two state tuples
+differ, and to prove measurability with the toolkit rather than with aesop, whose fixed search budget
+times out on nested ifs. After a failed attempt the agent sees the failing declaration, the Lean error,
+its earlier attempts at the stage and a list of facts verified in earlier stages.
+21
+
+
+--- Page 22 ---
+Preprint
+D
+THEORETICAL BENCHMARK FUNCTIONS
+For x ∈{0, 1}n write |x|1 = Pn
+i=1 xi for the number of ones. The three benchmark functions are
+ONEMAX(x) = |x|1 =
+n
+X
+i=1
+xi,
+LEADINGONES(x) =
+n
+X
+i=1
+iY
+j=1
+xj,
+JUMPk(x) =
+k + |x|1
+if |x|1 ≤n −k or |x|1 = n,
+n −|x|1
+otherwise,
+so ONEMAX counts the ones, LEADINGONES counts the ones before the first zero, and JUMPk
+behaves like ONEMAX except for a gap of width k below the optimum 1n, in which the fitness points
+away from the optimum. For the (1+1) EA with mutation rate 1/n the expected optimisation times
+are Θ(n log n) on ONEMAX, Θ(n2) on LEADINGONES and Θ(nk) on JUMPk for constant k ≥2
+(Droste et al., 2002).
+A black-box algorithm must not depend on the instance, so each function is turned into a class of
+instances by hiding its optimum. Write ⊕for the bitwise exclusive or and ¯z for the complement of z.
+Each permutation σ of [n] induces a permutation of {0, 1}n, which we also denote by σ, defined by
+σ(x)i := xσ(i) for all i ∈[n]. The problem cards used in our experiments define
+Fz(x) = ONEMAX(x ⊕z),
+z ∈{0, 1}n,
+Fz,σ(x) = LEADINGONES
+ σ(x ⊕z)
+
+,
+z ∈{0, 1}n, σ a permutation,
+Fz(x) = JUMPk(x ⊕z),
+z ∈{0, 1}n.
+Each instance has the unique optimum ¯z. For JUMPk the gap width k ≥2 is a constant of the class
+that the agent does not know, so every proof must be uniform in k. Algorithms whose mutation treats
+all bits alike, such as the (1+1) EA, have the same expected optimisation time on every instance of a
+class as on the underlying function.
+E
+CYCLEUNCOVER: DEFINITION AND RUNTIME OF THE (1+1) EA
+Algorithm 2 (1+1) EA
+1: t := 0
+2: Choose an initial bit string x0 ∈{0, 1}n uniformly at random
+3: while forever do
+4:
+Create x′ by flipping each bit in xt independently with probability p (mutation)
+5:
+xt+1 := x′ if f(x′) ≥f(x), and xt+1 := xt otherwise (selection)
+6:
+t := t + 1
+7: end while
+This section proves Theorem 5.1. The objective eval, the count count and the feasibility condition
+guard are those of Figure 3: guard(x) holds exactly when the chosen vertices form an independent
+set of the hidden cycle, and eval(x) = 2h + count(x) if guard(x) and eval(x) = count(x)
+otherwise.
+Proof of Theorem 5.1. Without loss of generality, we assume that σ is the identity-permutation.
+We condition on the event that both endpoints u and v of the first edge are 1-bits in the initial search
+point, and that it contains at least 9n/20 1-bits. By a union bound and a Chernoff bound (Motwani &
+Raghavan, 1995), the probability of this event is at least 1/4 + (1 −e−Ω(n)) −1 ≥1/5. If this event
+does not happen, we lower bound the runtime by 0.
+We consider two phases, the first phase consisting of the first t = 3en iterations, and the second
+phase consisting of the following en iterations. We consider phase 1 a failure (from the perspective
+22
+
+
+--- Page 23 ---
+Preprint
+of the analysis) if bit u or v is flipped during this phase. The probability of this failure event is upper
+bounded by 1 −(1 −1/n)2t ≤1 −e−2t/(n−1). If phase 1 is not a failure, then guard(x) is never
+satisfied, and the fitness is count(x), i.e., the number of 1-bits is non-decreasing.
+We call an iteration in the first phase successful if either the current search point has at least 5n/6
+1-bits, or if mutation increases the number of 1-bits. The probability of a successful iteration is at
+least
+p ≥n
+6
+
+1 −1
+n
+n−1 1
+n ≥1
+6e.
+The number of successful iterations in phase 1 dominates stochastically a binomially distributed
+random variable with parameters t and p. By a Chernoff bound, the probability that there are less than
+tp(1 −1/6) ≥(n/2)(1 −1/6) = 5n/12
+successes is e−Ω(n), and otherwise we call phase 1 a failure.
+Assuming no failure in phase 1, the current search point x at the start of phase 2 contains |x| ≥
+min(5n/6, 9n/20 + 5n/12) = 5n/6 1-bits. We now prove inductively that in each of the following
+en iterations, the number of 1-bits in the current search point is at least 5n/6. If the current point
+is infeasible with at least 5n/6 1-bits, an offspring is accepted only if it is feasible or has at least
+as many 1-bits. In order to satisfy guard(x) i.e., the solution is feasible, it is necessary to have at
+most h + 1 ≤n/2 + 1 1-bits (at most h on the cycle, plus bit σ(n) if n is odd). Therefore, to satisfy
+guard(x), at least n/3 −1 bits must be flipped simultaneously. By a union bound, this type of failure
+has probability at most enn−Ω(n) = n−Ω(n).
+Conditioned on the good starting event and no failures, the running time of the algorithm is at least en.
+By a union bound, the probability of a failure in phase 1 or 2 is at most 1 −e−2t/(n−1) + e−Ω(n) +
+n−Ω(n) < c for some constant c ∈(0, 1). The unconditional expected runtime is therefore at least
+(1/5)(1 −c)en = eΩ(n).
+F
+ALGORITHMS, POTENTIALS AND RUNTIME BOUNDS OF ALL RUNS
+This appendix collects, for every run summarised in Table 2, the synthesised algorithm, the potential
+function and the runtime bound. The pseudocode is a human-readable transcription of the frozen
+Lean definitions of init and step; in every run query returns the first component of the state. We
+write bitsp(u) ∈{0, 1}n for the per-bit sampler that sets bit i iff ui ≤pi (so Pr[bitsp(u)i = 1] = pi;
+a scalar p means pi = p for all i), u+i := (ui, ui+1, . . . ) for the coordinates of the same draw
+from index i on, ⊕for bitwise XOR, |x|1 for the number of ones, ev for the v-th unit vector, ¯x
+for the complement, [P] ∈{0, 1} for the indicator of P, and clamp[a,b](x) := min{b, max{a, x}}
+for clamping x to [a, b] (coordinatewise for vectors). Unless stated otherwise, f is the fitness of
+the pending query q passed to step, and a potential Φz(s) is 0 if and only if the query of s is
+fitness-maximal. For staged runs the runtime theorem is E [TA] ≤4/(ε1p1) for all n ≥3 and every
+instance z, with the drift constants ε1 and p1 (the Good-set mass) given; “machine-checked” means
+the file compiles with no sorry.
+Problem cards.
+ONEMAX: Fz(x) = ONEMAX(x ⊕z), unique optimum ¯z. LEADINGONES
+(card lo):
+an instance is a pair (z, σ) of a string z and a permutation σ of the posi-
+tions, and Fz,σ(x) = LEADINGONES
+ σ(x ⊕z)
+
+with σ(x) and LEADINGONES as in Ap-
+pendix D; the unique optimum is ¯z. The second version of the card also supplies the inequal-
+ity e−m/(r−1) ≤(1 −1/r)m for r > 1.
+JUMPk (card jump k): Fz(x) = JUMPk(x ⊕z)
+with JUMPk as in Appendix D; the unique optimum is ¯z.
+The gap width k
+≥2 is an
+opaque constant, so every proof must be uniform in k. SUBMODULARMIN, integer-valued (card
+submodular minimisation integer valued additional advice): an instance is
+a submodular function f
+: {0, 1}n
+→{0, 1, . . . , B} with B
+= nc for an opaque class
+constant c ≥1 and minx f(x) = 0, and Ff(x) = −f(x).
+Besides the definitions, the
+card supplies only facts about the integer range (every non-optimal point has Ff
+≤−1,
+and distinct values differ by at least 1) and the advice quoted in Appendix F.16; it supplies
+no lemmas about submodular functions.
+CYCLEUNCOVER (card laminate): the objective
+23
+
+
+--- Page 24 ---
+Preprint
+Table 4: Open-weight runs on ONEMAX with the most recent pipeline versions. “Last passed” is the
+last stage that was machine-checked.
+Run
+Cluster
+Started
+Pipeline version
+Hours
+Last passed
+generous-dragon-779
+Sulis
+2026-09-21
+optimisation
+23.8
+3
+driven-blaze-773
+Sulis
+2026-09-18
+optimisation
+23.8
+1
+denim-paper-771
+Sulis
+2026-09-17
+split v9
+21.6
+3
+super-moon-761
+Sulis
+2026-09-15
+split v9
+23.3
+3
+bumbling-plant-742
+Sulis
+2026-09-13
+split v9
+23.2
+3
+avid-waterfall-734
+Isambard-AI
+2026-09-12
+split v9
+23.6
+3
+mild-dream-724
+Sulis
+2026-09-08
+split v9
+23.6
+3
+absurd-puddle-723
+Isambard-AI
+2026-09-08
+split v9
+23.6
+3
+peach-armadillo-718
+Isambard-AI
+2026-09-06
+split v9
+23.7
+3
+serene-voice-715
+Sulis
+2026-09-06
+split v9
+23.8
+1c
+visionary-snow-713
+Sulis
+2026-09-05
+split v8
+20.7
+3
+pleasant-elevator-712
+Isambard-AI
+2026-09-04
+split v8
+23.7
+1c
+golden-yogurt-711
+Isambard-AI
+2026-09-02
+split v8
+36.8
+9c
+royal-snowflake-710
+Sulis
+2026-09-01
+split v8
+46.2
+3
+eval of Figure 3, with h = ⌊n/2⌋, optimum value 3h.
+VERTEXCOVER, flat fitness (cards
+vertex cover, early bandwidth vertex cover): Fz(x) = −|x|1 if x is a cover of Gz
+and |x|1 −2n otherwise. VERTEXCOVER, graded fitness (later bandwidth vertex cover,
+wcvc, well covered vertex cover): Fz(x) = −
+ (n + 1) uncz(x) + |x|1
+
+, where uncz(x)
+is the number of edges with no chosen endpoint; covers are exactly the points with Fz ≥−n. For
+the bandwidth cards every edge uv satisfies |u −v| ≤k, and k is known to the algorithm; the
+well-covered cards restrict to graphs whose minimal covers are all minimum. The wcvc card is an
+anonymised copy of the well-covered card with all names and derived facts removed.
+F.1
+ONEMAX, OPEN-WEIGHT MODELS (STAGED; INCOMPLETE)
+These runs used the vLLM backend, which serves the models itself, instead of the CLI backend used
+for the other runs (Appendix C). The formal stages were generated by Goedel-Prover-V2-32B with
+256 samples per attempt at temperature 1, and the informal stages (0, 9a, 10a) by Gemma 4 26B-A4B,
+both served with vLLM on 3 NVIDIA L40 GPUs (Sulis) or 4 NVIDIA GH200 GPUs (Isambard-AI).
+All runs are on ONEMAX with earlier versions of the staged pipeline that have the same 28 stages as
+Table 3. The token usage of the formal model is not logged by this backend, and the Lean code of
+these runs is not included.
+Table 4 lists the 14 runs made with the three most recent of these pipeline versions (Septem-
+ber 2026).
+No run completed: each ended after 21–46 hours of wall-clock time.
+Ten runs
+got stuck at Stage 4 (NotRandomSearch), three at Stage 1c or 2, and one reached Stage 9d
+(PotentialFineGrained). Rows 19–21 of Table 2 are, in order, the most recent run on each
+cluster with the most recent pipeline used there, and the run that got furthest.
+All samples of the runs in rows 19–21 are logged, so the output tokens of Goedel-Prover-V2-32B can
+be counted with its own tokeniser over the logged responses; the informal stages add at most 7 × 104
+tokens per run. Lean lines are counted as in Table 2, at the last passed stage.
+Row 19. The frozen design samples each bit with its own bias, initialised to 1/2; after an improvement,
+every bias moves by 0.1 towards the corresponding bit of the query, clamped to the interval [0.1, 0.9].
+This is a PBIL-like estimation-of-distribution algorithm (Baluja, 1994), but with too large margins.
+Stages 0–3 passed. Stage 4 is true for this design (the biases leave 1/2 after one improving step), but
+all 13 × 256 samples for it failed: 38% contained no extractable Lean code, 35% left unsolved goals,
+10% did not parse and 6% used unknown identifiers. The pipeline backtracked to Stages 3, 2 and 1c,
+but never to the design stages. 5,896 samples, 25.1M output tokens, 23.8 h.
+Row 20. Both designs, the first and the one proposed after a backtrack to Stage 0, are PBIL-like:
+per-bit biases, learning rate 1/n, clamped to [0.05, 0.95] and then [0.1, 0.9]. The update moves the
+biases towards the newly drawn query rather than the evaluated one, so the fitness only decides
+whether they move. Stage 4 is again true, and all 24 × 256 samples for it failed: 53% left unsolved
+goals, 17% used unknown identifiers, 11% did not parse and 8% contained no extractable code. The
+run generated 10,776 samples and 73.1M output tokens, and lasted 23.6 hours.
+24
+
+
+--- Page 25 ---
+Preprint
+Row 21. The algorithm is uniform random search with a stored current search point. Stage 4 passed
+(2 of 256 samples), because in this pipeline version the NotRandomSearch obligation did not
+require the witness state to be reachable: the accepted proof uses a state with all biases equal to 1,
+which the algorithm never reaches. The final version of the pipeline requires the state witness to
+be reachable. The run went on to define the potential Φ(x) = 1 −ONEMAX(x ⊕z)/n and passed
+Stage 9c three times, but all 15 × 256 samples for Stage 9d failed, although the statement is true for
+this potential: 31% omitted the required lemma, 25% left unsolved goals, 11% did not parse, 10%
+used unknown identifiers, and 16% recorded no Lean error. The run generated 22,584 samples and
+124.3M output tokens, and lasted 36.8 hours.
+F.2
+ONEMAX, CLAUDE OPUS 5 (STAGED; COMPLETE)
+Algorithm 3 (1+1)-style hill-climber with rate 1/(n + 1) (ONEMAX, Claude Opus 5).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+▷accept (always at the first step)
+9:
+end if
+10:
+pi ←n/(n + 1) if ci = 1, else 1/(n + 1), for all i
+▷flip each bit w.p.
+1
+n+1
+11:
+return (bitsp(u), TRUE, c, cf)
+12: end procedure
+Potential. With M(s) = max{Fz(q), Fz(x∗)} if b, else M(s) = Fz(q),
+Φz(s) = [q̸ = ¯z] ·
+
+1
+n+1 +
+n
+n+1
+ 1 −M(s)
+n
+
+.
+Runtime. ε1 =
+1
+n+1, p1 =
+2
+(n+1)2 : E [TA] ≤2(n + 1)3 = O(n3).
+F.3
+LEADINGONES, CLAUDE OPUS 5.5 (STAGED; COMPLETE)
+Algorithm 4 Fitness-dependent mutation around an elitist reference point (LEADINGONES, Claude
+Opus 5.5).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+▷accept (always at the first step)
+9:
+end if
+10:
+r ←1/(max{cf, 0} + 2)
+▷rate read from the learned fitness
+11:
+return (c ⊕bitsr(u), TRUE, c, cf)
+12: end procedure
+Potential. With M(s) = max{F(q), F(x∗)} if b, else M(s) = F(q),
+Φ(s) = [q̸ = ¯z] · n + 1 −M(s)
+n + 1
+.
+Runtime. ε1 =
+1
+n+1, p1 =
+1
+(n+2)2 : E [TA] ≤4(n + 1)(n + 2)2 = O(n3).
+25
+
+
+--- Page 26 ---
+Preprint
+F.4
+LEADINGONES WITH THE e−1 LEMMA, CLAUDE OPUS 5.5 (STAGED; COMPLETE)
+init, step and the potential are identical to Algorithm 4. The mask is drawn with the per-bit
+sampler, using the same fitness-dependent rate for every bit.
+Runtime. ε1 =
+1
+n+1, p1 = e−1
+n+2: E [TA] ≤4e(n + 1)(n + 2) = O(n2).
+F.5
+JUMPk, CLAUDE OPUS 5.5 (STAGED; COMPLETE)
+Algorithm 5 (1+1)-style hill-climber with rate 1/(n + 1) (JUMPk, Claude Opus 5.5).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+▷accept (always at the first step)
+9:
+end if
+10:
+return (c ⊕bits1/(n+1)(u), TRUE, c, cf)
+11: end procedure
+Potential. With N = n + k and M(s) = max{Fz(q), f ∗} if b, else M(s) = Fz(q),
+Φz(s) =
+
+
+
+0
+if Fz(q) = Fz(¯z),
+N + 1 −min{max{M(s), 0}, N}
+N + 1
+otherwise.
+Runtime. ε1 =
+1
+n+k+1, p1 = (n + 1)−(k+1): E [TA] ≤4(n + k + 1)(n + 1)k+1 = O(nk+2).
+F.6
+JUMPk WITH THE e−1 LEMMA, CLAUDE OPUS 5.5 (STAGED, 3 GENERATIONS; COMPLETE)
+We supplied the e−1 lemma and ran the pipeline for three generations. The runtimes are O(nk+1)
+in all generations, but they differ in the leading constant. The agent used the same potential as in
+Appendix F.5. All three generations of the algorithm keep a strictly elitist search point x∗(a new
+query is accepted only if f > f ∗, or at the first step) and differ only in the mask rate.
+Generation 1. The mask rate is reset to 1/(n + 2) on a strict improvement, multiplied by 1 + 1/n
+otherwise, and clamped to the interval [1/(n + 2), 2/(n + 4)].
+Algorithm 6 Self-adjusting mask rate (JUMPk with the e−1 lemma, generation 1).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0,
+1
+n+2)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗, r), f)
+5:
+if b and f ≤f ∗then
+6:
+(c, cf) ←(x∗, f ∗); r′ ←min{
+2
+n+4, r(1 + 1
+n)}
+7:
+else
+8:
+(c, cf) ←(q, f); r′ ←
+1
+n+2
+▷strict improvement or first step
+9:
+end if
+10:
+ρ ←clamp[
+1
+n+2 ,
+2
+n+4 ](r′)
+11:
+return (c ⊕bitsρ(u), TRUE, c, cf, r′)
+12: end procedure
+Runtime. ε1 =
+1
+n+k+1, p1 = (n + 2)−ke−2: E [TA] ≤4e2(n + k + 1)(n + 2)k = O(nk+1).
+26
+
+
+--- Page 27 ---
+Preprint
+Generation 2. The mask rate is 1/(n + 2) after a strict improvement and 2/(n + 2) after a failure.
+Algorithm 7 Failure-doubled mask rate (JUMPk with the e−1 lemma, generation 2).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f ≤f ∗then
+6:
+(c, cf) ←(x∗, f ∗); ρ ←
+2
+n+2
+7:
+else
+8:
+(c, cf) ←(q, f); ρ ←
+1
+n+2
+▷strict improvement or first step
+9:
+end if
+10:
+return (c ⊕bitsρ(u), TRUE, c, cf)
+11: end procedure
+Runtime. ε2 =
+1
+2(n+k+1), p2 =
+ 2
+n+2
+ke−2: E [TA] ≤23−ke2(n + k + 1)(n + 2)k.
+Generation 3. A phase bit is reset on a strict improvement and toggled on every failure; the mask rate
+is 3/(n + 2) if the updated phase is set and 2/(n + 2) otherwise.
+Algorithm 8 Rate cycling with a learned phase bit (JUMPk with the e−1 lemma, generation 3).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0, FALSE)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗, ϕ), f)
+5:
+if b and f ≤f ∗then
+6:
+(c, cf) ←(x∗, f ∗); ϕ′ ←¬ϕ
+7:
+else
+8:
+(c, cf) ←(q, f); ϕ′ ←FALSE
+▷strict improvement or first step
+9:
+end if
+10:
+ρ ←
+3
+n+2 if ϕ′, else ρ ←
+2
+n+2
+11:
+return (c ⊕bitsρ(u), TRUE, c, cf, ϕ′)
+12: end procedure
+Runtime. ε3 =
+1
+n+k+1, p3 = min
+
+(
+2
+n+2)ke−2, (
+3
+n+2)ke−n/((n+2)/3−1)	
+: E [TA] ≤4(n + k +
+1)/p3 = O(nk+1).
+F.7
+CYCLEUNCOVER, CLAUDE FABLE 5.1 (STAGED; COMPLETE)
+Write H = 2⌊n/2⌋and ρ = 1/(n + 1). The state (q, A, B, r, a, k) holds the query, the indicator
+strings A, B of the vertices labelled with the two colours so far, the frontier (last labelled vertex) r,
+its colour a, and the number k of labelled vertices.
+27
+
+
+--- Page 28 ---
+Preprint
+Algorithm 9 Cycle walk (CYCLEUNCOVER, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (bitsρ(u), 0n, 0n, 0n, FALSE, 0)
+3: end procedure
+4: procedure step(u, (q, A, B, r, a, k), f)
+5:
+π ←A if k = H, else r;
+T ←π ⊕q
+▷the mask just used
+6:
+if f = 2 and 0 < k < H and |T|1 = 1 and T ∧(A ⊕B) = 0n then
+7:
+if a then
+8:
+B ←B ⊕T
+9:
+else
+10:
+A ←A ⊕T
+11:
+end if
+12:
+r ←T; a ←¬a; k ←k + 1
+▷T is adjacent to the frontier
+13:
+else if f = H + 1 and k = 0 and |T|1 = 1 then
+14:
+A ←T; r ←T; a ←TRUE; k ←1
+▷T is a read coordinate
+15:
+end if
+16:
+π′ ←A if k = H, else r
+17:
+return (π′ ⊕bitsρ(u), A, B, r, a, k)
+18: end procedure
+Potential. With k+(s) the label count after one step from s with the true fitness and truncated
+subtraction ˙−: Φz(s) = 0 if Fσ(q) = 3h, else Φz(s) =
+ 1 + (H ˙−k+(s))
+
+/(H + 2). Runtime.
+ε1 =
+1
+H+2, p1 =
+1
+3(n+1): E [TA] ≤12(n + 1)(2⌊n/2⌋+ 2) = O(n2).
+F.8
+CYCLEUNCOVER, CLAUDE FABLE 5.1 (ZERO-SHOT ABLATION; COMPLETE)
+This algorithm was obtained in an ablation run which did not include the staged pipeline. The
+algorithm samples a bitstring uniformly at random in each iteration, i.e., it is essentially identical to
+the baseline algorithm provided.
+Algorithm 10 Random search with a recorded incumbent (CYCLEUNCOVER, zero-shot, Claude
+Fable 5.1).
+1: procedure init(z)
+2:
+return (bits1/2(z), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(z, (x′, b, x, fx), f)
+5:
+if not b or f ≥fx then
+6:
+(x, fx) ←(x′, f)
+7:
+end if
+8:
+return (bits1/2(z), TRUE, x, fx)
+▷the query ignores the state
+9: end procedure
+Potential. No potential is constructed because the agent does not use the staged pipeline. Runtime.
+E [TA] ≤2n/2.
+F.9
+CYCLEUNCOVER, CLAUDE SONNET (STAGED; INCOMPLETE)
+Claude Sonnet did not complete the pipeline with problem card CYCLEUNCOVER. The following is
+a description of the algorithm constructed in generation 4 of 5. The algorithm is (1+1) EA, except
+that the current search point is accepted only if the mutant is strictly better than the parent.
+28
+
+
+--- Page 29 ---
+Preprint
+Algorithm 11 Design 4 (CYCLEUNCOVER, Claude Sonnet).
+1: procedure init(z)
+2:
+return (bits1/2(z), 0n, 2h)
+▷0n has fitness 2h
+3: end procedure
+4: procedure step(z, (x′, x, fx), f)
+5:
+if f > fx then
+6:
+(x, fx) ←(x′, f)
+7:
+end if
+▷Design 5: also accept ties if fx > 2h
+8:
+pi ←(n −1)/n if xi = 1, else 1/n, for all i
+9:
+return (bitsp(z), x, fx)
+10: end procedure
+Potential. Φz(s) =
+ 3h−Fσ(q)
+
+/(3h). Runtime. None proved (stopped at Stage 10h); ε1 = 1/(3h),
+and p1 = 1/(en).
+F.10
+VERTEXCOVER, CLAUDE FABLE 5.1 (STAGED; COMPLETE)
+Let N = n2, ρ = 1/(n + 1), uj = ⌊j/n⌋mod n, and vj = j mod n. Let probe(j) be 1n with bits
+uj, vj cleared. Let opt(A) be a minimum-size string covering every edge recorded in the table A,
+and target(k, A) = probe(k) if k < N, else opt(A).
+Algorithm 12 Edge probing, then solve (VERTEXCOVER, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (probe(0) ⊕bitsρ(u), 0, A∅)
+▷empty edge table
+3: end procedure
+4: procedure step(u, (q, k, A), f)
+5:
+if q = target(k, A) then
+▷hit: the probe was queried exactly
+6:
+A[uk, vk] ←[f < −n]
+▷probe is a non-cover iff ukvk is an edge
+7:
+if k < N then
+8:
+k ←k + 1
+9:
+end if
+10:
+end if
+11:
+return (target(k, A) ⊕bitsρ(u), k, A)
+12: end procedure
+Potential. For non-optimal states, the potential is Φz(s) = 1
+2 + U(s)/
+ 2(2N + 1)
+
+where U(s) =
+2
+ N −min(k, N)
+
++ [q̸ = target(k, A)]. Runtime. ε1 =
+1
+2(2n2+1), p1 =
+1
+n+1: E [TA] ≤8(2n2 +
+1)(n + 1) = O(n3). The bound counts fitness evaluations only; opt(A) is defined non-constructively
+(as some minimum cover of the learned graph), so the computation between queries is not bounded.
+F.11
+BANDWIDTHVC, CLAUDE FABLE 5.1 (STAGED, FLAT FITNESS; COMPLETE)
+Let K = k + 1, L = 2nK, ap = ⌊p/K⌋, bp = ap + 1 + (p mod K), let probe(p) be 1n with bits
+ap, bp set to 0. Note that probe(p) is a vertex cover if and only if apbp is not an edge in the graph.
+Let opt(A) be as in Appendix F.10, plan(t, A) = probe(t/2) if t is even and t < L, else opt(A),
+and β(y)i = n/(n + 1) if yi = 1, else 1/(n + 1).
+29
+
+
+--- Page 30 ---
+Preprint
+Algorithm 13 Interleaved window probing and solving (BANDWIDTHVC, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (bitsβ(plan(0,A∅))(u), 0, A∅)
+3: end procedure
+4: procedure step(u, (q, t, A), f)
+5:
+if q = plan(t, A) and t < L then
+6:
+if t even then
+7:
+A[at/2, bt/2] ←[f < −n]
+8:
+end if
+9:
+t ←t + 1
+10:
+end if
+11:
+return (bitsβ(plan(t,A))(u), t, A)
+12: end procedure
+Potential. Off the optimum, Φz(s) =
+ 2(L ˙−t) + [q̸ = plan(t, A)] + 1
+
+/(2L + 2). Runtime.
+ε1 =
+1
+2L+2, p1 = 1
+4: E [TA] ≤16(2L + 2) = 64n(k + 1) + 32 = O(kn). The bound counts
+fitness evaluations only; opt(A) is defined non-constructively (as some minimum cover of the learned
+graph), so the computation between queries is not bounded.
+F.12
+BANDWIDTHVC, CLAUDE FABLE 5.1 (STAGED, GRADED FITNESS; INCOMPLETE)
+Let κ = clamp[
+1
+2(n+4) ,
+2
+n+4 ].
+Algorithm 14 Direction-adaptive asymmetric mutation (BANDWIDTHVC, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0,
+1
+n+4,
+1
+n+4)
+3: end procedure
+4: procedure step(u, (q, b, a, fa, ρdown, ρup), f)
+5:
+if not b then
+6:
+(a, fa) ←(q, f)
+7:
+else if f ≥fa then
+8:
+if |q|1 < |a|1 then
+9:
+ρdown ←κ(2ρdown); ρup ←κ(ρup/2)
+10:
+else
+11:
+ρdown ←κ(ρdown/2); ρup ←κ(2ρup)
+12:
+end if
+13:
+(a, fa) ←(q, f)
+14:
+end if
+15:
+pi ←κ(ρdown) if ai = 1, else κ(ρup), for all i
+16:
+return (a ⊕bitsp(u), TRUE, a, fa, ρdown, ρup)
+17: end procedure
+Potential. With e(s) = q if ¬b or Fz(q) ≥Fz(a), else a: off the optimum Φz(s) = 1
+2 + −Fz(e(s))
+4n
+if
+e(s) is a cover and Φz(s) = 3
+4 + uncz(e(s))
+4(kn+1) otherwise. Runtime. None proved (stopped at Stage 10h);
+ε1 =
+1
+4((k+1)n+1), p1 =
+1
+16(n+4).
+30
+
+
+--- Page 31 ---
+Preprint
+F.13
+BANDWIDTHVC, CLAUDE FABLE 5.1 (ZERO-SHOT ABLATION; INCOMPLETE)
+Algorithm 15 (1+1) EA with rate 1/n (BANDWIDTHVC, zero-shot, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+9:
+end if
+10:
+return (c ⊕bits1/n(u), TRUE, c, cf)
+11: end procedure
+Potential. None. Runtime. The bound E [TA] ≤2n/n was left as sorry.
+F.14
+BANDWIDTHVC, CLAUDE FABLE 5.1, SECOND SESSION (STAGED; INCOMPLETE)
+Algorithm 16 Fill-then-prune mutation (BANDWIDTHVC, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+9:
+end if
+10:
+if cf < −n then
+▷incumbent is not a cover: fill
+11:
+pi ←1/(n + 1)2 if ci = 1, else 1/2, for all i
+12:
+else
+▷incumbent is a cover: prune
+13:
+pi ←1/(n + 1) for all i
+14:
+end if
+15:
+return (c ⊕bitsp(u), TRUE, c, cf)
+16: end procedure
+Potential. Off the optimum, Φz(s) =
+ 1 + [¬b] + (−Fz(x∗))/((n + 1)(kn + 1))
+
+/3. Runtime. None
+proved (stopped at Stage 10c); ε1 =
+1
+3(n+1)(kn+1), p1 = (n + 1)−n.
+F.15
+BANDWIDTHVC, CLAUDE OPUS 5.5 (STAGED; COMPLETE)
+Let L = 2k + 1 and ℓ= min{L, n}.
+31
+
+
+--- Page 32 ---
+Preprint
+Algorithm 17 Window-repair random search (BANDWIDTHVC, Claude Opus 5.5, attempt 2).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+9:
+end if
+10:
+y ←bits1/2(u); m ←bits1/3(u+n)
+11:
+if yi = 1 for all i < ℓthen
+▷an optimum never chooses all of 0, . . . , 2k
+12:
+yi ←ci ⊕mi for all i < ℓ
+▷redraw the window near the incumbent
+13:
+end if
+14:
+return (y, TRUE, c, cf)
+15: end procedure
+Potential. With F opt
+z
+= maxy Fz(y), e(s) = q if ¬b or Fz(q) ≥Fz(x∗), else x∗, η = 1/(4 · 3L) and
+R = (n + 1)kn + n: off the optimum Φz(s) = (1 −η) + η min
+
+1, (F opt
+z
+−Fz(e(s)))/(R + 1)
+	
+.
+Runtime. ε1 = 1 −η, p1 = 2−n(1 + 3−L): E [TA] ≤4 · 2n/
+ (1 −a/4)(1 + a)
+
+= Θ(2n) with
+a = 3−(2k+1).
+The algorithm is close to random search with expected runtime bound O(2n). The algorithm
+maintains a currently best search point x∗with corresponding fitness f ∗. In each iteration, the
+algorithm samples uniformly at random a new search point y. If all the first ℓbits of y are 1-bits, then
+each of these bits is copied from the current search point x∗, and then mutated with probability 1/3.
+F.16
+SUBMODULARMIN, INTEGER-VALUED, CLAUDE OPUS 5.5 (STAGED; COMPLETE)
+The problem card contains the following advice (verbatim apart from a corrected typo): “Note that
+this is a challenging problem domain where naive algorithmic designs, such as elitist hill-climbing
+with a single individual, are unlikely to succeed. Current efforts in designing efficient evolutionary
+algorithms for this problem are ongoing, so your design must be innovative and well-justified. You
+need to carefully consider the properties of submodular functions and how to exploit them in your
+algorithm design. Note that the minimisation [of] sub-modular functions is a well-studied problem in
+combinatorial optimisation which allows for polynomial time algorithms.”
+The state (q, b, λ, k, g, fprev, t, ϕ) holds the query q, the initialisation flag b, a point λ ∈[0, 1]n,
+the position k in the current chain, the accumulated subgradient g ∈Rn, the previous chain value
+fprev, the intended query t and a flag ϕ recording that an optimum has been seen. Sk(λ) is the
+set of the k coordinates with the largest values of λ (ties broken by index), η = 1/(nB2) and
+m = bits1/(n+1)(u).
+32
+
+
+--- Page 33 ---
+Preprint
+Algorithm 18 Projected subgradient descent on the Lov´asz extension (SUBMODULARMIN, Claude
+Opus 5.5).
+1: procedure init(u)
+2:
+return (S0 ⊕m, FALSE, ( 1
+2)n, 0, 0n, 0, S0, FALSE)
+3: end procedure
+4: procedure step(u, (q, b, λ, k, g, fprev, t, ϕ), f)
+5:
+if not b then
+6:
+t ←S0(λ); k ←0
+▷start the first chain
+7:
+else if ϕ then
+8:
+no update
+▷t is the recorded optimum; the next query is again t ⊕m
+9:
+else if f ≥0 then
+10:
+t ←q; ϕ ←TRUE
+▷an optimum was queried
+11:
+else if q = t then
+▷the intended level set was queried exactly
+12:
+gi ←fprev −f for the coordinate i added at position k
+▷marginal value
+13:
+if k < n then
+14:
+k ←k + 1; fprev ←f; t ←Sk(λ)
+15:
+else
+16:
+λ ←clamp[0,1](λ −ηg); k ←0; g ←0n; t ←S0(λ)
+▷subgradient step
+17:
+end if
+18:
+end if
+▷otherwise the query was perturbed: repeat t
+19:
+return (t ⊕m, TRUE, λ, k, g, fprev, t, ϕ)
+20: end procedure
+Potential. With y∗a fixed minimiser of f, D(s) = ∥λ −1y∗∥2 and c = η/(2n + 4): Φ(s) = 0 if
+Ff(q) ≥0; otherwise Φ(s) = c/(n + 1) if ϕ, and Φ(s) =
+ min{D(s), n} + c (2(n + 1 −k) −[q =
+t])
+
+/(n + 1) if not (c(2n + 3) replaces the second term before initialisation). Runtime. Generation 1:
+ε1 = 1/
+ nB2(2n+4)(n+1)
+
+, p1 = 1
+3: E [TA] ≤12 nB2(2n+4)(n+1) = O(n3+2c). Generations
+2–5 give 16 n2B2(n + 2), 32 nB2(n + 1), 128
+15 B2(n + 1)2 and 512
+63 B2(n + 1)2 = O(n2+2c).
+F.17
+WELLCOVEREDVC, ANONYMISED CARD, CLAUDE FABLE 5.1 (STAGED; INCOMPLETE)
+Let κ(x) = clamp[ 1
+4n , 1
+2n ](x) (applied only when sampling).
+Algorithm 19 Polarity-adaptive asymmetric mutation (wcvc, Claude Fable 5.1).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0,
+1
+2n,
+1
+2n)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗, rup, rdown), f)
+5:
+if not b then
+6:
+(c, cf) ←(q, f)
+7:
+else if f ≥f ∗then
+8:
+if |q|1 > |x∗|1 then
+9:
+(rup, rdown) ←(2rup, rdown/2)
+10:
+else if |q|1 < |x∗|1 then
+11:
+(rup, rdown) ←(rup/2, 2rdown)
+12:
+end if
+13:
+(c, cf) ←(q, f)
+14:
+else
+15:
+(c, cf) ←(x∗, f ∗)
+16:
+end if
+17:
+pi ←κ(rdown) if ci = 1, else κ(rup), for all i
+18:
+return (c ⊕bitsp(u), TRUE, c, cf, rup, rdown)
+19: end procedure
+33
+
+
+--- Page 34 ---
+Preprint
+Potential. With F eff
+z (s) = max{Fz(x∗), Fz(q)} if b, else Fz(q), and R = (n + 1)(n2 + 1) + 1: off
+the optimum Φz(s) = min{1, (1 −F eff
+z (s))/R}. Runtime. None proved (stopped at Stage 10h);
+ε1 = 1/R, p1 =
+1
+8n.
+F.18
+WELLCOVEREDVC, ANONYMISED CARD, CLAUDE OPUS 5.5 (STAGED; COMPLETE)
+Algorithm 20 Regime-switching asymmetric mutation (wcvc, Claude Opus 5.5).
+1: procedure init(u)
+2:
+return (bits1/2(u), FALSE, 0n, 0)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+9:
+end if
+10:
+if cf ≥−n then
+▷incumbent is a cover: shrink
+11:
+pi ←
+1
+n+1 if ci = 1, else
+1
+(n+1)2 , for all i
+12:
+else
+▷uncovered edges remain: grow
+13:
+pi ←
+1
+(n+1)2 if ci = 1, else
+1
+n+1, for all i
+14:
+end if
+15:
+return (c ⊕bitsp(u), TRUE, c, cf)
+16: end procedure
+Potential. With c(s) = q if ¬b or Fz(q) ≥f ∗, else x∗, and N = (n + 1)
+ n+1
+2
+
++ n + 2: off
+the optimum Φz(s) = (1 −Fz(c(s)))/N. Runtime. ε1 =
+1
+N , p1 =
+1
+n+1
+ n
+n+1
+n−1: E [TA] ≤
+4N(n + 1)
+  n+1
+n
+n−1 = O(n4).
+F.19
+WELLCOVEREDVC, NAMED CARD, CLAUDE FABLE 5.1 (STAGED; COMPLETE)
+Algorithm 21 Fitness-directed asymmetric mutation (WELLCOVEREDVC, Claude Fable 5.1).
+1: procedure init(u)
+2:
+q ←bits1/2(u); return (q, FALSE, q, 0, TRUE)
+3: end procedure
+4: procedure step(u, (q, b, x∗, f ∗, γ), f)
+5:
+if b and f < f ∗then
+6:
+(c, cf) ←(x∗, f ∗)
+7:
+else
+8:
+(c, cf) ←(q, f)
+9:
+end if
+10:
+γ′ ←[cf < −n]
+▷grow while the incumbent is not a cover
+11:
+if γ′ then
+12:
+pi ←
+1
+2(n+1) if ci = 1, else
+1
+n+1, for all i
+13:
+else
+14:
+pi ←
+1
+n+1 if ci = 1, else
+1
+2(n+1), for all i
+15:
+end if
+16:
+return (c ⊕bitsp(u), TRUE, c, cf, γ′)
+17: end procedure
+Potential. Off the optimum, Φz(s) =
+ 1 + min{ℓz(q), ℓz(x∗)}
+
+/(n2 + n + 2), where ℓz(x) =
+|x|1 −m∗
+z for a cover x and ℓz(x) = n + 1 + uncz(x) otherwise, with m∗
+z the minimum cover size.
+Runtime. ε1 =
+1
+n2+n+2, p1 =
+1
+(n+1)2 : E [TA] ≤4(n2 + n + 2)(n + 1)2 = O(n4).
+34
+
+
+--- Page 35 ---
+Preprint
+G
+PIPELINE PROGRESS AND PER-STAGE STATISTICS
+Figure 4 shows how each run of Table 2 progressed through the stages of the pipeline, and Figure 5
+where the runs spend their effort.
+0
+20
+40
+60
+80
+100
+120
+140
+160
+0
+5
+10
+15
+20
+25
+28
+round
+stages passed (of 28)
+(a) completed runs
+1: ONEMAX (Opus 5)
+2: LEADINGONES (Opus 5.5)
+3: LEADINGONES, e−1 (Opus 5.5)
+4: JUMPk (Opus 5.5)
+5: JUMPk, e−1 (Opus 5.5)
+9: WELLCOVEREDVC, anon. (Opus 5.5)
+14: BANDWIDTHVC (Opus 5.5)
+15: SUBMODULARMIN (Opus 5.5)
+6: CYCLEUNCOVER (Fable 5.1)
+7: WELLCOVEREDVC (Fable 5.1)
+10: VERTEXCOVER (Fable 5.1)
+11: BANDWIDTHVC (Fable 5.1)
+100
+101
+102
+103
+104
+0
+5
+10
+15
+20
+25
+28
+round (log scale)
+highest stage reached (of 28)
+(b) incomplete runs
+8: WELLCOVEREDVC, anon. (Fable 5.1)
+12: BANDWIDTHVC (Fable 5.1)
+13: BANDWIDTHVC (Fable 5.1)
+17: CYCLEUNCOVER (Sonnet)
+19: ONEMAX (open-weight)
+20: ONEMAX (open-weight)
+21: ONEMAX (open-weight)
+Figure 4: Progress through the 28 pipeline stages for the runs of Table 2, numbered as in the table,
+one point per round. (a) Runs that completed the pipeline: the number of stages passed, including the
+drops caused by backtracking; the final point at 28 marks completion. Row 14 includes a first attempt
+that stalled at Stage 10c before the pipeline restarted.x1 (b) Runs that did not complete: the highest
+stage reached so far, on a logarithmic round axis (rows 12 and 17 continue for thousands of automatic
+rounds after their best level). The zero-shot runs (rows 16 and 18) have a single stage and are omitted.
+algorithm
+potential
+drift and runtime
+0
+1
+1c
+2
+3
+4
+5
+6
+7
+7a
+7b
+8
+9a
+9b
+9c
+9d
+9e
+9f
+10a
+10b
+10c
+10d
+10e
+10f
+10g
+10h
+10i
+10j
+1: ONEMAX (Opus 5)
+3
+2
+2
+2
+2
+4
+5
+4
+5
+3
+9
+12
+3
+2: LEADINGONES (Opus 5.5)
+2
+2
+2
+2
+2
+2
+3: LEADINGONES, e−1 (Opus 5.5)
+2
+3
+8
+2
+2
+2
+4: JUMPk (Opus 5.5)
+3
+3
+2
+2
+3
+4
+2
+5: JUMPk, e−1 (Opus 5.5)
+2
+5
+2
+2
+3
+2
+2
+6: CYCLEUNCOVER (Fable 5.1)
+2
+3
+2
+2
+4
+7
+2
+2
+2
+7: WELLCOVEREDVC (Fable 5.1)
+4
+4
+2
+2
+2
+3
+2
+2
+8: WELLCOVEREDVC, anon. (Fable 5.1)
+4
+4
+2
+2
+3
+3
+2
+2
+9: WELLCOVEREDVC, anon. (Opus 5.5)
+2
+5
+4
+2
+2
+2
+2
+2
+4
+2
+3
+10: VERTEXCOVER (Fable 5.1)
+2
+2
+4
+2
+2
+2
+2
+2
+4
+2
+11: BANDWIDTHVC (Fable 5.1)
+3
+3
+5
+5
+6
+20
+3
+3
+3
+3
+12: BANDWIDTHVC (Fable 5.1)
+3
+4
+3
+3
+2
+4
+3
+3
+5
+2
+3
+7
+5
+2
+3
+2
+3
+13: BANDWIDTHVC (Fable 5.1)
+2
+4
+4
+2
+2
+3
+14: BANDWIDTHVC (Opus 5.5)
+2
+3
+6
+2
+3
+2
+4
+2
+2
+3
+2
+3
+4
+7
+6
+7
+8
+9
+10
+11
+49
+2
+2
+15: SUBMODULARMIN (Opus 5.5)
+2
+5
+10
+3
+3
+2
+2
+2
+2
+4
+3
+17: CYCLEUNCOVER (Sonnet)
+205
+1.0k
+480
+380
+296
+254
+204
+156
+160
+135
+120
+109
+54
+253
+186
+153
+155
+122
+71
+306
+288
+165
+94
+70
+6
+3
+19: ONEMAX (open-weight)
+2
+3
+4
+13
+20: ONEMAX (open-weight)
+2
+3
+4
+5
+6
+24
+21: ONEMAX (open-weight)
+2
+3
+4
+5
+16
+6
+5
+11
+15
+share of wall-clock
+time, mean over
+12 completed runs
+0%
+5%
+10%
+15%
+0
+1
+1c
+2
+3
+4
+5
+6
+7
+7a
+7b
+8
+9a
+9b
+9c
+9d
+9e
+9f
+10a
+10b
+10c
+10d
+10e
+10f
+10g
+10h
+10i
+10j
+Figure 5: Per-stage statistics of the runs of Table 2, numbered as in the table. Top: number of attempts
+per stage (colour on a logarithmic scale; the number is shown when a stage needed more than one
+attempt); a red frame marks the stage at which an incomplete run stopped. For rows 19–21 (vLLM
+backend) one attempt is a batch of 256 samples. Bottom: share of wall-clock time spent in each stage,
+averaged over the 12 completed frontier-model runs. Each run is counted up to its first completion or,
+if it did not complete, up to its last round at its highest stage. The zero-shot runs (rows 16 and 18)
+have a single stage and are omitted.
+35
+
+
+--- Page 36 ---
+Preprint
+Figure 5 shows where the runs spend their effort. Over the 12 completed frontier-model runs, the drift
+and runtime stages (Stages 10a–10j) account for 53% of the wall-clock time, algorithm construction
+(Stages 0–8) for 34% and the potential (Stages 9a–9f) for 13%. The most expensive stages are the
+pointwise drift and mass proofs: PositiveDrift (10f, 13%), DriftSetMass (10h, 9%) and
+NegativeDriftAndJump (10g, 8%). Two stages fail at the first attempt in almost every run for
+technical rather than mathematical reasons: DriftConstantProperties (10c) failed first in
+all 12 completed runs (81 attempts and 13 backtracks in total), mostly on the normal form of the
+baseline constants, and StepMeasurability (1c) in 11 of them. The incomplete frontier-model
+runs stop at a drift stage: rows 8, 12 and 17 at the mass bound (10h), which is false for their designs,
+and row 13 at 10c. The open-weight models stop much earlier, at NotRandomSearch (Stage 4,
+rows 19 and 20) and PotentialFineGrained (Stage 9d, row 21), after 13–24 batches of 256
+samples at that stage. The Sonnet run (row 17) needed between 54 and about 1,000 attempts at every
+stage it passed before Stage 10g.
+36

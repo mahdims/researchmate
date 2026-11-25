@@ -1,0 +1,1213 @@
+--- Page 1 ---
+Meta-RTL: Evolving Agent Harnesses for RTL Optimization
+Xinzhuang Xiong, Yonghao Wang, Shengyao Sun, Chengxi Li, and Evangeline Young
+Department of Computer Science and Engineering, The Chinese University of Hong Kong
+Abstract—Large language models enable agents to optimize RTL using
+EDA feedback, yet their executable search procedures remain largely hand-
+engineered. We present Meta-RTL, an EDA-grounded framework that
+evolves RTL optimization harnesses from a minimal loop while keeping the
+optimization model, EDA flow, and per-design budgets fixed. Compared
+with Dr. RTL, Meta-RTL∗reduces aggregate WNS/TNS violations by
+7.8%/11.0% across 20 development designs, with area reductions on 70%
+of them. Without further evolution, Meta-RTL∗transfers to 10 unseen
+IC-RTL designs, reducing aggregate WNS/TNS violations by 20.5%/14.0%
+and total synthesized area by 12.6%. We further characterize three search
+mechanisms in the evolved harness and assess their contributions through
+ablations and a case study.
+I. INTRODUCTION
+Optimizing register-transfer-level (RTL) designs for timing and area
+is a critical task in digital hardware design. Functionally equivalent
+RTL descriptions can synthesize into substantially different circuits,
+so the way a design is written directly determines its timing and
+area. Synthesis tools [1], [2] apply predefined optimization passes and
+heuristics, but they optimize within the structure that the RTL expresses
+rather than changing it. Designers therefore restructure RTL manually,
+with each revision followed by functional verification, synthesis, and
+timing–area analysis. This iterative process is labor-intensive and
+difficult to scale as designs grow more complex.
+Large language models (LLMs) have opened new opportunities
+to automate this process. Early studies generated RTL from high-
+level specifications, improving generation quality through domain-
+specific fine-tuning and functional validation [3]–[5]. Later approaches
+fed compilation, simulation, and PPA results back to the model to
+iteratively refine generated designs [6], [7]. Recent agentic frameworks
+go further, coupling LLM reasoning with EDA tools to generate, verify,
+and optimize RTL designs autonomously [8]–[13].
+For such agents, how the search is organized matters as much
+as which transformations the LLM proposes. Every candidate must
+remain functionally equivalent, timing and area often conflict, and
+each evaluation requires synthesis and equivalence checking. The
+search is governed by the agent’s harness: the executable procedure
+that presents EDA feedback to the model, decides which candidates
+to keep, and allocates the evaluation budget. It therefore shapes both
+optimization quality and cost [14]. Existing agents differ precisely
+in these choices, from predefined workflows for tool invocation and
+iterative rewriting [9]–[11] to persistent memory, reusable skills, and
+shared candidate pools [12], [13], [15]. Yet all of these harnesses
+are designed by hand, and each embeds fixed assumptions about
+how optimization should proceed. Promoting only the best-scoring
+candidate, for example, assumes that good designs are reached through
+steady improvement, whereas profitable restructuring often passes
+through intermediate designs that look worse before they are refined.
+In these agents, EDA feedback improves the designs but not the
+harness that produces them.
+This raises a natural question: Without manually prescribing sophis-
+ticated search heuristics, can we evolve RTL optimization harnesses
+from EDA feedback that outperform hand-designed ones—and if so,
+what makes the evolved harnesses effective?
+Fig. 1 Meta-RTL∗versus Dr. RTL on 20 development and 10 unseen
+designs. Triplets show relative reductions in WNS/TNS violations and
+area; blue/orange indicates improvement/regression.
+To answer these questions, we present Meta-RTL, which evolves
+an RTL optimization harness from a minimal seed through two nested
+loops. In the inner loop, a fixed LLM optimizes RTL designs under
+the current harness. In the outer loop, a proposer LLM improves the
+harness much as an engineer would: it traces EDA failures in the
+inner-loop logs back to specific harness decisions, hypothesizes a
+targeted fix and its expected effect, probes the fix on a few relevant
+designs, and revises it based on the evidence. Each submitted harness
+is then frozen and scored on all development designs by synthesis and
+equivalence checking outside its control. In this way, EDA feedback
+improves not only the designs but also the harness that produces
+them. While skill libraries capture what transformations to apply,
+Meta-RTL learns how to search for effective transformations, turning
+a traditionally hand-designed process into an optimization target.
+The main contributions of this work are summarized as follows:
+• We formulate EDA-grounded harness evolution for RTL timing–
+area optimization, in which the search procedure itself evolves
+from a minimal loop under a fixed LLM, EDA flow, and budget
+per design. Its proposer revises harnesses through four designed
+stages described in Section III-C.
+• We show that harness evolution yields substantial timing and
+area gains (Fig. 1). Compared with Dr. RTL, Meta-RTL∗reduces
+aggregate WNS/TNS violation magnitudes by 7.8%/11.0% and
+area on 14 of 20 development designs (Section IV-B). Without
+further evolution, it also improves WNS, TNS, and area on 7, 8,
+and 7 of the 10 unseen designs, respectively (Section IV-C).
+• We identify three search mechanisms that emerge in the evolved
+harness, and further assess their contributions through targeted
+ablations and a circuit-level case study (Sections IV-E and IV-F).
+1
+arXiv:2611.25891v1  [cs.AI]  19 Nov 2026
+
+
+--- Page 2 ---
+Outer harness evolution
+Evaluation protocol
+Harness archive ᵉ
+H0: minimal seed
+Code, prompts, routines
+Initial implementation
+Score Q(H0)
+Run records T0
+Harness H1
+Code, prompts, routines
+Lineage: H0 → H1
+Score Q(H1)
+Run records T1
+Harness Hi
+Code, prompts, routines
+Lineage: Hparent(i) → Hi
+Score Q(Hi)
+Run records Ti
+Hpar, Q(Hpar), Tpar
+Proposer P
+≤ C candidates / round
+EDA failure
+attribution
+SEC, timing, area
+Find causes
+Harness
+hypothesis
+Edit harness
+Predict effects
+Cost-aware
+probing
+Dj
+Select designs
+Test vs. parent
+Evidence-based
+revision
+Use probe results
+Fix regressions
+Select
+Probe
+D1
+D2
+DK
+...
+≤ K tests / candidate
+Freeze H
+Full-set evaluation
+D1
+D2
+Dn
+...
+Q(H) = mean q(τ)
+Model context
+Selected RTL
+SEC diagnostics
+WNS / TNS / A
+Tool schemas
+Search state
+RTL1
+SEC log
+RTL2
+(w, t, a)
+Fixed LLM M
+RTL / tool calls
+cLLM≤BLLM
+Fixed EDA
+synth. → SEC
+nEDA≤BEDA
+Candidate harness H
+Bubblewrap
+Evolvable search policy
+1. Candidate construction
+2. Feedback organization
+3. Search-state management
+4. Budget & search control
+H(D, B) → τ
+Harness
+H
+Inner RTL
+optimization
+H, T, Q(H)
+Prompt
+Assemble
+Respond
+Update
+Read
+Evaluate
+Report
+Return τ
+Run
+Fig. 2 Overview of Meta-RTL: inner-loop RTL optimization and outer-loop harness evolution.
+II. RELATED WORK
+A. Conventional Synthesis and RTL Optimization
+Traditional hardware optimization relies on logic synthesis and
+physical design tools to improve area and timing. Early synthesis
+systems such as SIS [16] introduced systematic logic and sequential
+circuit optimization. Yosys [1] provides an extensible framework for
+RTL synthesis, while ABC [2] supports AIG-based logic optimization
+and technology mapping. OpenROAD [17] enables automated physical
+design through placement, routing, and timing optimization. These
+tools employ well-established optimization algorithms, but high-level
+RTL restructuring still relies on manual design expertise.
+B. LLM-Based RTL Optimization
+Recent studies leverage LLMs for iterative RTL optimization, in
+which candidate designs are repeatedly rewritten and evaluated with
+EDA feedback [10], [11], [18]. Dr. RTL [12] introduces reusable
+optimization skills distilled from tool feedback. RTLScout [13] instead
+exploits shared candidate pools and experience accumulated across
+runs. Despite these advances, the executable procedures organizing
+optimization remain largely hand-engineered.
+Building on broader progress in self-evolving systems [19]–[21],
+recent studies have explored program evolution for EDA tasks. These
+include logic synthesis [22], technology mapping [23], and physical
+design tasks such as placement [24], [25], routing [26], and FPGA
+place-and-route [27]. Similar approaches have also been applied to
+hardware design [28] and verification [29].
+Unlike approaches that evolve internal EDA heuristics, Meta-RTL
+evolves the executable search procedure of RTL optimization agents.
+We investigate whether synthesis and equivalence-checking feedback
+can guide this evolution to outperform hand-engineered agents and
+generalize to unseen designs.
+III. META-RTL
+A. Overview
+As shown in Fig. 2, Meta-RTL evolves executable RTL optimization
+harnesses from a minimal loop H0 that simply edits RTL and evaluates
+the resulting designs using default EDA reports. An agentic proposer
+P progressively revises the harness using the implementations and
+execution evidence of earlier rounds, and the evaluation protocol
+specifies how it interacts with the fixed evaluator.
+For an RTL design D and resource budget B, a harness H(D, B)
+defines an inner optimization procedure that coordinates a fixed
+LLM M with equivalence checking, synthesis, and timing analysis.
+Its execution produces a trajectory τ containing RTL candidates,
+tool outcomes, timing–area measurements, and search decisions. The
+harness determines how candidates are constructed, how feedback is
+presented, and how subsequent transformations are explored.
+An archive A stores harness implementations, evaluation results,
+and execution trajectories. Harnesses are ranked by normalized timing–
+area utility Q(H) (Section III-D), and the highest-scoring eligible
+harness, Meta-RTL∗, is selected and then evaluated on unseen designs.
+B. Harness Representation and Search Space
+A harness H is a self-contained Python package that orchestrates
+the inner optimization loop via two primitives: invoking the fixed LLM
+M and querying the fixed EDA evaluator for synthesis, timing, and
+sequential equivalence checking (SEC). H can freely define prompt
+templates, helper scripts, and search routines, through which evolution
+may modify four aspects of the search procedure: (1) candidate
+construction, (2) feedback organization, (3) search-state management,
+and (4) resource allocation and search control.
+Harnesses execute in Bubblewrap-isolated environments. The in-
+dependent evaluator, which cannot be accessed or modified by the
+2
+
+
+--- Page 3 ---
+proposer P or H, fixes the optimization LLM, EDA flow, synthesis
+constraints, equivalence checking, scoring objective, and per-design
+budgets. This isolation ensures a consistent and reliable evaluation
+protocol while allowing the executable search procedure to evolve.
+Consequently, neither P nor H can relax verification constraints or
+alter scoring logic, so all gains can be attributed to improved search.
+C. Evidence-Guided Harness Evolution
+The proposer P is an LLM agent that can read the archive A, edit
+harness code, and launch probe runs. At each round, it selects as
+parent Hpar the harness it judges most promising, which need not be
+the highest-scoring one, based on the implementations, scores, and
+run records of all archived harnesses. This lets evolution continue
+from a harness whose new mechanism looks promising in its traces
+before it pays off in score. Its instructions then prescribe four stages,
+shown at the bottom of Fig. 2, for developing revisions from Hpar
+and its run records Tpar.
+EDA Failure Attribution. The proposer inspects Tpar, including
+RTL edits, SEC diagnostics, WNS/TNS/area trajectories, and resource
+usage, to trace how candidate transformations fare in correctness
+checking and EDA evaluation. It identifies recurring failures and
+unproductive search behavior, and attributes them to the responsible
+harness decisions, such as how candidates are constructed or how
+search state is managed. A score alone cannot provide this information:
+a harness whose edits fail SEC and one whose valid edits bring no
+gain may both score zero. The resulting diagnosis names a bottleneck
+together with the traces that support it.
+Harness Hypothesis Generation. The proposer turns the diagnosis
+into a hypothesis: a targeted change to relevant code paths, prompts,
+or tool interfaces, paired with a testable prediction of how search
+behavior should change. Typical predictions include more candidates
+passing SEC, broader exploration, or fewer unproductive evaluations.
+Stating the prediction in advance makes a probe informative even
+when the score barely moves, and keeps a lucky gain from being
+credited to the change. The proposer then implements it, and the
+prediction decides which designs to probe and how to read the results.
+Cost-Aware Probing. The proposer runs the revised harness on
+development designs selected for their relevance to the bottleneck, their
+ability to test the prediction, and their evaluation cost. Because Hpar
+has already run on the same designs, comparing the new traces with
+Tpar isolates the effect of the change and shows whether the predicted
+behavior occurred, for example in candidate validity, optimization
+progress, or resource usage. Each candidate is limited to K probe
+runs. Since a full-set evaluation runs every development design under
+budget B, these probes give an early signal at a fraction of its cost.
+Evidence-Based Revision. The proposer uses the probe results to
+accept, refine, or replace the hypothesis. Confirmed improvements are
+developed further, while failed predictions and regressions lead to a
+revised implementation or a new hypothesis. Failed predictions are
+also informative, since they rule out a suspected cause and sharpen the
+next diagnosis. The proposer may cycle through hypothesis generation,
+probing, and revision within the K-run limit, but each candidate must
+end in a submitted harness.
+Each round produces up to C candidate harnesses. Every submitted
+harness is frozen and formally evaluated on the full development
+set Ddev under budget B to obtain Q(H), and only harnesses that
+complete this evaluation are eligible for selection. The archive records
+every harness together with its lineage, score, and run records, so
+later rounds build on all accumulated evidence. After R rounds, the
+eligible harness with the highest Q(H) is selected as Meta-RTL∗.
+D. EDA-Grounded Harness Evaluation
+Harness evaluation measures the RTL quality that a complete
+optimization run achieves under fixed resource and EDA constraints.
+Each run starts from the original design D. The returned RTL ˜D is
+eligible for scoring only if it passes correctness checking and yields
+valid synthesis measurements. The original design remains available
+as a fallback with zero normalized utility.
+Normalized Timing–Area Utility. Meta-RTL uses an equivalent
+formulation of the timing–area score in Dr. RTL [12]. For a completed
+run τ(H, D, B), the normalized gain in each metric m is defined as
+gm(τ) = m(D) −m( ˜D)
+m(D)
+,
+m ∈{WNS, TNS, A},
+(1)
+where WNS, TNS, and A denote worst negative slack, total negative
+slack, and area, respectively. Run utility is defined as
+q(τ) = αgWNS(τ) + βgTNS(τ) + γgA(τ)
+−λ1[A( ˜D) > (1 + ρ)A(D)].
+(2)
+α, β, and γ weight the normalized gains, while λ penalizes relative
+area growth exceeding ρ. Larger utility indicates greater timing–area
+optimization gains relative to the original design.
+Harness quality is the mean development-set utility:
+Q(H) =
+1
+|Ddev|
+X
+D∈Ddev
+q(τ(H, D, B)) .
+(3)
+Normalization measures improvement relative to each original design,
+while averaging summarizes performance across the development set.
+All methods use the same scoring parameters (Section IV-A).
+Resource-Constrained Execution. Each inner optimization run
+receives a budget B = (BEDA, BLLM), enforcing
+nEDA ≤BEDA,
+cLLM ≤BLLM,
+(4)
+where nEDA counts candidate EDA evaluations and cLLM denotes
+cumulative LLM API cost, accounting for cached inputs, uncached
+inputs, and output tokens. The shared evaluator enforces both limits
+independently of harness decisions.
+IV. EXPERIMENTS
+A. Experimental Setup
+We compare Meta-RTL∗with two strong LLM-based RTL opti-
+mization frameworks: Dr. RTL [12] with its released skill library and
+RTLScout [13]. For RTLScout, we only evaluate its RTL optimization
+component while keeping the synthesis flow fixed.
+Evaluation Benchmarks. Our experiments use two benchmark
+suites, Dr. RTL [12] and IC-RTL [11]. The Dr. RTL benchmark
+contains 20 designs covering arithmetic, control, communication, and
+sequential logic, which serve as the development set. IC-RTL contains
+10 more complex designs spanning image processing, compression,
+geometric computation, and hardware acceleration. These designs are
+held out from harness evolution to evaluate generalization.
+Outer Evolution. Evolution begins with a minimal seed: an in-place
+RTL editing loop guided by default EDA reports. GPT-5.6 Sol [30]
+serves as the harness proposer, generating up to C = 2 candidates per
+round. We conduct R = 8 evolution rounds, yielding 16 submitted
+harnesses in total. Each candidate is limited to K = 5 probe runs on
+proposer-selected designs. Submitted harnesses are evaluated afresh
+on all 20 development designs under the fixed inner budget. The
+highest-scoring eligible harness is selected as Meta-RTL∗.
+Inner Optimization. All methods share the same EDA flow and
+use DeepSeek-V4.1-Flash [31] as the optimization model. Synopsys
+3
+
+
+--- Page 4 ---
+TABLE I Timing and area comparison on the 20 Dr. RTL development designs. Bold indicates the best unrounded result.
+Dr. RTL
+RTLScout
+Meta-RTL∗
+Design
+WNS (ns)
+TNS (ns)
+A (µm2)
+q
+WNS (ns)
+TNS (ns)
+A (µm2)
+q
+WNS (ns)
+TNS (ns)
+A (µm2)
+q
+DSP
+-2.59
+-141.81
+4127.8
+0.0527
+-2.57
+-139.78
+4162.4
+0.0600
+-2.56
+-126.17
+3996.7
+0.0979
+FIFO
+-0.40
+-1628.64
+35613.1
+0.1968
+-0.41
+-1626.13
+34519.1
+0.1925
+-0.26
+-942.06
+37448.5
+0.4388
+LSTM
+-3.09
+-81.84
+3641.3
+0.5541
+-3.19
+-89.39
+3863.9
+0.5283
+-2.59
+-70.72
+4972.3
+0.6023
+SPI
+-0.24
+-24.88
+1916.0
+0.2184
+-0.32
+-25.49
+1490.4
+0.1224
+-0.22
+-22.20
+1849.5
+0.2819
+UART
+-0.35
+-22.13
+1134.0
+0.0714
+-0.37
+-22.48
+1147.0
+0.0383
+-0.35
+-21.36
+1001.2
+0.0987
+aes
+-0.61
+-789.44
+34532.7
+0.1084
+-0.70
+-913.49
+33755.1
+0.0000
+-0.52
+-684.54
+31071.2
+0.2282
+arm_cpu1
+-5.18
+-2174.25
+22520.4
+0.1117
+-5.18
+-2846.87
+22577.8
+0.0365
+-5.17
+-2224.34
+22392.1
+0.1079
+arm_cpu2
+-0.84
+-562.75
+11495.2
+0.1256
+-0.91
+-603.82
+11098.3
+0.0748
+-0.86
+-572.92
+11715.7
+0.1072
+communication
+-0.36
+-70.71
+1901.4
+0.0750
+-0.38
+-71.95
+1870.2
+0.0463
+-0.20
+-44.50
+2005.1
+0.3931
+controller
+-0.38
+-2.85
+234.6
+0.0000
+-0.31
+-2.46
+231.7
+0.1419
+-0.17
+-2.34
+232.2
+0.3405
+cpu_fsm
+-0.57
+-425.66
+32069.0
+0.1567
+-0.61
+-415.03
+32256.5
+0.1401
+-0.50
+-433.57
+32053.3
+0.1930
+cpu_pipe
+-2.31
+-260.11
+5478.0
+0.0393
+-2.37
+-277.42
+5349.5
+0.0094
+-2.31
+-257.07
+5206.4
+0.0505
+datapath
+-0.83
+-474.59
+12361.6
+0.0521
+-0.88
+-513.42
+12136.8
+0.0000
+-0.81
+-472.61
+12281.8
+0.0658
+i2c
+-0.31
+-24.98
+1297.0
+0.0908
+-0.34
+-25.42
+1254.5
+0.0483
+-0.31
+-24.52
+1255.8
+0.1016
+pcie
+-0.57
+-20.25
+1037.4
+0.2697
+-0.52
+-20.30
+1006.8
+0.3027
+-0.35
+-17.06
+1036.6
+0.4558
+router
+-0.38
+-218.76
+5530.7
+0.2260
+-0.48
+-271.01
+5598.8
+0.0667
+-0.38
+-221.17
+5432.0
+0.2258
+simple_spi
+-0.30
+-31.88
+1227.1
+0.0450
+-0.32
+-32.02
+1194.1
+0.0164
+-0.27
+-31.06
+1210.3
+0.1025
+ticket_machine
+-0.10
+-0.29
+31.9
+0.6395
+-0.14
+-0.38
+29.5
+0.5318
+-0.08
+-0.45
+47.1
+0.6088
+tv80
+-1.22
+-362.94
+5999.9
+0.0522
+-1.25
+-366.76
+5980.5
+0.0377
+-1.10
+-342.05
+6595.5
+0.1024
+vending_machine
+-0.08
+-0.16
+20470.6
+0.6471
+-0.09
+-0.16
+20514.5
+0.6282
+-0.09
+-0.24
+12896.2
+0.6566
+Mean Q
+–
+–
+–
+0.1866
+–
+–
+–
+0.1511
+–
+–
+–
+0.2630
+Design Compiler [32] is used for synthesis and timing analysis, and
+Cadence JasperGold [33] for SEC. To assess RTL-level improvements
+beyond standard synthesis optimizations, we synthesize with a
+commercial tool and the Nangate 45 nm [34] standard-cell library.
+Following Dr. RTL [12], we impose a stringent 0.1 ns clock period to
+drive aggressive timing optimization. All methods share per-design
+budgets of BEDA = 50 EDA evaluations and BLLM ≈US$6 in LLM
+API cost. The 50-evaluation cap matches Dr. RTL’s 10 major rounds
+of five minor attempts each.
+Evaluation Metrics. We report worst negative slack (WNS), total
+negative slack (TNS), synthesized area (A), and normalized timing–
+area utility (Q). The utility metric, defined in Section III-D, uses
+(α, β, γ) = (0.50, 0.35, 0.15), λ = 0.50, and ρ = 0.10, following
+Dr. RTL [12]. Higher utility indicates better timing–area optimization.
+Computational Cost. Under DeepSeek-V4.1-Flash pricing, the
+estimated costs of optimizing all 20 development designs are US$22.5
+for Meta-RTL∗, US$75 for Dr. RTL, and US$12 for RTLScout.
+The total recorded LLM API expenditure was US$627.09, excluding
+infrastructure costs (e.g., EDA licenses).
+The C × R = 16 candidate harnesses yield an estimated evolution
+cost of US$510 (16×US$22.5, i.e., Meta-RTL∗’s cost per candidate,
+plus US$150 for GPT-5.6 Sol proposals). Amortizing this cost over
+later applications, Meta-RTL∗would become more cost-efficient than
+Dr. RTL after about 200 design optimizations, even ignoring the effort
+behind the hand-engineered baselines.
+B. Development-Set Performance
+Table I compares Meta-RTL∗with Dr. RTL and RTLScout on the 20
+development designs. Among the three methods, Meta-RTL∗achieves
+the best or tied-best WNS on 18 designs, the best TNS on 14 designs,
+and the lowest area on 8 designs.
+The results show a strong advantage in timing. Compared with
+RTLScout, Meta-RTL∗achieves better WNS on 19 designs, ties on
+one, and improves TNS on 17 designs, while RTLScout obtains lower
+area on 12 designs. Timing gains also coincide with area reductions:
+compared with Dr. RTL, Meta-RTL∗improves or maintains both WNS
+and TNS while reducing area on 10 designs, including 7 designs with
+strict improvements in all three metrics.
+TABLE II Timing and area comparison on 10 unseen IC-RTL designs
+Dr. RTL
+Meta-RTL∗
+Design
+WNS
+TNS
+A
+q
+WNS
+TNS
+A
+q
+LBP
+-0.26
+-22.30
+1171 0.2810 -0.20
+-20.41
+1092 0.3866
+CONV
+-2.95
+-165.59
+4103 0.0909 -2.86
+-150.58
+4166 0.1307
+HC
+-0.62
+-111.54
+2996 0.0552 -0.63
+-112.25
+2962 0.0475
+JAM
+-0.79
+-46.67
+1599 0.1702 -0.40
+-34.46
+1737 0.4462
+DT
+-0.65
+-35.57
+1594 0.0439 -0.39
+-27.32
+1354 0.3326
+REF
+-6.67 -1789.23 35970 0.1726 -3.62 -1311.44 26768 0.4842
+GEO
+-2.85
+-699.03 14976 0.0534 -2.97
+-727.84 13207 0.0387
+IOT
+-0.80
+-152.88
+5448 0.3401 -0.73
+-110.02
+5070 0.4410
+SECC
+-0.99
+-25.05
+1835 0.1158 -0.70
+-22.59
+1920 0.2704
+GEMM
+-2.83 -1573.07 41400 0.0651 -2.93 -1455.20 38816 0.0819
+Mean Q
+–
+–
+– 0.1388
+–
+–
+– 0.2660
+Overall, Meta-RTL∗achieves the highest mean normalized utility of
+0.2630, compared with 0.1866 for Dr. RTL and 0.1511 for RTLScout,
+indicating the strongest aggregate timing–area performance.
+C. Generalization to Unseen Designs
+To evaluate generalization, we compare Meta-RTL∗with Dr. RTL
+on 10 unseen IC-RTL designs. Both methods leverage optimization
+experience from the 20-design Dr. RTL benchmark: Dr. RTL through
+its distilled skill library, and Meta-RTL through harness evolution. For
+a fair comparison, we exclude RTLScout from the transfer evaluation,
+as it was not developed on the same benchmark. The skill library and
+evolved harness are kept fixed during evaluation on IC-RTL.
+Table II presents the timing and area results. Meta-RTL∗achieves
+better WNS on 7 designs, better TNS on 8, and lower area on 7. It
+also achieves higher utility on 8 of the 10 designs. Notably, on REF,
+Meta-RTL∗simultaneously improves WNS, TNS, and area by 45.7%,
+26.7%, and 25.6%, respectively. Overall, its mean utility reaches
+0.2660, compared with 0.1388 for Dr. RTL, representing a 91.6%
+relative improvement. Note that REF contributes substantially to the
+aggregate timing gains, yet Meta-RTL∗still achieves 79.0% higher
+mean utility on the remaining nine designs. These results indicate that
+the evolved harness transfers effectively to unseen designs.
+4
+
+
+--- Page 5 ---
+Fig. 3 Evolution lineage of Meta-RTL harnesses.
+D. Evolution Analysis
+Evolutionary Progress. Fig. 3 traces the evolution of Meta-RTL∗.
+Starting from the minimal loop, Local Feedback extracts critical-path
+information and achieves a utility of 0.0936. Serial Dual Context then
+improves utility to 0.1265 by revisiting timing-improved candidates
+for area recovery.
+The subsequent evolution exemplifies how the proposer translates
+execution evidence into harness revisions. Inspecting Serial Dual
+Context trajectories, the proposer identified repeated RTL editing
+failures and premature search termination that prevented structural
+transformations from reaching EDA evaluation. It diagnosed a delivery/
+continuation bottleneck and hypothesized that programmatic RTL
+transformations and bounded search continuation would enable more
+valid measurements. Targeted probing on four development designs
+increased mean utility from 0.0817 to 0.2263, with previously un-
+successful transformations passing SEC. The resulting Programmatic
+Relay achieved a full-set utility of 0.2332.
+Further evolution revealed the overhead of repeatedly regenerating
+transformation programs, motivating persistent artifacts and incremen-
+tal program edits. Although Adaptive Workbench temporarily dipped
+to 0.2060 due to unpruned workspace state across retries, selecting
+it as the parent allowed the proposer to isolate this bottleneck and
+introduce structured artifact indexing, yielding Artifact Workbench
+(Q = 0.2630, selected as Meta-RTL∗).
+Discovered Mechanisms. The lineage reveals three complementary
+search mechanisms in Meta-RTL∗.
+EDA-Grounded Transformation Guidance. The evolved harness links
+EDA feedback to targeted structural transformations. By interpreting
+critical-path evidence and timing–area measurements, it guides the
+LLM toward transformations such as arithmetic sharing, control
+simplification, and common-logic factoring. Subsequent EDA results
+then refine the diagnosis, closing an evidence-guided loop.
+Executable Transformation Workspace. The evolved harness main-
+tains executable transformation programs with their intermediate
+artifacts and execution feedback across model requests. Rather than
+regenerating RTL edits from scratch, the optimizer can inspect, revise,
+Fig. 4 Development-set utility of 16 independently designed harnesses.
+TABLE III Ablations on 10 unseen designs (bold: best unrounded)
+Config.
+LBP CONV
+HC
+JAM
+DT
+REF GEO IOT SECC GEMM Mean
+Full
+0.387 0.131 0.048 0.446 0.333 0.484 0.039 0.441 0.270
+0.082
+0.266
+−Guidance
+0.299 0.141 0.043 0.436 0.243 0.238 0.056 0.407 0.153
+0.047
+0.206
+−Frontier
+0.322 0.095 0.048 0.413 0.263 0.130 0.014 0.418 0.150
+0.035
+0.189
+−Workspace 0.362 0.027 0.038 0.308 0.316 0.122 0.014 0.385 0.124
+0.012
+0.171
+and rerun them. This enables incremental construction and debugging
+of complex structural rewrites, including repairs of failed attempts.
+Pareto Frontier Memory. The evolved harness retains verified RTL
+candidates representing different trade-offs among WNS, TNS, and
+area. Rather than committing to a single incumbent, the optimizer
+can revisit promising intermediate candidates and explore alternative
+optimization directions. This preserves opportunities for further timing
+or area improvements that might otherwise be lost during the search.
+E. Ablation Studies
+Effect of Harness Evolution. To assess the benefit of harness
+evolution, we compare Meta-RTL with direct harness design. Using
+the same proposer, 16 harnesses are independently developed from the
+same minimal seed, each with up to K = 5 probe runs but no access
+to other candidates or their execution histories. All are evaluated under
+the same protocol, and the best is further tested on unseen designs.
+Fig. 4 shows the utility of the 16 independently designed harnesses.
+The best achieves 0.1813, below both Dr. RTL (0.1866) and Meta-
+RTL∗(0.2630). Their mean utility is 0.1376. On unseen designs,
+the selected harness achieves 0.1050, compared with 0.2660 for
+Meta-RTL∗. These results highlight the benefit of accumulating and
+organizing execution evidence across harness revisions.
+Contributions of Evolved Mechanisms. To assess the contributions
+of the three discovered mechanisms, we construct three ablated variants
+of Meta-RTL∗by individually disabling EDA-grounded transformation
+guidance (−Guidance), Pareto frontier memory (−Frontier), and the
+executable transformation workspace (−Workspace). All variants are
+evaluated on the same 10 unseen IC-RTL designs under identical
+LLM, EDA flow, and budgets, with other components unchanged.
+Table III reports the normalized timing–area utility. Removing
+Guidance, Frontier, and Workspace reduces the mean utility from
+5
+
+
+--- Page 6 ---
+(a) Dr. RTL
+10 × 5 = 50 candidates
+v0
+A
+234.6
+WNS −0.38
+v1
+A
+290.2
+WNS −0.32
+v2
+A
+282.8
+WNS −0.33
+v0.1
+v0.2
+v0.3
+v0.4
+v0.5
+v1.1
+v1.2
+v1.3
+v1.4
+v1.5
+…
+(b) RTLScout
+v0
+Run 1: v1
+Run 2: v4
+Run 3: v11
+Run 4: v19
+Run 5: v20
+Run 4
+v14: 1-hot
+A
+305.9
+WNS
+−0.29
+v16: 4-bit
+A
+228.0
+WNS
+−0.34
+v19
+A
+231.7
+WNS
+−0.31
+Discard
+…
+(c) Meta-RTL
+v0
+v4
+A
+249.5
+WNS −0.33
+Pareto frontier memory
+v6
+A
+267.9
+WNS
+−0.29
+v4
+A
+249.5
+WNS
+−0.33
+v0
+A
+234.6
+WNS
+−0.38
+v7–v10
+A
+>267.9
+WNS −0.30
+v6 dominates
+Restore
+w51
+Shared output
+decoding
+v11
+A
+215.5
+WNS −0.31
+Stepping stone
+Recode
+v22
+A
+232.2
+WNS −0.17
+Worst-path logic depth
+v0
+8 levels
+v6
+5 levels
+v11
+5 levels
+v6: per-state decoding
+v11: shared decoding
+group index
+== 0 1 0 0
+== 0 1 0 1
+== 0 1 1 0
+== 0 1 1 1
+≥1
+bypass_rk
+23 mapped cells
+w51
+state[3:0]
+== 0
+1
+x
+x
+bypass_rk
+2 mapped cells
+Fig. 5 Case study of controller optimization. TNS is omitted for clarity,
+as it did not affect the key trade-offs illustrated here.
+0.2660 to 0.2064, 0.1889, and 0.1707, respectively, corresponding to
+decreases of 22.4%, 29.0%, and 35.8%. The full harness outperforms
+these variants on 8, 9, and 10 of the 10 designs, respectively.
+Workspace removal causes the largest degradation, with lower utility
+on every unseen design. On REF, removing Workspace or Frontier
+reduces utility from 0.484 to 0.122 or 0.130, respectively. Removing
+Workspace also lowers utility on CONV from 0.131 to 0.027. These
+results demonstrate the complementary roles of retaining executable
+transformations for iterative refinement and preserving promising RTL
+candidates for continued exploration.
+F. A Case Study
+Fig. 5 illustrates, on the controller design, how the discovered
+mechanisms interact within the final Meta-RTL∗harness.
+Dr. RTL employs repeated five-way candidate expansion and single-
+candidate promotion, but its search remains focused on expanded
+decoding without exploring alternative structural directions. Despite
+evaluating 50 subsequent candidates, it fails to overcome the area
+penalty, leaving the original v0 as the best design. RTLScout carries
+the best design from each run into subsequent runs, but abandons the
+promising one-hot encoding in v14, ultimately settling for a suboptimal
+four-bit encoding without further refinement.
+Through harness evolution, Meta-RTL∗gains the ability to identify,
+preserve, and revisit promising intermediate designs. The evolved
+harness maintains a Pareto frontier of designs, restores their RTL
+sources across optimization contexts, and exposes executable interfaces
+for reusing saved transformation programs. These mechanisms make
+intermediate designs reusable starting points for structural refinement,
+even when their immediate optimization scores worsen.
+Here, v6 uses a two-bit group/two-bit index encoding to reduce
+worst-path logic depth from eight to five levels, but retains per-state
+output decoding with a 14.2% area overhead. The harness preserves v6
+in frontier memory, excludes the dominated v7–v10, and later restores
+v6 to apply the saved program w51. By exploiting the common two-
+bit prefix of four states asserting bypass_rk, w51 replaces their
+decoding branches with one predicate, reducing the fan-in cone from 23
+to 2 cells and total combinational cells from 247 to 188. The resulting
+v11 passes equivalence checking and reduces area and WNS/TNS
+violations by 8.2%, 18.4%, and 16.1%, respectively, relative to v0,
+Dr. RTL’s best result. It also matches RTLScout’s best WNS with 7.0%
+lower area. As a structural stepping stone, v11 provides factored output
+logic that subsequent candidates reuse and refine through further state
+recoding, ultimately yielding v22 (Table I).
+V. LIMITATIONS AND FUTURE DIRECTIONS
+Our results establish the feasibility and effectiveness of EDA-
+grounded harness evolution under a fixed proposer model, optimization
+model, EDA flow, and technology library. However, given the
+computational budget, the robustness of these findings to LLM
+stochasticity warrants further evaluation through repeated trials.
+Future work could investigate how different proposer and optimiza-
+tion models shape the search strategies discovered through evolution.
+Evaluating across technology libraries and physical design flows would
+further examine the transferability of these strategies under different
+hardware constraints. Beyond RTL optimization, extending harness
+evolution to other EDA tasks may reveal new mechanisms arising
+from distinct feedback signals and search spaces.
+VI. CONCLUSION
+We presented Meta-RTL, which evolves executable RTL optimiza-
+tion harnesses under a fixed LLM and EDA flow. Compared with
+Dr. RTL, Meta-RTL∗reduces aggregate WNS and TNS violations by
+7.8% and 11.0% on 20 development designs and transfers without
+further evolution to 10 unseen designs, where it nearly doubles
+mean utility (0.2660 vs. 0.1388). Analysis and ablations identify
+EDA-grounded transformation guidance, an executable transformation
+workspace, and a Pareto frontier memory as key mechanisms. These
+findings show that EDA feedback can improve not only RTL designs,
+but also the search procedures used to optimize them.
+CONTENT GENERATED BY AI
+ChatGPT (OpenAI) was used to assist with drafting and refining
+the paper, as well as generating and revising portions of the released
+codebase. All AI-assisted content was reviewed by the authors, who
+take full responsibility for the final work.
+6
+
+
+--- Page 7 ---
+REFERENCES
+[1] C. Wolf and J. Glaser, “Yosys – a free Verilog synthesis suite,” in
+Proceedings of the Austrochip Workshop on Microelectronics, 2013, pp.
+47–52.
+[2] R. K. Brayton and A. Mishchenko, “ABC: An academic industrial-
+strength verification tool,” in Computer Aided Verification (CAV), ser.
+Lecture Notes in Computer Science, vol. 6174.
+Springer, 2010, pp.
+24–40.
+[3] S. Thakur, B. Ahmad, H. Pearce, B. Tan, B. Dolan-Gavitt, R. Karri,
+and S. Garg, “VeriGen: A large language model for Verilog code
+generation,” ACM Transactions on Design Automation of Electronic
+Systems, vol. 29, no. 3, 2024.
+[4] S. Liu, W. Fang, Y. Lu, J. Wang, Q. Zhang, H. Zhang, and Z. Xie,
+“RTLCoder: Fully open-source and efficient LLM-assisted RTL code
+generation technique,” IEEE Transactions on Computer-Aided Design
+of Integrated Circuits and Systems, vol. 44, no. 4, pp. 1448–1461,
+2025.
+[5] A. Wei, H. Tan, T. Suresh, D. Mendoza, T. S. F. X. Teixeira, K. Wang,
+C. Trippel, and A. Aiken, “VeriCoder: Enhancing LLM-based RTL
+code generation through functional correctness validation,” arXiv
+preprint arXiv:2504.15659, 2025.
+[6] S. Thakur, J. Blocklove, H. Pearce, B. Tan, S. Garg, and R. Karri,
+“AutoChip: Automating HDL generation using LLM feedback,” arXiv
+preprint arXiv:2311.04887, 2023.
+[7] K. Thorat, J. Zhao, Y. Liu, A. Hasan, H. Peng, X. Xie, B. Lei, and
+C. Ding, “LLM-VeriPPA: Power, performance, and area optimization
+aware Verilog code generation with large language models,” in
+Proceedings of the ACM/IEEE Symposium on Machine Learning for
+CAD (MLCAD), 2025.
+[8] C.-T. Ho, H. Ren, and B. Khailany, “VerilogCoder: Autonomous
+Verilog coding agents with graph-based planning and abstract syntax
+tree (AST)-based waveform tracing tool,” Proceedings of the AAAI
+Conference on Artificial Intelligence, vol. 39, no. 1, pp. 300–307,
+2025.
+[9] K. Tasnia, A. Garcia, T. Farheen, and S. Rahman, “VeriOpt: PPA-
+aware high-quality Verilog generation via multi-role LLMs,” in
+Proceedings of the IEEE/ACM International Conference on Computer-
+Aided Design (ICCAD), 2025, pp. 1–9.
+[10] Y. Wang, W. Ye, P. Guo, Y. He, Z. Wang, B. Tian, S. He, G. Sun,
+Z. Shen, S. Chen, A. Srivastava, Q. Zhang, G. Qu, and A. Li, “Sym-
+RTLO: Enhancing RTL code optimization with LLMs and neuron-
+inspired symbolic reasoning,” in Advances in Neural Information
+Processing Systems (NeurIPS), vol. 38, 2025, pp. 55 809–55 834.
+[11] W.-P. Hsin, R.-H. Deng, Y.-T. Hsieh, E.-M. Huang, and S.-H. Hung,
+“EvolVE: Evolutionary search for LLM-based Verilog generation and
+optimization,” arXiv preprint arXiv:2601.18067, 2026.
+[12] W. Fang, Y. Lu, S. Liu, J. Wang, Z. Guo, J. He, F. Tu, and Z. Xie,
+“Dr. RTL: Autonomous agentic RTL optimization through tool-
+grounded self-improvement,” in Proceedings of the IEEE/ACM
+International Conference on Computer-Aided Design (ICCAD), 2026.
+[13] F. Arnold, R. Amaudruz, D. Tsaras, R. Andri, and L. Cavigelli,
+“RTLScout: Joint agentic code and synthesis optimization for efficient
+digital circuits,” arXiv preprint arXiv:2606.06530, 2026.
+[14] S. Cuyckens, M. Jivanescu, J. Yin, C. Fang, and M. Verhelst, “ARES:
+Adaptive reasoning-effort steering for PPA- and cost-aware RTL
+optimization with LLM agents,” arXiv preprint arXiv:2607.27879,
+2026.
+[15] Y. Wang, Q. Shi, S. Li, Q. Hu, X. Yin, B. Guo, X. Han, M. Sun,
+and J. Su, “VeriAgent: A tool-integrated multi-agent system with
+evolving memory for PPA-aware RTL code generation,” arXiv preprint
+arXiv:2603.17613, 2026.
+[16] E. M. Sentovich, K. J. Singh, L. Lavagno, C. Moon, R. Murgai,
+A. Saldanha, H. Savoj, P. R. Stephan, R. K. Brayton, and A. L.
+Sangiovanni-Vincentelli, “SIS: A system for sequential circuit
+synthesis,” University of California, Berkeley, Tech. Rep. UCB/ERL
+M92/41, 1992.
+[17] T. Ajayi, V. A. Chhabria, M. Fogaça, S. Hashemi, A. Hosny, A. B.
+Kahng, M. Kim, J. Lee, U. Mallappa, M. Neseem, G. Pradipta,
+S. Reda, M. Saligane, S. S. Sapatnekar, C. Sechen, M. Shalan,
+W. Swartz, L. Wang, Z. Wang, M. Woo, and B. Xu, “Toward an open-
+source digital flow: First learnings from the OpenROAD project,” in
+Proceedings of the 56th ACM/IEEE Design Automation Conference
+(DAC), 2019.
+[18] H. Ping, P. Zhang, Z. Wang, S. Li, A. Cheng, W. Yang, P. Bogdan,
+and S. Nazarian, “POET: Power-oriented evolutionary tuning for LLM-
+based RTL PPA optimization,” arXiv preprint arXiv:2603.19333, 2026.
+[19] J. Lin, S. Liu, C. Pan, L. Lin, S. Dou, Z. Xi, X. Huang, H. Yan,
+Z. Han, T. Gui, and Y.-G. Jiang, “Agentic harness engineering:
+Observability-driven automatic evolution of coding-agent harnesses,”
+arXiv preprint arXiv:2604.25850, 2026.
+[20] Y. Lee, R. Nair, Q. Zhang, K. Lee, O. Khattab, and C. Finn, “Meta-
+Harness: End-to-end optimization of model harnesses,” arXiv preprint
+arXiv:2603.28052, 2026.
+[21] H. Zhang, S. Zhang, K. Li, C. Zhang, Y. Chen, Y. Zhang, L. Bai,
+and S. Hu, “Self-Harness: Harnesses that improve themselves,” arXiv
+preprint arXiv:2606.09498, 2026.
+[22] C. Yu and H. Ren, “Autonomous evolution of EDA tools: Multi-agent
+self-evolved ABC,” in Proceedings of the 63rd ACM/IEEE Design
+Automation Conference (DAC), 2026.
+[23] R. Fu, Y. Liu, Q. Xu, and T.-Y. Ho, “MappingEvolve: LLM-driven
+code evolution for technology mapping,” in Proceedings of the 63rd
+ACM/IEEE Design Automation Conference (DAC), 2026.
+[24] H. Liu, L. Zhou, Y. Ren, Y. Wu, and Z. Wang, “GoalEvolve: From
+handcrafted algorithm priors to goal-driven evolution of physical
+design algorithms,” arXiv preprint arXiv:2608.16733, 2026.
+[25] R. Chen, W. Xiao, R. Karri, and J. Han, “CoEvoP&R: Co-evolving
+placement objectives with routing feedback via large language models,”
+arXiv preprint arXiv:2607.17398, 2026.
+[26] T. Jafri and V. A. Chhabria, “GR-Evolve: Design-adaptive global
+routing via LLM-driven algorithm evolution,” arXiv preprint
+arXiv:2604.22234, 2026.
+[27] Q. Wu, T. Jafri, A. Arora, and V. A. Chhabria, “VPR-Evolve: Multi-
+agent-driven algorithm evolution for FPGA place and route,” arXiv
+preprint arXiv:2607.24998, 2026.
+[28] C. Yu, C. Deng, N. Pinckney, and B. Khailany, “Agentic hard-
+ware design as repository-level code evolution,” arXiv preprint
+arXiv:2606.28279, 2026.
+[29] K. Seyoum and A. Mittur, “Automatic harness evolution for hardware
+design verification: Can LLMs consolidate gains across discovered
+harnesses?” arXiv preprint arXiv:2609.28908, 2026.
+[30] OpenAI, “GPT-5.6 Sol,” 2026, OpenAI model documentation. [Online].
+Available: https://developers.openai.com/api/docs/models/gpt-5.6-sol
+[31] DeepSeek-AI, “DeepSeek-V4.1-Flash: Pushing the limits of KV cache
+compression,” arXiv preprint arXiv:2609.19969, 2026.
+[32] Design Compiler: RTL Synthesis Solution, Synopsys, Inc., Synopsys
+Design Compiler product documentation. [Online]. Available:
+https://www.synopsys.com/implementation-and-signoff/rtl-synthesis-tes
+t/design-compiler.html
+[33] JasperGold Sequential Equivalence Checking App, Cadence Design
+Systems, Inc., Cadence Jasper formal verification documentation.
+[Online]. Available: https://www.cadence.com/en_US/home/tools/syste
+m-design-and-verification/formal-and-static-verification/jasper-verificat
+ion-platform/jaspergold-sequential-equivalence-checking-app.html
+[34] Nangate, Inc., “Nangate Open Cell Library (45 nm),” Open standard-cell
+library, 2008. [Online]. Available: https://eda.ncsu.edu/freepdk/freepdk45/
+7

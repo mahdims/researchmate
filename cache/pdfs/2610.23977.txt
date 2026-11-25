@@ -1,0 +1,1445 @@
+--- Page 1 ---
+LLM Evolutionary Search Strategies Should be Compared by Tokens
+Tal Oved*
+Roi Pony
+Oshri Naparstek
+Udi Barzelay
+IBM Research
+Abstract
+LLM evolutionary search is currently evaluated
+by counting proposals (candidate programs).
+We demonstrate this metric hides the true cost
+of search, and redo the comparison using to-
+kens. By replaying 600 logged runs across 5
+tasks and 3 methods, we show that proposal
+costs vary wildly from 16k to 39k tokens. In
+equal-proposal comparisons, this silently grants
+some methods up to 1.9× the compute of oth-
+ers, and gives evolution roughly 6× the budget
+of independent sampling. When we match to-
+ken budgets, giving sampling six times more
+attempts, and remove scorer exploits, the evolu-
+tionary advantage largely vanishes. Evolution
+beats independent sampling by 5% or less on 12
+of 15 task-method pairs, retaining a 23 to 28%
+margin on only 3, all on one task. A replication
+with Claude Haiku 4.5 reproduces this split,
+though a third backbone shows its size depends
+on the model too. The performance margin
+justifying these systems is often an accounting
+artifact. Reporting tokens, not proposals and
+not model calls, fixes this and costs nothing, as
+the logs already hold them.
+1
+Introduction
+Large language models now serve as the proposal
+step in evolutionary search over programs. A model
+writes a candidate, an evaluator scores it, the best
+are kept, and the model is asked to edit them
+again. The results are strong enough to change
+what counts as a discovery method. FunSearch
+found new mathematical constructions this way
+(Romera-Paredes et al., 2024), AlphaEvolve ex-
+tended the loop to algorithms and hardware kernels
+(Novikov et al., 2025), and open engines such as
+OpenEvolve reproduce it for public use (Sharma,
+2025). The same loop drives heuristic design (Liu
+et al., 2024; Ye et al., 2024), prompt optimization
+(Fernando et al., 2023; Agrawal et al., 2026), and
+*Corresponding author: Tal.Oved@ibm.com
+sample-efficient variants (Lange et al., 2026), and
+ADRS-Bench collects systems-optimization tasks
+for the setting (Cheng et al., 2025).
+These runs are reported in proposals, meaning
+candidate programs: a search is k seeds grown for
+t iterations, and methods are compared at matched
+kt. Oved et al. (2026) showed that how a fixed bud-
+get is split between k and t changes which method
+appears to win. Our concern is the unit itself. A
+proposal is not a fixed amount of compute, because
+an evolve prompt carries the current program and
+part of the archive and both grow as the run pro-
+ceeds. A later proposal therefore costs more than
+an earlier one, and a method that shows the model
+more context costs more per proposal. Cost-aware
+controllers already assume this (Zhang et al., 2026;
+Ishibashi et al., 2026), and what is missing is the
+measurement of what a proposal costs, and of what
+it does to a published comparison once that com-
+parison is paid for in tokens.
+These systems are usually validated against an
+ablation that removes evolution and samples pro-
+grams independently, run at equal proposals. Inde-
+pendent sampling is a serious competitor at scale
+(Brown et al., 2024; Snell et al., 2024; Beck et al.,
+2026). If one proposal costs several times what
+one sample costs, that ablation got a fraction of
+the compute it should have had, and the reported
+margin is partly an artifact of the accounting.
+In this work, we measure both sides. We re-
+play 600 logged runs over 5 optimization tasks and
+3 search strategies, re-indexing every best-so-far
+curve against cumulative tokens. One proposal
+costs 16k to 39k tokens depending on strategy and
+task, so on one task an equal-proposal comparison
+can hand one strategy 1.9× the compute of another.
+One proposal costs about six times one indepen-
+dent sample. Paid the same number of tokens, so
+that sampling gets roughly six times more attempts,
+evolution wins by 5% or less on 12 of our 15 strat-
+egy and task pairs, one of them indistinguishable
+1
+arXiv:2610.23977v1  [cs.NE]  13 Oct 2026
+
+
+--- Page 2 ---
+from parity, and by 23 to 28% on the other 3.
+Validity inspection.
+On transaction scheduling
+the best program scored 5× the baseline by placing
+3 of 300 transactions, and the scorer accepted it.
+Scorers that can be gamed are a known problem
+(Liu et al., 2023; Aleithan et al., 2024; Lehman
+et al., 2020; Skalse et al., 2022), and taking the
+maximum over many runs is how you find the ex-
+ploits (Stroebl et al., 2024; Agarwal et al., 2021).
+So we re-run the programs on both sides and score
+them under the same coverage rule.
+Contributions.
+• A token-level accounting of LLM evolution-
+ary search: what one proposal costs per strat-
+egy and per task, and how far that is from one
+independent sample (§4).
+• The comparison against independent sampling
+redone at equal token cost, with exact order
+statistics on both sides (§4).
+• A re-execution audit of candidate programs
+that removes a 5× headline result and erases
+the ranking it created on that task (§4).
+Related work.
+Oved et al. (2026), a concurrent
+work, asks how to split a fixed kt budget between
+seeds and depth; it takes the proposal as the unit, or-
+thogonal to what we test. Zhang et al. (2026) price
+search actions inside a controller to spend a token
+budget well. They assert the cost spread; we mea-
+sure it. Ishibashi et al. (2026) also fix a token bud-
+get and report that deeper reasoning per candidate
+beats more candidates, on one task and with evolu-
+tion on both sides of every comparison. Gupta et al.
+(2026) vary harness components budget-matched
+and find no configuration that wins everywhere,
+with no sampling arm and no program audit. Beck
+et al. (2026) argue archives and frameworks can be
+dropped in favor of sampling edits to the best veri-
+fied solution, though their sampler is conditioned
+on that incumbent and compute is reported in wall-
+clock time, not tokens. Rajan (2026) measures how
+often a code RL environment accepts an incorrect
+solution; we measure the realized exploit inside
+a search population, where selection amplifies it.
+Reward hacking and specification gaming are long-
+standing concerns (Amodei et al., 2016; Krakovna
+et al., 2020; Pan et al., 2022; Gao et al., 2022).
+2
+Experimental Setup
+Engine, models and strategies.
+All runs use
+the ADRS engine (Cheng et al., 2025) with
+gpt-5-mini; model, objective and evaluator re-
+main fixed to isolate the search strategy. The three
+strategies are OpenEvolve (islands plus archive,
+population 40; Sharma, 2025), EvoX (co-evolves
+its selection rule; Liu et al., 2026a) and AdaEvolve
+(adaptive variant; Cemri et al., 2026). Each task-
+strategy cell runs extensively for 40 independent
+seeds and 200 iterations, a budget of 8,000 propos-
+als per cell, for 600 logged runs. Throughout, a run
+is one seed and a cell is the forty runs of one task-
+strategy pair. Every run logs one line per model call
+with its prompt, completion and reasoning token
+counts, and one row per evaluated program with its
+score and a timestamp, which is what lets us price
+the search afterwards.
+Tasks and baseline.
+We use three system tasks
+from ADRS-Bench (Cheng et al., 2025): PRISM,
+an LLM-serving scheduler measured by goodput;
+Cloudcast, a broadcast planner measured by trans-
+fer cost; and transaction scheduling, measured by
+throughput. We add two mathematical construc-
+tion tasks, circle packing in a square and the Heil-
+bronn triangle problem, giving five tasks, fifteen
+cells. Each task is optimized through its native
+combined_score. Against these we run a sam-
+pling baseline: 8,000 independent programs drawn
+from the task description alone, with no history or
+archive, scored by the same evaluator. This is the
+control used in prior work (Oved et al., 2026); our
+contribution is to charge both sides the same way.
+3
+Method
+Notation.
+Seed i of a cell produces candidates
+with scores f(xi,1), . . . , f(xi,t), and its value at
+depth t is the running best
+Mi(t) = max
+1≤s≤t f(xi,s).
+(1)
+Running k seeds and keeping the best gives
+Bk(t) = maxi≤k Mi(t). Prior work budgets this
+by proposals, B = k t.
+Pricing a run.
+The two logs share one clock, so
+the tokens a seed has spent by the time its j-th
+program appears is the cumulative sum over the
+model calls that precede it. Every seed therefore
+becomes a curve of best score against tokens spent
+rather than against iterations. Summing over the
+2
+
+
+--- Page 3 ---
+calls, and not over the proposals, matters because a
+proposal is not one call: retries and the occasional
+meta-call that a strategy makes to steer itself are
+charged here and are invisible in a proposal count.
+Comparing at equal cost.
+Given a token budget
+B, we let k seeds share it and read each seed’s
+curve at B/k, then take the best over k and maxi-
+mize over k. Which k of the 40 seeds a practitioner
+draws is averaged out with exact order statistics, so
+no number depends on one ordering and there is no
+resampling noise. The baseline is priced the same
+way: a budget buys B over the cost per sample, and
+the expected best of that many is again an exact or-
+der statistic. We cap every budget at what the sam-
+pling pool covers, between 28 and 48 million to-
+kens, preventing extrapolation. We report proposal-
+budget and token-budget comparisons side by side,
+isolating accounting from search.
+Auditing the programs.
+Three of these scorers
+accept programs that fail the task, and two of them
+can only be caught by running the program again,
+so we re-execute those and check coverage directly:
+for transaction scheduling, how many of the 300
+transactions a schedule places, and for Cloudcast,
+the fraction of required partitions that arrive. Both
+sides are judged by identical code. Because such a
+program can lead midway through a run, we walk
+each seed in order, keep the best score surviving
+the check, and re-execute a candidate only when it
+would beat it, about six re-runs per seed versus two
+hundred. Where logs already record coverage, as
+PRISM does, we read it from them.
+4
+Results
+A proposal is not a unit of compute.
+Figure 1
+and Table 1 demonstrate it. One proposal costs
+23.0k tokens under OpenEvolve, 27.0k under EvoX
+and 33.9k under AdaEvolve, and between 15.6k
+and 38.6k across cells, a spread of 2.5×. One pro-
+posal also takes 1.3 to 1.8 model calls on average,
+because retries and extra calls some methods make
+to steer themselves are not proposals. Reasoning
+tokens are 5 to 24% of a proposal.
+Appendix C repeats this on Haiku 4.5, over two
+math tasks and all three strategies at the same 40
+seeds by 200 iterations. AdaEvolve remains dear-
+est, where OpenEvolve is 41% cheaper per pro-
+posal for one task and 9% dearer for the other.
+Two consequences.
+Across tasks, an equal-
+proposal comparison gives AdaEvolve 1.5×
+Method
+tokens/prop.
+calls/prop.
+reasoning
+OpenEvolve
+22,985
+1.29
+8%
+EvoX
+26,992
+1.82
+9%
+AdaEvolve
+33,907
+1.52
+14%
+one sample
+4,064–6,050
+1.0
+24–47%
+Table 1: Cost of one proposal, averaged over tasks,
+against the cost of one independent sample. Reasoning
+tokens are a share of the total. The sample column is a
+range because it varies by task.
+OpenEvolve’s compute, and in one task reaching
+1.9×, so part of any reported advantage is a larger
+budget. One cell, forty runs by 200 iterations, costs
+108–309 million tokens, averaging 194 million, no-
+table in a field reporting iteration counts.
+Sampling is roughly six times cheaper per at-
+tempt.
+An independent sample costs 4.1k to 6.0k
+tokens, against 16k to 39k for a proposal (Fig-
+ure 1). The ratio is 4.6× on circle packing, 4.8×
+on PRISM, 5.8× on Cloudcast, 6.0× on Heilbronn
+and 7.2× on transaction scheduling, a mean of
+5.7×. The cause is structural: an evolve prompt
+carries the program being edited and part of the
+archive, and both grow as the run proceeds, while
+a fresh sample carries only the task description.
+This matters since most works in the field, run
+this baseline at equal proposals. At equal tokens it
+should get more attempts than it was given.
+At equal cost, evolution wins less.
+Table 2 gives
+both sides at two budget definitions, and Figure 2
+in Appendix B plots the full curves. The correction
+comes first. At equal proposals the largest advan-
+tage was transaction scheduling with AdaEvolve at
+5.06×; that cell’s winner places 3 of 300 transac-
+tions. it reads 5.06 in both currencies, because its
+exploit is found early and cheaply, leaving nothing
+for more tokens. Auditing all three methods on that
+task drops the equal-token ratio from 5.06 to 1.02
+for AdaEvolve, from 1.14 to 1.02 for OpenEvolve,
+leaving EvoX untouched at 1.04 because its forty
+winners place every transaction.
+What remains is small; intervals agree: only
+Cloudcast with OpenEvolve spans parity, PRISM’s
+three sit just above, and only Heilbronn’s exceed
+1.17 (Table 7). The largest advantages are all Heil-
+bronn, 1.23–1.28 across methods, and on PRISM
+all three land within 1%. Moving from equal pro-
+posals to equal tokens removes some advantage in
+12 of 15 pairs, excepting the three PRISM pairs al-
+ready at parity, and on Cloudcast with OpenEvolve
+3
+
+
+--- Page 4 ---
+PRISM
+Cloudcast
+Txn
+Circle packing
+Heilbronn
+0
+10
+20
+30
+40
+Tokens per Proposal (103)
+OpenEvolve
+EvoX
+AdaEvolve
+One independent sample
+Figure 1: Tokens per proposal, by method and task, with the independent sample cost as the dashed line. Equal-
+proposal comparisons yield equal compute only if these bars match, which they do not: the same method varies by
+up to 2.4× across tasks, and within a task the methods differ by up to 1.9×. The distance to the dashed line (4.6×
+to 7.2×) is why a sampling baseline run at equal proposals is given far less compute than the compared methods.
+removes it all, leaving sampling ahead. Count-
+ing model calls instead does not fix it either (Ap-
+pendix F). Reporting in proposals flatters evolution
+twice: once by not charging for larger prompts, and
+again if nobody checks its best program’s output.
+The final sample doubling yields +0.00% on
+circle packing, +0.38% on PRISM, +0.44% on
+transaction scheduling, +1.37% on Heilbronn and
++3.63% on Cloudcast. Sampling has saturated here
+while evolution still rises, so the window favours
+sampling and reported margins are lower bounds.
+Scorer exploits, and what removing them costs.
+Reward hacking is well documented; we treat it as
+a filter, reporting changes (Table 9). Three of five
+scorers accept programs skipping most of the task,
+and one accepts a working program that misreports.
+Two exploits win here, and selection spreads both:
+in the worst transaction-scheduling seed, the top 69
+distinct programs are identical exploits, and over
+a third of candidates score there. Cloudcast’s sim-
+ulator prices plans from submitted edge data, not
+the provided network, so plans passing coverage
+checks are billed a fraction of true cost; re-running
+reproduces this faithfully, so only graph compar-
+isons catch it. One topped the Cloudcast EvoX
+cell, dropping it from 1.08 to 1.05. PRISM is gated
+throughout, so degenerate winners never reach our
+numbers, though an ungated best-of-k would ship
+one under all three methods. Circle packing and
+Heilbronn validate outputs, serving as controls.
+5
+Conclusion
+Report tokens alongside proposals. The logs al-
+ready hold them; without them an equal-proposal
+comparison can vary by 1.9× in compute between
+evolve / sampling
+Task
+Method
+prop.
+tok.
+cut
+Heilbronn
+EvoX
+1.33
+1.28
+13%
+Heilbronn
+OpenEv.
+1.31
+1.27
+10%
+Heilbronn
+AdaEv.
+1.32
+1.23
+27%
+Cloudcast
+AdaEv.
+1.06
+1.05
+27%
+Cloudcast
+EvoX
+1.05
+1.05
+7%
+Circle
+EvoX
+1.04
+1.04
+2%
+Circle
+AdaEv.
+1.04
+1.04
+5%
+Txn†
+EvoX
+1.04
+1.04
+20%
+Txn†
+OpenEv.
+1.03
+1.02
+38%
+Txn†
+AdaEv.
+1.03
+1.02
+31%
+Circle
+OpenEv.
+1.02
+1.01
+44%
+PRISM
+AdaEv.
+1.00
+1.00
+0%
+PRISM
+EvoX
+1.00
+1.00
+0%
+PRISM
+OpenEv.
+1.00
+1.00
+0%
+Cloudcast
+OpenEv.
+1.02
+0.99
+>100%
+mean
+1.09
+1.07
+Table 2: Evolution divided by independent sampling at
+equal proposals (prop.) and at equal tokens (tok.), the
+latter at the largest budget the sampling pool supports.
+The italic entry has an interval spanning parity. The cut
+column is how much advantage above parity disappears
+between them, (prop. −tok.)/(prop. −1); it exceeds
+100% when the advantage does not merely shrink. †
+audited by re-execution: each seed is credited only with
+its best program placing all transactions, and three seeds
+whose entire upper archive is the exploit are dropped.
+methods on one task and by about 6× from the
+sampling baseline used to justify it.
+Paid in tokens and audited, evolutionary search
+beat independent sampling by 5% or less on 12
+of 15 pairs, and by 23–28% on the other 3, all
+Heilbronn. The difference was the task rather than
+the method. Heilbronn has a long improvement
+path where editing a good program keeps paying;
+on the other four tasks a fresh sample is almost as
+4
+
+
+--- Page 5 ---
+good for a fraction of the cost. So check whether a
+task rewards search before choosing a searcher.
+Audit both sides, and record audit requirements
+during the run. One stored coverage number per
+candidate would replace every re-execution here.
+Limitations
+Logging and evaluating every API call across 1,200
+full runs imposes a heavy compute cost, which
+practically limits studies to fewer tasks and search
+methods. Therefore, we report fifteen pairs, not a
+broad distribution. The main comparison uses one
+backbone, with a second in Appendix C on the two
+math tasks, where the same task-dependent split
+appears, and with a third in Appendix D on the
+three system tasks.
+The comparison window is capped by the size of
+the sampling pool, so evolution is measured using
+about a fifth of its logged corpus. Its curves are
+still rising there, so the window favours sampling
+and our margins are lower bounds. This pool size
+is partly constrained by task difficulty: Cloudcast,
+for example, rejects a large portion of independent
+samples, with 38% of draws returning an error and
+no score, leaving 4,898 usable programs out of
+8,000.
+Finally, prices are reported as token counts, not
+dollars, because per-token prices change; a reader
+can simply multiply by the current rate.
+Ethical considerations
+The primary ethical dimension of this work is com-
+putational and environmental cost. LLM evolution-
+ary search demands a substantial energy footprint,
+requiring tens of thousands of API calls per run.
+Our methodology mitigates this by analyzing exist-
+ing logged runs rather than executing new searches,
+maximizing the utility of already-expended com-
+pute. Furthermore, by demonstrating that indepen-
+dent sampling can often match evolutionary search
+at a fraction of the token budget, our findings en-
+courage more energy-efficient uses of language
+models. The datasets and tasks evaluate system
+optimization and mathematics, presenting no risks
+regarding human subjects, privacy, or demographic
+bias.
+References
+Rishabh Agarwal, Max Schwarzer, Pablo Samuel Cas-
+tro, Aaron Courville, and Marc G. Bellemare. 2021.
+Deep reinforcement learning at the edge of the statis-
+tical precipice. In Advances in Neural Information
+Processing Systems.
+Lakshya A Agrawal, Shangyin Tan, Dilara Soylu,
+Noah Ziems, Rishi Khare, Krista Opsahl-Ong, Ar-
+nav Singhvi, Herumb Shandilya, Michael J Ryan,
+Meng Jiang, et al. 2026. Gepa: Reflective prompt
+evolution can outperform reinforcement learning. In
+International Conference on Learning Representa-
+tions, volume 2026, pages 8479–8565.
+Reem Aleithan, Haoran Xue, Mohammad Mahdi Mo-
+hajer, Elijah Nnorom, Gias Uddin, and Song Wang.
+2024. Swe-bench+: Enhanced coding benchmark for
+llms. arXiv preprint arXiv:2410.06992.
+Dario Amodei, Chris Olah, Jacob Steinhardt, Paul
+Christiano, John Schulman, and Dan Mané. 2016.
+Concrete problems in ai safety.
+arXiv preprint
+arXiv:1606.06565.
+Jacob Beck, Philip V. Ogren, and Ari Kobren. 2026.
+Hill sampling for test-time scaling: A simple and
+better alternative to repeated sampling, evolution, and
+training. arXiv preprint arXiv:2609.25510.
+Bradley Brown, Jordan Juravsky, Ryan Ehrlich, Ronald
+Clark, Quoc V Le, Christopher Ré, and Azalia Mirho-
+seini. 2024. Large language monkeys: Scaling infer-
+ence compute with repeated sampling. arXiv preprint
+arXiv:2407.21787.
+Mert Cemri, Shubham Agrawal, Akshat Gupta, Shu
+Liu, Audrey Cheng, Qiuyang Mang, Ashwin Naren,
+Lutfi Eren Erdogan, Koushik Sen, Matei Za-
+haria, et al. 2026.
+Adaevolve:
+Adaptive llm
+driven zeroth-order optimization.
+arXiv preprint
+arXiv:2602.20133.
+Audrey Cheng, Lynn Liu, Shu Wang, Ion Stoica, et al.
+2025. Barbarians at the gate: How ai is upending
+systems research. arXiv preprint arXiv:2510.06189.
+Chrisantha
+Fernando,
+Dylan
+Banarse,
+Henryk
+Michalewski, Simon Osindero, and Tim Rock-
+täschel. 2023.
+Promptbreeder:
+Self-referential
+self-improvement via prompt evolution.
+arXiv
+preprint arXiv:2309.16797.
+Leo Gao, John Schulman, and Jacob Hilton. 2022. Scal-
+ing laws for reward model overoptimization. arXiv
+preprint arXiv:2210.10760.
+Akshat Gupta, Jermaine Lei, Alexander Lu, Gopala
+Anumanchipalli, and Leshem Choshen. 2026. Auto-
+mated discovery has no universally superior harness.
+arXiv preprint arXiv:2607.18235.
+Yoichi Ishibashi, Taro Yano, and Masafumi Oya-
+mada. 2026. Effective harness engineering for algo-
+rithm discovery with coding agents. arXiv preprint
+arXiv:2605.15221.
+5
+
+
+--- Page 6 ---
+Victoria Krakovna, Jonathan Uesato, Vladimir Mikulik,
+Matthew Rahtz, Tom Everitt, Ramana Kumar, Zac
+Kenton, Jan Leike, and Shane Legg. 2020. Specifica-
+tion gaming: The flip side of ai ingenuity. DeepMind
+blog.
+Robert Lange, Yuki Imajuku, and Edoardo Cetin. 2026.
+Shinkaevolve: Towards open-ended and sample-
+efficient program evolution. In International Con-
+ference on Learning Representations, volume 2026,
+pages 74026–74078.
+Joel Lehman, Jeff Clune, Dusan Misevic, et al. 2020.
+The surprising creativity of digital evolution: A col-
+lection of anecdotes from the evolutionary computa-
+tion and artificial life research communities. arXiv
+preprint arXiv:1803.03453.
+Fei Liu, Tong Xialiang, Mingxuan Yuan, Xi Lin, Fu Luo,
+Zhenkun Wang, Zhichao Lu, and Qingfu Zhang.
+2024. Evolution of heuristics: Towards efficient auto-
+matic algorithm design using large language models.
+In International Conference on Machine Learning
+(ICML). ArXiv:2401.02051.
+Jiawei Liu, Chunqiu Steven Xia, Yuyao Wang, and Ling-
+ming Zhang. 2023. Is your code generated by chatgpt
+really correct? rigorous evaluation of large language
+models for code generation. In Advances in Neural
+Information Processing Systems.
+Shu Liu, Shubham Agarwal, Monishwaran Maheswaran,
+Mert Cemri, Zhifei Li, Qiuyang Mang, Ashwin
+Naren, Ethan Boneh, Audrey Cheng, Melissa Z Pan,
+et al. 2026a. Evox: Meta-evolution for automated
+discovery. arXiv preprint arXiv:2602.23413.
+Shu Liu, Mert Cemri, Shubham Agarwal, Alexander
+Krentsel, Ashwin Naren, Qiuyang Mang, Zhifei Li,
+Akshat Gupta, Monishwaran Maheswaran, Audrey
+Cheng, et al. 2026b. Skydiscover: A flexible, adap-
+tive framework for ai-driven scientific and algorith-
+mic discovery. In Proceedings of the ACM Confer-
+ence on AI and Agentic Systems, pages 1223–1227.
+Alexander Novikov, Ngân V˜u, Marvin Eisenberger,
+Emilien Dupont, Po-Sen Huang, Adam Zsolt Wag-
+ner, Sergey Shirobokov, Borislav Kozlovskii, Fran-
+cisco JR Ruiz, Abbas Mehrabian, et al. 2025. Alphae-
+volve: A coding agent for scientific and algorithmic
+discovery. arXiv preprint arXiv:2506.13131.
+Tal Oved, Roi Pony, Oshri Naparstek, and Udi Barze-
+lay. 2026. Evolution or illusion? rethinking eval-
+uation in llm evolutionary search. arXiv preprint
+arXiv:2609.19799.
+Alexander Pan, Kush Bhatia, and Jacob Steinhardt.
+2022. The effects of reward misspecification: Map-
+ping and mitigating misaligned models. In Interna-
+tional Conference on Learning Representations.
+Shreshth Rajan. 2026.
+Auditing reward hackability
+in code rl training environments.
+arXiv preprint
+arXiv:2606.16062.
+Bernardino
+Romera-Paredes,
+Mohammadamin
+Barekatain,
+Alexander Novikov,
+Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R.
+Ruiz, Jordan S. Ellenberg, Pengming Wang, Omar
+Fawzi, Pushmeet Kohli, and Alhussein Fawzi. 2024.
+Mathematical discoveries from program search with
+large language models. Nature, 625(7995):468–475.
+Asankhaya Sharma. 2025.
+Openevolve: An open-
+source implementation of alphaevolve. https://
+github.com/codelion/openevolve.
+Joar Skalse, Nikolaus H. R. Howe, Dmitrii Krashenin-
+nikov, and David Krueger. 2022. Defining and char-
+acterizing reward hacking. In Advances in Neural
+Information Processing Systems.
+Charlie Snell, Jaehoon Lee, Kelvin Xu, and Aviral Ku-
+mar. 2024. Scaling llm test-time compute optimally
+can be more effective than scaling model parameters.
+Preprint, arXiv:2408.03314.
+Benedikt
+Stroebl,
+Sayash
+Kapoor,
+and
+Arvind
+Narayanan. 2024.
+The limits of inference
+scaling through resampling.
+arXiv preprint
+arXiv:2411.17501.
+Haoran Ye, Jiarui Wang, Zhiguang Cao, Federico Berto,
+Chuanbo Hua, Haeyeon Kim, Jinkyoo Park, and Guo-
+jie Song. 2024. Reevo: Large language models as
+hyper-heuristics with reflective evolution. Advances
+in neural information processing systems, 37:43571–
+43608.
+Yansen Zhang, Yilu Liu, Tianyu Liu, Jiamin Chen,
+Xiaokun Zhang, Kai Xie, Xue Liu, Yiyan Qi,
+and Chen Ma. 2026. Budget-aware llm discovery
+via cost-calibrated frontier utility. arXiv preprint
+arXiv:2607.26828.
+A
+Implementation details
+All experiments run on SkyDiscover (Liu et al.,
+2026b), an open framework for AI-driven algorith-
+mic discovery, using its strategy implementations,
+task evaluators, and logging. Building on it keeps
+our pipeline reproducible.
+B
+Score against tokens spent
+Figure 2 plots the curves behind Table 2, one panel
+per task: best score so far against cumulative to-
+kens, for each search method and for independent
+sampling on the same axis.
+C
+A second backbone ablation
+We repeat the cost census on Claude Haiku 4.5,
+using the ablation runs on the two math tasks at
+the same 40 seeds by 200 iterations, all six cells
+complete. Table 3 and Figure 3 give the result,
+and the main point is how little changes from the
+6
+
+
+--- Page 7 ---
+1
+2
+5
+10
+20
+Tokens Spent (106)
+25.5
+26.0
+Best Combined Score
+PRISM
+1
+2
+5
+10
+20
+Tokens Spent (106)
+0.0012
+0.0013
+0.0014
+0.0015
+Best Combined Score
+Cloudcast
+1
+2
+5
+10
+20
+Tokens Spent (106)
+4000
+4200
+Best Combined Score
+Txn
+2
+5
+10
+20
+Tokens Spent (106)
+2.50
+2.55
+2.60
+Sum of Radii
+Circle packing
+1
+2
+5
+10
+20
+Tokens Spent (106)
+0.025
+0.030
+Min Triangle Area
+Heilbronn
+OpenEvolve
+EvoX
+AdaEvolve
+Independent sampling
+Figure 2: Best score against tokens spent. Solid lines are evolutionary search, one per method, each at its own best
+number of seeds for that budget. Cloudcast is shown with its coverage gate applied to both sides, and with the two
+cells whose ceiling misreported its transfer price capped at their best valid program. The dashed line is independent
+sampling, which at the same budget gets five to seven times more attempts, depending on the task. The transaction
+scheduling curves are shown after the audit: each seed is capped at the best program that places all 300 transactions
+and the three exploit seeds are dropped, so that panel tops out near 4,400 rather than 21,277. The range stops where
+the sampling pool stops, so nothing is extrapolated.
+first engine model. Costs land in the same band
+on both backbones rather than tracking the model:
+on circle packing EvoX and AdaEvolve are within
+3% of their gpt-5-mini values, on Heilbronn within
+13% and 19%, and only OpenEvolve moves far,
+41% cheaper on circle packing and 9% dearer on
+Heilbronn. What does transfer cleanly is that AdaE-
+volve is dearest everywhere, on both tasks and both
+backbones. The one ordering that does not sur-
+vive is OpenEvolve being cheapest: on Haiku Heil-
+bronn EvoX edges it, 19,275 against 19,645. So the
+spread we report in Section 4 is closer to a property
+of the harness than of the model, without being a
+fixed ranking.
+On circle packing one AdaEvolve proposal costs
+2.7× one OpenEvolve proposal, against 1.6× for
+the same pair on gpt-5-mini. An equal-proposal
+comparison is therefore no safer on a cheaper
+model. One difference worth noting: Haiku reports
+no reasoning tokens at all, on any of the 58,615
+calls in these six cells, where gpt-5-mini spends 5
+to 24% of a proposal on them.
+We can also repeat the comparison against in-
+dependent sampling, since we drew a Haiku best-
+of-N pool for each task: 8,000 attempts, of which
+tokens / proposal
+Task
+Strategy
+gpt-5-mini
+Haiku
+calls
+Circle
+OpenEv.
+22,813
+13,544
+1.14
+Circle
+EvoX
+23,920
+23,177
+1.61
+Circle
+AdaEv.
+37,573
+36,444
+1.38
+Heilbronn
+OpenEv.
+17,990
+19,645
+1.84
+Heilbronn
+EvoX
+22,265
+19,275
+1.62
+Heilbronn
+AdaEv.
+34,121
+27,479
+1.34
+Table 3: Cost of one proposal on both backbones, aver-
+aged over the 40 seeds of each cell. The calls column is
+model calls per proposal on Haiku.
+5,988 and 1,612 produced a valid program, at 4,649
+and 3,076 tokens per attempt. Table 4 prices both
+sides the same way as Table 2, and the result carries
+over. Evolution wins by 1 to 7% on circle packing
+and by 17 to 26% on Heilbronn, so the task rather
+than the backbone decides whether the search pays
+for itself. That is the same split we see on gpt-
+5-mini, where Heilbronn returns 1.23 to 1.28 and
+circle packing 1.04, and it is the clearest evidence
+we have that the finding is not an artifact of one
+model.
+7
+
+
+--- Page 8 ---
+evolve / sampling
+Task
+Strategy
+prop.
+tok.
+cut
+Heilbronn
+AdaEv.
+1.34
+1.26
+25%
+Heilbronn
+EvoX
+1.31
+1.25
+19%
+Heilbronn
+OpenEv.
+1.26
+1.17
+35%
+Circle
+EvoX
+1.07
+1.07
+1%
+Circle
+AdaEv.
+1.07
+1.06
+2%
+Circle
+OpenEv.
+1.02
+1.01
+35%
+mean
+1.18
+1.14
+Table 4: Haiku 4.5 evolution divided by Haiku indepen-
+dent sampling: equal proposals (prop.) against equal
+tokens (tok.), the latter at the largest budget each pool
+supports, 37.2M and 24.6M tokens. All six Haiku cells
+are 40 seeds by 200 iterations. The split is the same one
+the main text finds on gpt-5-mini, Heilbronn reward-
+ing search and circle packing barely doing so, which is
+why we claim it as a property of the task and not of the
+model.
+Circle packing
+Heilbronn
+0
+10
+20
+30
+Tokens per Proposal (103)
+OpenEvolve
+EvoX
+AdaEvolve
+One independent sample
+Figure 3: Tokens for one proposal on Haiku 4.5, by strat-
+egy and task, with the cost of one independent Haiku
+sample as the dashed line. All six cells are complete at
+40 seeds by 200 iterations.
+D
+A third backbone: the systems tasks
+Appendix C covers the two math tasks on a sec-
+ond backbone. This one covers the three systems
+tasks on gemini-2.5-flash, all three strategies
+and a best-of-N pool each, at the same forty seeds
+by 200 iterations. Everything here is gated and
+audited exactly as in Table 2: PRISM on success
+rate, Cloudcast on coverage and on declared price,
+transaction scheduling by re-execution. That au-
+dit found no transaction-scheduling exploit on this
+backbone, all 118 winners placing every transac-
+tion, and three Cloudcast winners that misreport
+their price.
+Table 5 demonstrates that the accounting prob-
+lem can be worse. One proposal costs 16.8k to-
+kens in the cheapest cell and 65.4k in the dearest,
+a 3.9× spread against 2.5× on gpt-5-mini, so
+an equal-proposal comparison misallocates more
+on this model. Little of the ordering carries over:
+AdaEvolve moves from 1.3× to 2.5× the cost of
+OpenEvolve, while transaction scheduling with
+EvoX becomes 29% cheaper rather than dearer.
+Reasoning is a third to two thirds of a proposal,
+against 5 to 24% before. One independent sample
+costs 2.1 to 2.6× more as well, so the gap between
+a proposal and a sample narrows to 3.3–4.4×.
+Table 6 gives the comparison. Evolution wins
+by more on this backbone: the mean ratio is 1.30
+at equal tokens against 1.07 on gpt-5-mini, and
+Cloudcast moves from about parity to 1.53–1.59.
+Pricing in tokens still only reduces the advantage,
+from 1.31 to 1.30. What does not hold is that
+the size of the margin belongs to the task alone:
+the same task pays very differently on a different
+model. The unit is wrong on both backbones; how
+much search is worth is not settled by either.
+E
+Confidence intervals
+The intervals in Table 7 come from 2,000 repli-
+cates that resample both sides: a cell’s forty seed
+curves, with replacement, and the sampling pool,
+with replacement. The ratio is recomputed in each
+replicate, so the interval covers the finite seed pool
+and the finite draw pool together. In three cells the
+best seed count is forty, which makes the statistic a
+sample maximum, where the bootstrap is not con-
+sistent; those use subsampling instead, m = 20
+of 40 without replacement, whose spread is wider
+than the true forty-seed spread and so cannot under-
+state the interval. It moves one bound, Heilbronn
+with OpenEvolve from 1.18 to 1.17.
+F
+Budgeting by model calls
+Once proposals are shown not to be a unit of com-
+pute, the natural fallback is to count API calls. That
+fails for the same reason: an evolve prompt carries
+the program being edited and part of the archive,
+and both grow as the run proceeds, so a later call is
+a larger call. Figure 6 shows it directly. Tokens per
+call run from 12.4k in the cheapest cell to 28.1k in
+the dearest, a 2.3× spread against 2.5× for tokens
+per proposal, so calls remove about a twelfth of the
+variation. One evolve call costs 3.3 to 4.4× one
+sampling call, against 4.7 to 7.2× per proposal.
+Table 8 repeats Table 2 with a call budget beside
+the other two. On the sampling side one call is one
+draw, so a budget of B calls buys B draws; on the
+evolve side the cumulative call count replaces cu-
+8
+
+
+--- Page 9 ---
+tokens per proposal
+Task
+Method
+gemini
+gpt-5-mini
+ratio
+calls
+reasoning
+PRISM
+OpenEv.
+16,849
+16,252
+1.04
+1.17
+43%
+PRISM
+EvoX
+23,524
+15,611
+1.51
+1.48
+42%
+PRISM
+AdaEv.
+65,437
+26,713
+2.45
+2.23
+35%
+Cloudcast
+OpenEv.
+23,600
+24,937
+0.95
+1.27
+35%
+Cloudcast
+EvoX
+57,573
+35,879
+1.60
+3.83
+62%
+Cloudcast
+AdaEv.
+59,361
+38,649
+1.54
+2.35
+41%
+Txn
+OpenEv.
+31,800
+32,935
+0.97
+2.26
+32%
+Txn
+EvoX
+26,641
+37,284
+0.71
+1.79
+32%
+Txn
+AdaEv.
+58,631
+32,479
+1.81
+2.36
+33%
+Table 5: Cost of one proposal on gemini-2.5-flash, beside the same nine cells on gpt-5-mini. Calls and
+reasoning are the gemini figures.
+PRISM
+Cloudcast
+Txn
+0
+10
+20
+30
+40
+50
+60
+Tokens per Proposal (103)
+OpenEvolve
+EvoX
+AdaEvolve
+One independent sample
+Figure 4: Tokens for one proposal on gemini-2.5-flash, by method and task, with one independent sample as the
+dashed line. The companion to Figure 1.
+evolve / sampling
+Task
+Method
+prop.
+tok.
+cut
+Cloudcast
+AdaEv.
+1.61
+1.59
+3%
+Cloudcast
+OpenEv.
+1.58
+1.55
+5%
+Cloudcast
+EvoX
+1.53
+1.53
+0%
+Txn
+EvoX
+1.25
+1.25
+0%
+Txn
+AdaEv.
+1.27
+1.25
+6%
+PRISM
+AdaEv.
+1.15
+1.15
+0%
+PRISM
+EvoX
+1.15
+1.15
+0%
+Txn
+OpenEv.
+1.16
+1.15
+7%
+PRISM
+OpenEv.
+1.06
+1.06
+0%
+mean
+1.31
+1.30
+Table 6: Gemini evolution divided by gemini indepen-
+dent sampling, built as Table 2 and audited the same
+way.
+mulative tokens. The mean ratio moves from 1.085
+at equal proposals to 1.083 at equal calls, against
+1.069 at equal tokens: calls recover about an eighth
+of what tokens recover, and leave the same 11 of
+15 pairs within 5% where tokens leave 12. The
+clearest case is Cloudcast with OpenEvolve, read-
+ing 1.02 at equal proposals, 1.01 at equal calls and
+0.99 at equal tokens. The one pair where sampling
+wins is visible only when the budget is counted in
+Task
+Method
+tok.
+95% CI
+Heilbronn
+EvoX
+1.28
+1.24–1.36
+Heilbronn
+OpenEv.
+1.27
+1.17–1.34
+Heilbronn
+AdaEv.
+1.23
+1.19–1.30
+Cloudcast
+AdaEv.
+1.05
+1.04–1.19
+Cloudcast
+EvoX
+1.05
+1.03–1.18
+Circle
+EvoX
+1.04
+1.04–1.04
+Circle
+AdaEv.
+1.04
+1.03–1.04
+Txn
+EvoX
+1.04
+1.03–1.06
+Txn
+OpenEv.
+1.02
+1.02–1.05
+Txn
+AdaEv.
+1.02
+1.01–1.04
+Circle
+OpenEv.
+1.01
+1.00–1.02
+PRISM
+AdaEv.
+1.00
+1.00–1.02
+PRISM
+EvoX
+1.00
+1.00–1.02
+PRISM
+OpenEv.
+1.00
+1.00–1.02
+Cloudcast
+OpenEv.
+0.99
+0.97–1.12
+Table 7: Equal-token ratios from Table 2 with their 95%
+intervals. PRISM’s lower bounds are 1.0009 and round
+to 1.00. Only Cloudcast with OpenEvolve spans parity.
+tokens.
+G
+What each scorer accepts
+A search is only as good as the scorer behind it.
+This appendix lists what each task’s scorer will ac-
+cept from a program that has not done the job: a
+schedule covering 3 of 300 transactions, a broad-
+9
+
+
+--- Page 10 ---
+5
+10
+20
+50
+Tokens Spent (106)
+23
+24
+25
+26
+Best Combined Score
+PRISM
+2
+5
+10
+20
+50
+Tokens Spent (106)
+0.0010
+0.0012
+0.0014
+Best Combined Score
+Cloudcast
+5
+10
+20
+50
+Tokens Spent (106)
+3400
+3600
+3800
+4000
+4200
+Best Combined Score
+Txn
+OpenEvolve
+EvoX
+AdaEvolve
+Independent sampling
+Figure 5: Best score against tokens spent on gemini-2.5-flash, one panel per systems task, with the same gates
+and audits as Figure 2.
+PRISM
+Cloudcast
+Txn
+Circle packing
+Heilbronn
+0
+5
+10
+15
+20
+25
+Tokens per LLM Call (103)
+OpenEvolve
+EvoX
+AdaEvolve
+One independent sample
+Figure 6: Tokens for one model call, by method and task, with the cost of one independent sampling call as the
+dashed line. If a call were a unit of compute this would be flat.
+cast that drops partitions or misstates its own price,
+a server answering 2% of requests. Table 9 adds
+how often such a program was the one a practi-
+tioner would have shipped, which is the number
+that matters, because selection takes the maximum
+rather than the average. Three of the four had to be
+caught by re-running the program; only PRISM’s
+is visible in the logs. Circle packing and Heilbronn
+are here as controls, and their evaluators check their
+own output, so nothing turns up.
+evolve / sampling
+Task
+Method
+prop.
+calls
+tok.
+Heilbronn
+EvoX
+1.33
+1.33
+1.28
+Heilbronn
+OpenEv.
+1.31
+1.31
+1.27
+Heilbronn
+AdaEv.
+1.32
+1.29
+1.23
+Cloudcast
+AdaEv.
+1.06
+1.06
+1.05
+Cloudcast
+EvoX
+1.05
+1.05
+1.05
+Txn
+EvoX
+1.04
+1.04
+1.04
+Circle
+EvoX
+1.04
+1.04
+1.04
+Circle
+AdaEv.
+1.04
+1.04
+1.04
+Txn
+AdaEv.
+1.03
+1.03
+1.02
+Txn
+OpenEv.
+1.03
+1.03
+1.02
+Circle
+OpenEv.
+1.02
+1.02
+1.01
+PRISM
+EvoX
+1.00
+1.00
+1.00
+PRISM
+AdaEv.
+1.00
+1.00
+1.00
+PRISM
+OpenEv.
+1.00
+1.00
+1.00
+Cloudcast
+OpenEv.
+1.02
+1.01
+0.99
+mean
+1.09
+1.08
+1.07
+Table 8: The same fifteen pairs at three budget defini-
+tions. Transaction scheduling and Cloudcast are audited
+as in Table 2. Switching from proposals to calls changes
+almost nothing; switching to tokens is what moves the
+comparison and what matters.
+10
+
+
+--- Page 11 ---
+Task
+Accepted despite
+Degenerate
+Effect
+Txn
+3 of 300 placed
+3/120
+5.06→1.02
+Cloudcast
+no partitions sent
+2/113
+< 0.1%
+Cloudcast
+price misreported
+2/113
+1.08→1.05
+PRISM
+2% of requests served
+22/120
+gated out
+Circle
+nothing
+0/120
+control
+Heilbronn
+nothing
+0/120
+control
+Table 9: What each scorer accepts, how often it happens,
+and what removing it costs. The Degenerate column
+counts seeds whose own best program fails a direct
+coverage check, out of the seeds we re-executed; both
+Cloudcast rows rest on the same 113, because seven
+of its winners cannot be re-run at all. Circle packing
+and Heilbronn accept nothing because their evaluators
+validate the output themselves, the latter rejecting any
+result that does not place every point inside the triangle.
+The Effect column is the change to Table 2: transaction
+scheduling loses its headline, Cloudcast is unaffected
+by the two that send no partitions because neither ever
+led, but one of the two that misreport their price was a
+cell ceiling, and PRISM’s gate excludes its own before
+they are scored.
+11

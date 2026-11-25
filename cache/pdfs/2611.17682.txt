@@ -1,0 +1,2725 @@
+--- Page 1 ---
+Agent-written heuristics versus commercial solvers on unsolved
+job-shop benchmark instances
+Andre Albrecht1,*, Enzo Morosini Frazzon1, Leandro C. Coelho2 and Bruno Vieira1,3
+1ProLogIS – Production and Logistics Intelligent Systems, Department of Production Engineering, Federal
+University of Santa Catarina (UFSC), Florianópolis, SC, 88040-900, Brazil
+2CIRRELT and Canada Research Chair in Integrated Logistics, Université Laval, Québec, QC, G1V 0A6, Canada
+3Department of Industrial Engineering, Federal Institute of Santa Catarina (IFSC), Caçador, SC, 89503-550, Brazil
+andre.albrecht@posgrad.ufsc.br, enzo.frazzon@ufsc.br, leandro.coelho@fsa.ulaval.ca,
+bruno.vieira@ifsc.edu.br
+*Corresponding author
+Preprint submitted to International Transactions in Operational Research, November 2026
+Abstract
+Commercial solvers are the standard tool for difficult scheduling problems. We study whether a
+frontier large language model, used as a coding agent with open-source tools only, can match them
+in quality and speed. We report every run, and independent checkers verify every schedule. On
+the 100,000-operation job shop tai_100_1000_1, an agent-written solver reached 525,515, below
+OptalCP, Hexaly, and CP Optimizer. Unchanged, it improved all ten instances of the family and closed
+two. With equal budgets on the same workstation, it ended 0.0–1.8% above the lower bound, against
+2.6–5.8% for CP Optimizer and 2.4–4.4% for Hexaly. On the Behnke–Geiger flexible job shops, an
+agent-written tabu search improved 11 of 32 open instances. With two transport robots, an agent-
+written solver improved seven of ten MKT instances. New lower bounds show that four published
+MKT values cannot be attained on the distributed instance files. Agent-run improvement campaigns
+closed eight further instances.
+Keywords: job shop scheduling; flexible job shop; transport robots; lower bounds; large language models;
+coding agents; heuristic design; commercial solvers; benchmark
+1
+Introduction
+Scheduling problems arise in manufacturing and logistics (Leusin et al., 2018), and many practitioners
+solve them by means of commercial solvers. Typical examples are Hexaly (Hexaly, 2026a; Benoist et al.,
+2011), IBM ILOG CP Optimizer (Laborie et al., 2018), Gurobi, and OptalCP (ScheduleOpt, 2026c).
+These solvers perform very well on a wide range of problems and need little problem-specific work, but
+commercial use requires a paid license. Hexaly and OptalCP quote their commercial prices on request
+(Hexaly, 2026b; OptalCP, 2026b), and IBM lists a developer subscription of CP Optimizer from US$320
+per user and month, with deployment licenses on request (IBM, 2026). These three are free for academic
+use. Open-source solvers such as OR-Tools CP-SAT (Google, 2024; Perron et al., 2023) are free, but on
+large scheduling instances they are often weaker (Da Col and Teppan, 2022; Yuraszeck et al., 2026).
+At the same time, large language models (LLMs) can now write and run code in long autonomous
+sessions (Chen et al., 2021; Jimenez et al., 2024; Yang et al., 2024b). Recent work uses LLMs to design
+heuristics (Romera-Paredes et al., 2024; Liu et al., 2024a; Ye et al., 2024; Novikov et al., 2025) and to
+formulate optimization models (Ramamonjison et al., 2022; AhmadiTeshnizi et al., 2024; Huang et al.,
+2025). Scheduling is a natural test for such agents, because a candidate schedule is easy to check, whereas
+a good schedule is difficult to find.
+1
+arXiv:2611.17682v1  [math.OC]  13 Nov 2026
+
+
+--- Page 2 ---
+Our starting question is whether a frontier LLM, used as a coding agent, can replace an off-the-shelf
+commercial solver. We aimed for results of similar quality in a similar time. The agent had no access to a
+commercial solver, and it could use only open-source tools and the code it wrote itself.
+The results exceed this target. The agents analyzed the structure of each instance and, when the standard
+formulation did not yield good solutions, they changed it. They then wrote heuristics and metaheuristics
+tailored to that structure, and used open-source tools such as CP-SAT for subproblems and bounds. On the
+job shop and the flexible job shop, the results are better than the best published values of the commercial
+solvers, and better than CP Optimizer and Hexaly in our own runs with the same budget on the same
+workstation. For the transport problem, the results are better than all valid published values on seven of
+the ten MKT instances, including the largest ones, better than the CP Optimizer models of Meng et al.
+(2025) on nine of them, and better than CP-SAT with four times the CPU time. We do not count four
+published values on these instances, because they are below a new lower bound on the distributed instance
+files, nor two published schedules that assign an operation to a machine on which it is not eligible. On the
+Chambers–Barnes transport instances, where processing times dominate travel times, the CP Optimizer
+approach is better than the agent-written solver.
+The contributions of the paper can be summarized as follows:
+• We propose a method to test LLM coding agents on open benchmark instances, with a clear split
+between autonomous runs and runs with human help (Section 5).
+• We provide new best-known schedules for three established problem families: the 100 × 1000 job
+shops of Da Col and Teppan (2022), the flexible job shops of Behnke and Geiger (2012), and the
+flexible job shops with transport robots of Homayouni and Fontes (2021) (Section 6).
+• We derive new lower bounds for the flexible job shop with transport robots and validate them with
+two solvers. They are above eleven published values on the distributed instance files and certify
+eight published schedules as optimal, two of them (MFJST09 and mt10xyzt) without a previous
+proof (Sections 3.2 and 6.4).
+• We compare the quality, speed, and cost of the agent-written solvers with those of commercial and
+open-source solvers on the same instances (Sections 6 and 7), and three ways to use an agent: as
+the solver itself, as the author of a reusable solver, or as the improver of such a solver in its own
+campaign (Section 5.3).
+• We test the agent-written solvers on similar instances without any change. On the job-shop family,
+the solver has improved the best-known values of all ten instances and has solved two open instances
+to optimality (Section 6.2).
+We report every agent run on the instances of this paper, without any selection based on the results.
+An independent checker verifies every schedule, and a public repository contains all instances, schedules,
+checkers, solvers, solver logs, and task texts (see the statement on data availability).
+The remainder of the paper is organized as follows. In Section 2 we review the literature on shop
+scheduling, on the flexible job shop with transport robots, and on LLMs for optimization. The three
+problems and new lower bounds for the problem with transport robots are formally described in Section 3,
+and their selection in Section 4. In Section 5 we present our experimental method, followed by extensive
+computational experiments in Section 6 and a discussion in Section 7. Conclusions follow in Section 8,
+and Appendix A lists all new best-known values.
+2
+Literature review
+2.1
+Solvers and benchmarks for shop scheduling
+The job shop and the flexible job shop are classical NP-hard problems (Garey et al., 1976; Brandimarte,
+1993), and methods are compared on public benchmark libraries (Taillard, 1993; Beasley, 1990). JSPLib
+2
+
+
+--- Page 3 ---
+(ScheduleOpt, 2026b) and FJSPLib (ScheduleOpt, 2026a) record the best-known lower and upper bounds
+of each instance, together with the solver and the hardware that produced them. JSPLib also publishes
+a standard 10-minute comparison of CP Optimizer, CP-SAT, OptalCP, and CPLEX on every instance.
+Naderi et al. (2023) and Yuraszeck et al. (2026) have compared constraint programming and mixed-integer
+programming solvers on thousands of shop instances, and Da Col and Teppan (2022) have generated very
+large Taillard-type job shops to test how CP Optimizer and CP-SAT scale. Good practice for computational
+experiments requires public data, independent verification, and the reporting of all runs (Barr et al., 1995;
+Hooker, 1995; Gleixner et al., 2021). We follow these rules in this paper.
+2.2
+Flexible job shops with transport robots
+In many plants, automated guided vehicles (AGVs) move jobs between machines, so machines and vehicles
+must be scheduled together (Bilge and Ulusoy, 1995; Hosseini et al., 2024). The same integration of
+production and transport scheduling also arises along supply chains (Frazzon et al., 2018). Homayouni
+and Fontes (2021) have proposed a standard benchmark for this problem, the flexible job shop with transport
+(FJSPT). It adds a load/unload station, travel times, and two vehicles to the instances of Brandimarte (1993),
+Chambers and Barnes (1996), and others. The small instances can now be solved exactly (Ham, 2020;
+Homayouni and Fontes, 2021; Yao et al., 2025, 2026; Wang, 2025).
+For the large instances, several
+heuristic methods have published results: late-acceptance hill climbing (LAHC) (Homayouni and Fontes,
+2021; Burke and Bykov, 2017), a biased random-key genetic algorithm (Homayouni et al., 2023), an
+improved genetic algorithm (IGA) (Meng et al., 2023), a dual population genetic algorithm (DCGA) (Han
+et al., 2024), a tabu search (Berterottière et al., 2024), a variable neighborhood descent genetic algorithm
+(IVNDGA) (Jia et al., 2025), a deep reinforcement learning method (HA-DQN) (Dong et al., 2025), and
+an ant colony hybrid (He et al., 2025). Meng et al. (2025) have proposed constraint programming models
+and a metaheuristic assisted by these models for this benchmark, and Liu et al. (2026b) have compared a
+learned policy with the best values of several of these methods. In this literature, the problem is also called
+the FJSP-AGV.
+2.3
+LLMs for optimization and scheduling
+LLMs support optimization in two main ways. In the first, the LLM writes a model that a standard
+solver then solves, as in NL4Opt (Ramamonjison et al., 2022), OptiMUS (AhmadiTeshnizi et al., 2024),
+Chain-of-Experts (Xiao et al., 2024), and ORLM (Huang et al., 2025). Alternatively, the LLM writes or
+improves heuristics inside an evolutionary loop, as in FunSearch (Romera-Paredes et al., 2024), OPRO
+(Yang et al., 2024a), EoH (Liu et al., 2024a), ReEvo (Ye et al., 2024), AlphaEvolve (Novikov et al., 2025),
+and the LLM4AD platform (Liu et al., 2024b). Recent literature reviews can be found in Liu et al. (2026a)
+and Da Ros et al. (2026).
+In scheduling, LLMs have been used to generate schedules directly (Abgaryan et al., 2024, 2025), to
+design operators and dispatching rules for the flexible job shop (Liao et al., 2025; Cao and Yuan, 2025), and
+to coordinate multi-agent scheduling pipelines (Wang et al., 2025). Sánchez-Fernández et al. (2026) have
+tested whether LLM agents can write correct constraint programming models for six industrial scheduling
+problems. However, these studies mostly measure the correctness of models, or compare against simple
+baselines on small instances.
+Our study differs from these papers in three ways. First, the agent writes a complete solution method,
+not only a model or a single operator. Second, the targets are large open instances with strong published
+bounds, most of them from commercial solvers. Third, the agent works in a general coding environment,
+without a special framework, an evolutionary loop, or task-specific training.
+3
+
+
+--- Page 4 ---
+3
+Problem description
+3.1
+Problem definitions
+We now formally introduce the three problems studied in this paper. In the job shop scheduling problem, a
+set J of n jobs must be processed on a set M of m machines. Each job j ∈J is a sequence of operations,
+and operation o of job j requires machine µj,o for pj,o time units without preemption. The operations of
+a job must follow this sequence, and a machine processes at most one operation at a time. The aim is
+to determine the start time sj,o of each operation, so that all constraints are satisfied and the makespan
+Cmax = maxj,o{sj,o +pj,o} is minimized. Let Lj = P
+o pj,o be the length of job j. The value maxj∈J Lj
+is a lower bound on Cmax.
+The flexible job shop scheduling problem extends this problem with a choice of machine. Operation o
+of job j can be processed on any machine k of a set Mj,o ⊆M, with a processing time pj,o,k. The aim is
+to determine the machine and the start time of each operation, so that the makespan is minimized.
+The FJSPT adds a load/unload station and a set V of identical vehicles to the flexible job shop
+scheduling problem. Location 0 represents the station, and ta,b is the travel time from location a to location
+b, with a, b ∈{0} ∪M. All jobs and all vehicles are at location 0 at time zero. Each operation requires a
+loaded trip from the location of its predecessor to its machine, where location 0 is the predecessor of the
+first operation of a job. No trip is required if two consecutive operations of a job use the same machine.
+A trip departs after the completion of the preceding operation, and the operation starts after the arrival of
+the trip. A vehicle carries one job at a time, travels empty from each drop-off to its next pickup, and may
+wait. The buffers at the machines are unlimited, and the jobs do not return to location 0. The aim is to
+determine the machine of each operation, the vehicle of each trip, and all start times, so that the makespan
+is minimized. All instances of this paper have |V | = 2. The three problems are NP-hard since they contain
+the job shop scheduling problem as a special case (Garey et al., 1976).
+3.2
+Lower bounds for the FJSPT
+The best published lower bounds of the FJSPT (Homayouni and Fontes, 2021, Eqs. 26–27) are the longest
+path of a job through processing and loaded travel, and the total shortest loaded travel shared among the
+vehicles. They do not include empty travel. However, jobs never return to location 0, so the vehicles must
+make at least n −|V | empty trips to this location. We now derive a lower bound based on this observation.
+We charge each empty trip at the length of a shortest path between its end points. This is conservative,
+because on the layouts that violate the triangle inequality, it is shorter than the direct travel time of the
+benchmark. Let Wv be the total loaded and empty travel time of vehicle v in a schedule, and let qv be
+the processing time of the operation that v delivers last plus the shortest remaining processing and loaded
+travel time of its job. The last drop-off of v occurs no earlier than Wv, so Cmax ≥Wv + qv, and thus
+|V ′| Cmax ≥P
+v∈V ′(Wv + qv) for the set V ′ of vehicles used. In addition, let ℓk be the total processing
+time assigned to machine k, and let hk and tk be the smallest earliest start and the smallest remaining time
+after completion among the operations that are eligible on k, computed with the operation on k. If machine
+k is used, then Cmax ≥hk + ℓk + tk. Finally, Cmax is at least the processing and loaded travel time along
+the path of each job. We minimize Cmax subject to these inequalities over all machine assignments and
+all vehicle routes, without any other timing constraint. This yields a small integer program, in which each
+job is a path through its eligible machines, the empty trips balance the loaded trips at each location, and at
+most |V | routes start at location 0. Its optimal value, rounded up to the time granularity of the instance, is
+a lower bound on Cmax. We refer to it as bound (1).
+The first of these inequalities yields a closed-form bound, bound (2), that requires no solver. Let πa be
+the length of a shortest path from location a to location 0. An empty trip from a to b takes at least πa −πb
+time units. If we sum these differences over all empty trips, the terms of the loaded trips telescope along
+each job. Thus, the total empty time is at least P
+j∈J πfj −P
+v∈V πev, where fj is the last machine of
+job j and ev is the location of the last drop-off of vehicle v. Let Aj be the minimum, over all machine
+sequences of job j, of its loaded travel time plus πfj. Let τ be the minimum, over all machines k, of the
+smallest processing time on k minus πk. Then Cmax ≥P
+j∈J Aj/|V | + τ.
+4
+
+
+--- Page 5 ---
+When processing times dominate travel times, a second relaxation is more useful. We remove the
+capacity of the vehicles and the empty trips, and we keep each loaded trip as a delay between two
+consecutive operations of a job. The result is a flexible job shop with travel delays, which we solve by
+means of CP-SAT. Its optimal value is also a lower bound on Cmax, because every schedule of the FJSPT
+is feasible for this relaxation. We refer to it as relaxation (3).
+4
+Problem selection
+We selected problems that are established, have tracked bounds, are open, are large and complex, and are
+checkable. They have been in the literature for several years with public instance files, a public table or a
+recent paper gives their best-known bounds and the solver that found them, commercial solvers are often
+far from the lower bound, and the feasibility of a schedule can be checked easily with independent code.
+Table 1 lists the selected instances. The job shop tai_100_1000_1 has 100 jobs, 1,000 machines, and
+100,000 operations (Da Col and Teppan, 2022). JSPLib lists it as open, with recent bounds from OptalCP,
+CP Optimizer, and Hexaly (ScheduleOpt, 2026b; Yuraszeck et al., 2026). From the Behnke–Geiger flexible
+job shops (Behnke and Geiger, 2012), we have selected the open instances behnke16 and behnke14, and
+the closed instance behnke31 as a control, since a good method should find its known optimum. For the
+flexible job shop with transport robots, we have used the benchmark of Homayouni and Fontes (2021),
+the standard benchmark for this problem, on which several later methods report results (Meng et al.,
+2023; Berterottière et al., 2024; Dong et al., 2025). The problem adds a second, interacting resource
+(the vehicles) to the flexible job shop, which makes it a good representative of integrated production and
+logistics scheduling (Frazzon et al., 2018). From this benchmark, we have selected the ten MKT instances
+and the 21 Chambers–Barnes instances. They are the largest sets, and published heuristics were far from
+the published lower bounds. However, Meng et al. (2025) report 14 of the 21 Chambers–Barnes instances
+as solved to optimality with CP Optimizer (Section 6.4). The smaller sets are mostly solved to optimality,
+so we have used them only to test generalization. In Table 1, LB and UB are the best-known lower and upper
+bounds before this work. For the transport instances, LB is the best published lower bound (Homayouni
+and Fontes, 2021). The asterisk marks the control instance.
+Table 1. Selected instances
+Problem
+Instance(s)
+Jobs
+Machines
+Operations
+LB / UB
+Status
+Job shop
+tai_100_1000_1
+100
+1,000
+100,000
+522,298 / 533,080
+open
+Flexible job shop
+behnke16
+100
+20
+500
+391 / 412
+open
+behnke14
+50
+20
+250
+221 / 230
+open
+behnke31
+50
+40
+250
+226 / 226
+closed∗
+Flexible job shop, 2 AGVs
+MKT01–MKT10
+10–20
+4–15
+55–240
+e.g. MKT10: 386.8 / 525
+open
+21 Chambers–Barnes
+10–15
+11–18
+100–225
+see Table 9
+7 open
+5
+Method
+5.1
+Framework and technology stack
+Figure 1 shows the framework of our study. In autonomous runs, the task is the only input. In assisted runs,
+we have also provided goals and papers, and we have managed the compute resources (dashed arrow).
+An independent checker verifies every output schedule. The agent is Claude Code (Anthropic, 2026a), a
+command-line coding agent. It reads files, writes code in any language, compiles and runs it, reads the
+output, and repeats this loop until the time budget ends. Table 2 lists the models, the hardware, and the
+software.
+5
+
+
+--- Page 6 ---
+Task
+instance file, rules,
+target, time budget
+LLM coding agent
+(Claude Code)
+analyze instance · write code
+compile and run · read output
+change the method
+open-source tools:
+Python, C/C++,
+NumPy, OR-Tools CP-SAT
+Output
+schedule (mode A)
+or solver (mode B)
+Independent
+checker
+(no shared code)
+human input (as-
+sisted runs only):
+goals, literature, compute
+loop
+Figure 1. Framework of the study
+Table 2. Models, hardware, and software
+Item
+Value
+Agent
+Claude Code (Anthropic, 2026a), version 2.1, in all sessions
+Models of record
+claude-opus-5 (Claude Opus 5) and claude-sonnet-5 (Claude Sonnet 5): job shop and
+flexible job shop, accessed 5–10 August 2026; claude-opus-5-5 (Claude Opus 5.5): trans-
+port robots, accessed 25–26 September 2026, and job shop in mode C, 19–20 October 2026;
+claude-fable-5-1 (Claude Fable 5.1): flexible job shop in mode C, 19–20 October 2026.
+Public release (Anthropic, 2026b): Claude Sonnet 5, 30 June 2026; Claude Opus 5, 24 July
+2026; Claude Fable 5.1, 1 September 2026; Claude Opus 5.5, 22 September 2026. Default
+decoding settings of Claude Code; the provider does not expose sampling seeds.
+Autonomous runs
+Harbor task framework (Harbor Framework, 2026); one Docker container per run; quota of
+4 CPUs (three runs: 8 CPUs) and 4 GB of memory, although the container reported the 32
+hardware threads of the host; budget 18,000 s (5 h)
+Container software
+Python 3.12.3, GCC 13.3.0, NumPy 2.4.6; OR-Tools only if the agent installed it
+Workstation
+AMD Ryzen 9 5950X (3.4 GHz), 16 cores / 32 threads, 125 GB RAM; job shop in mode C:
+4-core ARM cloud machine (Neoverse-N1)
+Workstation software
+Python 3.11, NumPy, GCC (C/C++), OR-Tools CP-SAT 9.15
+Commercial solvers
+none used by the agent; CP Optimizer 22.2 and Hexaly 15.0 (academic licenses) for our baseline
+runs
+5.2
+Autonomous runs and assisted runs
+Our main goal is to verify whether the agent is able to obtain good solutions without expert knowledge.
+We therefore distinguish two types of runs.
+In an autonomous run, the agent was given one task: improve the makespan of one instance. The
+task text described the instance format, the rules, the output format, and a target. For tai_100_1000_1,
+the target was a makespan strictly below 540,000. For behnke16, the text asked for a heuristic, stated
+the best-known upper bound of 412, and set the target 411. The agent then worked without human input
+in a new container, with a fixed amount of time and of CPU cores, and it selected its own method. An
+independent test checked the schedule at the end. One job-shop session also received code written by an
+earlier session and the best value then known.
+In an assisted run, we worked with the agent in an interactive session on the workstation. We gave
+goals and feedback, supplied papers, and managed the compute resources (for example, how many cores a
+solver could use), but we did not write any solver code. Table 3 shows the type of each run.
+5.3
+Modes of use of the agent
+We have tested three modes of use. In mode A, the agent itself is the algorithm, and it must deliver a
+good schedule for one instance. It may write code that is used only once, and it does not have to leave a
+reusable program. If a new schedule is needed, the agent is run again. In mode B, the agent must deliver
+a solver that the user can compile and run again, on the same instance or on similar ones. The cost then
+6
+
+
+--- Page 7 ---
+shifts from LLM tokens to CPU time. In mode C, the agent starts from the outcome of modes A and
+B, namely the solvers and best schedules of this paper, and runs its own improvement campaign with the
+goal of closing as many instances as possible. It may change the solvers, write new code, and select the
+experiments to run. We have run mode C once on the job shop and once on the flexible job shop, after the
+other experiments, each as a single, mostly autonomous session that used open-source tools only. We set
+the goal and stopped the session, but we suggested no method and wrote no code. Section 7 compares the
+modes.
+5.4
+Verification
+We have not relied on the checkers written by the agents. For each problem family, a separate checker,
+which shares no code with the solvers, verifies every schedule. The FJSPT checker uses exact fractions,
+because some layouts use half time units. We have also tested the checkers on deliberately corrupted
+schedules, and they rejected all of them. Each instance file was compared with the original distribution
+and with independent copies. A single script in the public repository re-checks every result of this paper.
+We take the lower bounds of the libraries and the literature as published, but not the single-solver verdicts
+of our baseline runs. An instance is closed only when a certified schedule reaches such a bound or a bound
+of Section 3.2 proved by two solvers.
+5.5
+Contamination controls
+The instances are public, and they may be part of the training data of the models. However, no schedule with
+the makespans reported here existed before this work, so a new best-known value cannot be reproduced
+from memory, and every value is certified by the independent checker. The containers of the autonomous
+runs had public network access, but no session used a web search or fetch tool, and no session downloaded
+benchmark data, bounds, or published solutions. The autonomous runs received only the instance and the
+task text, and for behnke16 a small example instance and schedule. One job-shop session also received
+earlier code (Section 5). The target values of the job-shop runs came from the first interactive session
+(Section 5.6). The assisted transport-robot session started from one message that pasted the paper of Meng
+et al. (2023) and asked the agent to choose the instance with the best chance of improvement and to find
+tailored solutions rather than to rely on computation. During the session, we supplied the further papers
+that it requested, including published schedules. It used these schedules only to validate its model and data
+(Section 6.1). No commercial solver was available to any agent.
+5.6
+Reporting and repetitions
+Table 3 lists every autonomous run and every interactive agent session on the instances of this paper, as
+they were recorded, including the runs that missed the target, failed, or stopped early. No run has been
+removed on the basis of its result. Runs on other problems, and on instances that we generated to calibrate
+the tasks, are not included. The instance tai_100_1000_1 was chosen in the first interactive session, after
+a greedy pilot run, and the target values of the autonomous job-shop runs came from that session. For the
+assisted Behnke session, no transcript was kept. The transport-robot study was one long assisted session
+in which the agent made 380 solver runs. For it, we report the best schedules, a fixed protocol of 100 runs
+(Table 8), and the controlled comparisons of moves (Sections 6.1 and 6.4).
+Because the provider does not expose sampling seeds, we measure the run-to-run variation of the
+agents by repeated sessions with the same task. On tai_100_1000_1, the six Claude Opus 5 sessions,
+one of which received earlier code (Section 5), ended between 527,000 and 533,386 (median 531,403),
+and the nine Claude Sonnet 5 sessions that delivered a schedule between 535,930 and 554,332 (median
+541,641). On behnke16, the twelve autonomous sessions ended between 404 and 479 (median 418). The
+solvers written by the agents are re-run with explicit seeds, and we report the best value together with the
+range or the median of the runs (Tables 5 and 8).
+7
+
+
+--- Page 8 ---
+6
+Computational experiments
+All computations on our workstation were executed on an AMD Ryzen 9 5950X (Table 2).
+Table 3 lists all agent runs on the instances of this paper and all re-runs of the solvers written by the
+agents. In this table, “Auto” denotes an autonomous run and “Assist” an assisted run. The column “Mode”
+shows whether the agent is the solver and the output is a schedule (A), whether the output is a reusable
+solver (B), or whether the agent improves the solvers of this paper in its own campaign (C). The number
+of independent runs is given in the column “Runs”. The 12 runs of the 527,000 solver ran in parallel with
+one core each, and the 480 runs of the corridor solver are the workers of its 30 runs with 16 cores. Best
+values are certified by the independent checker.
+Table 3. All agent runs and re-runs of the agent solvers
+Instance(s)
+Type
+Mode
+Model
+Runs
+Result (makespan)
+Human input
+tai_100_1000_1
+Auto
+A
+Opus 5 / Sonnet 5
+16
+best 527,000; 15 feasible
+nonea
+tai_100_1000_1
+Assist
+A
+Opus 5
+1
+530,404
+goals, review
+tai_100_1000_1
+Assist
+B
+–b
+12
+525,764
+compute
+behnke16
+Auto
+A
+Opus 5
+5
+404, 411, 415, 417, 419
+none
+behnke16
+Auto
+A
+Opus 5
+5
+423, 430, 435, 450, 479c
+none
+behnke14/16/31
+Auto
+A
+Opus 5
+2
+234–235 / 415–416 / 226–229
+none
+behnke14/16/31
+Assist
+B
+Opus 5
+1
+232 / 406 / 226
+goals, review
+MKT01–10, 21 Chambers–Barnes
+Assist
+B
+Opus 5.5
+1
+Tables 8 and 9
+goal, papers, review
+tai_100_1000_1..10
+Assist
+C
+Opus 5.5
+1
+4 of 10 optimal; Table 14
+goal, choice of instances
+Behnke 1–60
+Assist
+C
+Fable 5.1
+1
+6 newly closed; Table 14
+goal, tools
+Re-runs of the agent solvers, without change (no agent session)
+tai_100_1000_1..10
+–
+B
+corridor solver
+30 + 128 + 480
+10/10 below best known; 2 optimal
+none
+Behnke 1–60
+–
+B
+reusable tabu
+60 + 32
+11 below best known
+none
+MKT01–10
+–
+B
+transport solver
+100
+61/100 below reference value
+none
+SFJST/MFJST 01–10
+–
+B
+transport solver
+100
+all small optima
+none
+aOne session (530,881) also received code written by an earlier session and the best value then known (Section 5). bThe solver of
+the 527,000 session, recovered from its log and run on the workstation. cThree of these runs stopped after 4–7% of the budget,
+and one stopped after 462 s because of an API error. Only their reports and final values were kept.
+6.1
+How the agents found their solutions
+The agents have not applied one fixed algorithm. In the successful runs, the agent first analyzed the instance
+and then adapted the formulation or the method to its structure. This subsection describes the main ideas,
+and Sections 6.2–6.6 report the results.
+6.1.1
+Change of formulation for the job shop
+In tai_100_1000_1, each job visits 1,000 machines. The machines are idle about 90% of the time, while
+each job is busy for about 91–99% of the time. The longest job alone needs 522,298 time units, which
+is the lower bound. The best of the autonomous sessions (Figure 2) started from a greedy schedule of
+593,321 and wrote four solvers that minimized the makespan, and the best of them reached 592,865. At
+minute 42, the agent changed the formulation. It fixed a target makespan T and searched for a schedule
+with no machine conflict and Cmax ≤T. To this end, the agent restricted each operation of job j to a
+corridor
+prefj(o) ≤sj,o ≤prefj(o) + (T −Lj),
+where Lj is the length of job j and prefj(o) is the start of operation o when the job runs without idle
+time. Inside these corridors, Cmax ≤T always holds. The corridors alone do not ensure the job order,
+because two consecutive operations of a job may overlap while each of them lies inside its own corridor.
+The search therefore starts from the schedule sj,o = prefj(o) + (T −Lj) o/m, in which the delay of an
+operation does not decrease along its job, and it maintains the job order at every iteration. When it shifts
+an operation, it also shifts the successors or the predecessors of this operation on the job as far as required,
+and it rejects the shift if an operation would leave its corridor or if more than 60 operations would move.
+Thus, only machine conflicts remain. A min-conflicts search with random perturbations removes them,
+8
+
+
+--- Page 9 ---
+and each time it finds a feasible schedule, the agent lowers T. At each iteration, the search selects two
+overlapping operations on a machine, evaluates the four shifts that separate them, and applies the shift
+that yields the smallest total overlap, or a random feasible shift with a probability of 8%. After 200,000
+iterations without improvement, it shifts random operations of machines with overlaps. After a feasible
+schedule, T decreases by 1,000, and after 40 million iterations without improvement, the search restarts
+from the best schedule with a random target below its makespan. The first corridor prototype, started at
+T = 545,000, found a schedule of 540,999 after about 60 s, at minute 46 of the session. The agent then
+wrote a faster C version (csp3.c) and ran 28 worker processes (16 of csp3 and 12 of a variant) on the
+4 CPUs of the container. A csp3 worker found 527,000 at about minute 77, and the agent saved it at
+minute 81 of a session that lasted 101.6 minutes. Figure 3a shows this session.
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+Session (ordered by makespan)
+520,000
+525,000
+530,000
+535,000
+540,000
+545,000
+550,000
+555,000
+560,000
+Certified makespan
+Fifteen independent agent sessions on tai_100_1000_1
+Opus sessions
+Sonnet sessions
+LB 522,298
+record of this work 525,515
+OptalCP 533,080
+Hexaly 542,479
+Figure 2. Final makespans of the autonomous sessions on tai_100_1000_1
+A second session searched over non-decreasing delay profiles of the jobs and found 528,142. An
+assisted campaign combined tabu search with sequence fixing by CP-SAT and found 530,404.
+The
+corridor method yields better values than both.
+0
+20
+40
+60
+80
+100
+Session wall-clock (minutes)
+520,000
+530,000
+540,000
+550,000
+560,000
+570,000
+580,000
+590,000
+600,000
+610,000
+Best makespan so far
+first corridor result (min 46);
+switch to fixed-T at min 42
+(a) Best autonomous session
+best so far (session log)
+LB 522,298
+OptalCP 533,080
+session result 527,000
+0
+5
+10
+15
+20
+25
+30
+Wall-clock time (minutes), one core per worker
+525,000
+530,000
+535,000
+540,000
+545,000
+Feasible makespan
+(b) Corridor solver, 12 workers on tai_100_1000_1
+worker F14 (525,764)
+job-chain LB 522,298
+OptalCP tracked UB 533,080
+Hexaly 542,479
+Figure 3. Best makespan on tai_100_1000_1 over time
+6.1.2
+Stage structure of the flexible job shop
+The best session on behnke16 analyzed the eligibility sets and found that the instance is a three-stage
+flexible flow shop: operation 0 of each job runs on machines 1–4, operations 1–3 on machines 5–16,
+and operation 4 on machines 17–20. The last stage is the bottleneck. The agent then wrote a parallel
+tabu search with ruin-and-recreate moves. After each move, a fast procedure re-optimizes the machine
+assignment of the first and the last stage. With the rest of the schedule fixed, each of these stages reduces
+to a partition problem. A secondary criterion counts the operations near the critical path and breaks ties
+among schedules of equal makespan. The session improved a constructive solution of 448 down to 404. It
+9
+
+
+--- Page 10 ---
+ran about 31 worker threads in a container with a quota of 4 CPUs. The other four sessions of this batch
+used tabu search, simulated annealing, CP-SAT, and large neighborhood search, and ended between 411
+and 419. One session used CP-SAT with a warm start and proved that 226 is optimal for behnke31.
+6.1.3
+Routing structure of the problem with transport robots
+In the assisted FJSPT session, we gave the agent the benchmark, one recent paper with published results
+(Meng et al., 2023), and the goal of improving the best-known values. We also asked it to exploit the
+structure of the problem rather than rely on more computation, and during the session we supplied the
+recent papers that it requested. The agent then executed the following steps:
+1. It used MKT10, the largest MKT instance, as the main development instance.
+2. It replayed the published schedules of two competing papers (Meng et al., 2023; Berterottière et al.,
+2024) with an independent checker. All of them reproduced the published makespans exactly, which
+confirmed that the model and the data match the literature.
+3. It analyzed good schedules and found that both vehicles are almost never idle and that most arcs
+of the critical path connect consecutive tasks of the same vehicle. In other words, the problem is
+mainly a two-vehicle pickup-and-delivery routing problem.
+4. It wrote a simulated annealing solver with moves borrowed from vehicle routing: relocation, ex-
+change, 2-opt∗(Potvin and Rousseau, 1995), and ruin-and-recreate (Schrimpf et al., 2000).
+5. It ran controlled experiments, kept the moves that improved the results, and removed the others.
+6.2
+Job shop
+Autonomous sessions (mode A)
+Sixteen autonomous sessions worked on tai_100_1000_1: six with
+Claude Opus 5 and ten with Claude Sonnet 5. Fifteen of them delivered a feasible schedule, and one
+stopped after 18 minutes without a schedule. Figure 2 shows the final makespan of each session, numbered
+in order of makespan. The horizontal lines show the job-chain lower bound (ScheduleOpt, 2026b), the best
+value of this work, the tracked OptalCP bound (ScheduleOpt, 2026b,c), and the Hexaly bound (Yuraszeck
+et al., 2026). Five of the six Opus sessions finished below the tracked OptalCP bound of 533,080. All six
+Opus sessions ended below the nine Sonnet sessions that delivered a schedule (at most 533,386 against
+at least 535,930). All 15 schedules are below the 10-minute CP-SAT value (554,381), and 13 are below
+the 10-minute CP Optimizer value (545,805). The best session reached 527,000 with 4 CPUs, in 101.6
+minutes and with an API cost of US$10.07.
+Agent solver (mode B)
+The best session left its solver, csp3.c, in the container. We have recovered
+the source from the session log and have run it with one core per worker. Twelve workers ran for 1,800 s
+each. All twelve finished below the 527,000 of the session, and five below 526,000. The best worker (F14
+in Figure 3b) reached 525,764 after 23 minutes. Six workers started with the target 531,000 and six with
+527,000, the result of the session. The best worker was one of the first six. The logs do not record the host,
+but the iteration rates match one core per worker. Within the session, the solver did not reach 526,000.
+This is due to the fact that its 28 processes shared 4 CPUs, which reduced the iteration rate of each process
+to about one tenth of that of a process with its own core. On a single core, the same solver reaches 533,000,
+the tracked OptalCP value, in 2.7–5.1 s when it starts with this target, and in 7.8–16.2 s when it starts at
+535,000. With the 16-core budget of our CP Optimizer runs (16 workers with their own cores and different
+seeds for 1,800 s, three such runs), the same solver reached 525,515, the best value of this work.
+10
+
+
+--- Page 11 ---
+Table 4. Solver and agent results on tai_100_1000_1
+Method
+Budget
+Makespan
+Gap (%)
+CP-SAT 9.15 (ScheduleOpt, 2026b)
+10 min, laptop
+554,381
+6.14
+CP Optimizer 22.1 (ScheduleOpt, 2026b)
+10 min, laptop
+545,805
+4.50
+OptalCP 2026.4 (ScheduleOpt, 2026b)
+10 min, laptop
+540,099
+3.41
+CPLEX 22.1 (ScheduleOpt, 2026b)
+10 min, laptop
+none
+–
+CP Optimizer 12.10 (Da Col and Teppan, 2022)
+6 h, 1 core
+542,768
+3.92
+Hexaly 14.0 (Yuraszeck et al., 2026)
+600 s, 12 threads
+542,479
+3.86
+OptalCP 2026.2 (ScheduleOpt, 2026b; OptalCP, 2026a)
+180 min, 16 workers
+533,080
+2.06
+CP Optimizer 22.2 (ours)
+10 min, 1 core
+551,319
+5.56
+CP Optimizer 22.2 (ours)
+30 min, 1 core
+546,035
+4.54
+CP Optimizer 22.2 (ours)
+30 min, 16 cores
+543,034
+3.97
+Hexaly 15.0 (ours)
+10 min, 1 core
+541,994
+3.77
+Hexaly 15.0 (ours)
+30 min, 1 core
+541,764
+3.73
+Hexaly 15.0 (ours)
+30 min, 16 cores
+539,566
+3.31
+Agent session (A)
+101.6 min, 4 CPUs
+527,000
+0.90
+Agent solver (B)
+10 min, 1 core
+526,999
+0.90
+Agent solver (B)
+30 min, 1 core
+525,999
+0.71
+Agent solver (B)
+30 min, 12 × 1 core
+525,764
+0.66
+Agent solver (B)
+30 min, 16 cores
+525,515
+0.62
+Comparison with solvers
+Table 4 compares these results with the published values of commercial and
+open-source solvers. The gap is relative to the lower bound of 522,298. The JSPLib values come from
+a standard 10-minute run on a 4-core laptop processor (Intel Core i7-1185G7). JSPLib does not state
+the number of threads. The tracked OptalCP value comes from a run of 180 minutes. JSPLib lists the
+processor of our workstation (Ryzen 9 5950X) for this run, but the published run record of OptalCP gives
+version 2026.2, 16 workers, and an AMD EPYC 9454P (OptalCP, 2026a). The hardware, versions, and
+thread counts of the other published rows are those stated by the sources. Da Col and Teppan (2022) used
+CP Optimizer 12.10 on an AMD EPYC 7551P, and Yuraszeck et al. (2026) used Hexaly 14.0 on an Intel
+Core i7-10750H with all 12 threads. Because these published values come from different hardware and
+budgets, we have also run CP Optimizer 22.2 and Hexaly 15.0 ourselves on our workstation, with the same
+budgets as the agent solver (Tables 4, 5, and 10). These rows are labeled “ours”. The 1-core and 16-core
+rows of our runs are the best of three runs, and a 16-core run of the agent solver consists of 16 single-core
+workers with different seeds. For both, we have used the standard job-shop model of the vendor with
+default parameters. Hexaly reached 541,764 with one core and 539,566 with 16 cores after 30 minutes,
+better than its published value of 542,479 and than CP Optimizer, but 2.7% above the agent solver with 16
+cores. Our Hexaly license allowed one process at a time, so each Hexaly run had the workstation to itself.
+Table 5. Generalization of the corridor solver to the ten 100 × 1000 instances
+CP Optimizer, 1 core
+Agent, block 1
+Block 2
+Agent
+Instance
+LB
+Best known
+OptalCP 10 min
+10 min
+30 min
+10 min
+30 min
+16 seeds
+16 cores
+Best
+Gap (%)
+Status
+_1
+522,298
+533,080
+540,099
+551,319
+546,035
+526,999
+525,999
+526,000
+525,515
+525,515
+0.62
+_2
+530,375
+538,067
+544,180
+551,476
+550,373
+532,000
+530,375
+–
+530,375
+530,375
+0.00
+optimal
+_3
+530,560
+538,757
+545,590
+551,844
+550,391
+530,560
+530,560
+–
+530,560
+530,560
+0.00
+optimal
+_4
+527,101
+534,746
+541,326
+551,836
+546,753
+529,999
+529,075
+529,000
+528,156
+528,156
+0.20
+_5
+517,728
+529,580
+537,153
+552,148
+547,705
+527,000
+527,000
+526,333
+525,865
+525,865
+1.57
+_6
+522,907
+534,969
+542,004
+549,319
+547,290
+526,000
+525,995
+525,000
+524,812
+524,812
+0.36
+_7
+522,537
+534,974
+541,161
+550,879
+547,556
+527,000
+527,000
+527,805
+527,000
+527,000
+0.85
+_8
+526,428
+535,757
+543,074
+551,819
+549,836
+530,000
+529,282
+528,817
+528,473
+528,473
+0.39
+_9
+528,097
+536,993
+544,065
+552,682
+552,462
+532,000
+531,207
+531,000
+529,470
+529,470
+0.26
+_10
+521,766
+529,918
+538,445
+551,704
+545,227
+527,000
+526,855
+527,000
+526,000
+526,000
+0.81
+Generalization to similar instances
+tai_100_1000_1 belongs to a family of ten instances of the same
+size and type, all of them open in JSPLib. We have run the corridor solver just described on all ten without
+any change, with three runs per instance with different seeds, one core, and 1,800 s per run. Table 5 shows
+11
+
+
+--- Page 12 ---
+the results. In Table 5, LB is the length of the longest job, “Best known” the JSPLib upper bound before
+this work, and “OptalCP 10 min” the standard JSPLib run (ScheduleOpt, 2026b). CP Optimizer 22.2 and
+block 1 of the agent solver are the best of three seeds with one core after 10 and 30 minutes. The agent
+solver starts at T = ⌈1.02 LB/1000⌉· 1000. Block 2 and the 16-core runs are described below. In the
+column “Best”, bold values are below the best-known value.
+The solver found a schedule below the best-known upper bound on every instance, already after 10
+minutes, far below the 10-minute values of OptalCP, CP Optimizer, and CP-SAT. With one core and 30
+minutes, CP Optimizer 22.2 ended 3.7–5.8% and Hexaly 15.0 2.7–4.4% above the lower bound, and with
+16 cores 2.6–5.3% and 2.4–4.2%. Both stayed above the old best-known value on every instance, whereas
+the agent solver ended 0.0–1.8% and 0.0–1.6% above the lower bound. Over the three runs and the ten
+instances, the mean gap with one core is 0.73% for the agent solver, 4.49% for CP Optimizer, and 3.60%
+for Hexaly, and with 16 cores 0.53%, 3.79%, and 3.30%. At both budgets, the worst run of the agent
+solver is below the best run of both commercial solvers on all ten instances. On tai_100_1000_2 and
+_3, the solver found a makespan equal to the lower bound, so these two instances are now closed. Two of
+the three seeds found each optimum, that of _3 in less than 10 minutes. A second block of sixteen further
+runs of 1,800 s with two processes per core improved five instances further but closed none, because each
+process had only half a core. Finally, with the 16-core budget of CP Optimizer (three runs of 16 single-core
+workers with different seeds), the solver found the optima of _2 and _3 in all runs and improved seven
+instances further. On _7, all three runs ended at 527,000.
+Improvement campaign (mode C)
+Starting from the corridor solver and the schedules above, one
+Claude Opus 5.5 session worked for 24 h on a 4-core ARM cloud machine (about 84 core-hours of solver
+runs), with the goal of closing the ten instances. It made three changes to the solver. First, it started the
+search directly at the lower bound instead of descending in steps of 1,000. Second, it narrowed the time
+window of every operation by constraint propagation at that target. Third, it reduced the size of the random
+perturbations of the local search. With these changes, it found schedules whose makespan equals the lower
+bound on _4 (527,101) and _9 (528,097), so four of the ten instances are now closed, and it improved _8
+to 527,280. Among the 191 logged runs of this campaign, one of the 34 runs with the target at the lower
+bound succeeded on _4, one of 34 on _9, none of 58 on _8, and none of 23 on _6. It also found that our
+schedules contain small idle gaps, and starting every operation as early as possible while keeping the order
+on each machine has lowered the other five values by 126–229 units. The session re-found the optimum of
+_2 in 47 s on one core. Table 14 in Appendix A lists all values.
+6.3
+Flexible job shop
+Table 6 lists all runs on the three Behnke instances (bold: below the best-known upper bound of FJSPLib).
+Of ten autonomous sessions on behnke16 with a target of 411, the best reached 404 and a second one 411,
+both below the best-known 412. Three sessions stopped by themselves after 4–7% of the budget, and one
+after 462 s because of an API error. Of two further sessions on all three instances, one found and proved
+the optimum of 226 on behnke31. In an assisted session, the agent wrote a reusable tabu search, which
+found 406 on behnke16 in 56.5 s with 32 threads and the optimum on behnke31, but did not improve
+behnke14 (232 against 230).
+Table 6. All agent runs on the Behnke instances
+behnke14
+behnke16
+behnke31
+FJSPLib LB / UB
+221 / 230
+391 / 412
+226 / 226
+Auto, 5 sessions (A)
+–
+404, 411, 415, 417, 419
+–
+Auto, 5 more (A)
+–
+423, 430, 435, 450, 479
+–
+Auto, session 6 (A)
+235
+416
+229
+Auto, session 7 (A)
+234
+415
+226
+Assisted solver (B)
+232
+406
+226
+12
+
+
+--- Page 13 ---
+Generalization to the full Behnke set
+Behnke and Geiger (2012) published 60 instances, of which
+FJSPLib lists 32 as open and 28 as closed at the commit that we have used (f89e5b0, checked on October
+11, 2026). We have run the reusable tabu search of the agent on all 60 without any change. As baselines,
+we have also run standard models in CP-SAT and in CP Optimizer 22.2 with the same budget, with one run
+of 120 s with 8 threads per instance and method, on the same workstation. Both models use one optional
+interval for each eligible machine of an operation, which is the usual model for the flexible job shop. The
+tabu search and CP-SAT runs ran three at a time on the 16 cores, and the CP Optimizer runs two at a time,
+so CP Optimizer had slightly more cores per run. In a second block, we have given the tabu search one
+run of 1,200 s with 16 threads on each open instance. These runs ran two at a time, so each had about 8
+cores, half the cores of the original behnke16 run (32 threads on the 16 cores). CP Optimizer received
+the same 1,200 s with 16 threads, but one run at a time, so it had twice the cores of the tabu search in this
+block. Hexaly 15.0 ran with its standard flexible job-shop model, the same time limits and threads, and
+one run at a time. An independent checker verified all 336 schedules. Each value comes from a single run
+per instance and method. Differences of one or two units on a single instance are within the run-to-run
+variation (the 1,200 s run of the tabu search ended worse than its 120 s run on behnke55 and behnke59).
+Table 7 shows the results, and the public repository contains the values of all 60 instances. The table lists
+the open instances on which the tabu search or CP-SAT has reached or improved the best-known upper
+bound of FJSPLib (ScheduleOpt, 2026a). With 1,200 s, CP Optimizer also reached it on behnke15 and
+behnke52. TTB is the time in seconds to the best value of the 1,200 s run of the tabu search, bold values
+are below the best-known value, and the superscript o marks a value that CP-SAT has reported as optimal.
+Table 7. Open Behnke instances reached or improved by the tabu search or CP-SAT
+Agent tabu
+CP Optimizer 22.2
+Hexaly 15.0
+Instance
+LB
+UB
+120 s
+1,200 s
+TTB
+CP-SAT
+120 s
+1,200 s
+120 s
+1,200 s
+behnke12
+213
+219
+222
+219
+172
+243
+225
+221
+233
+227
+behnke13
+223
+229
+230
+227
+166
+254
+238
+235
+246
+239
+behnke16
+391
+412
+409
+406
+641
+497
+423
+416
+432
+422
+behnke32
+220
+224
+226
+223
+28
+238
+225
+223
+230
+229
+behnke34
+219
+223
+224
+223
+4
+245
+222
+221
+229
+225
+behnke35
+211
+214
+216
+213
+78
+222
+215
+213
+220
+219
+behnke40
+415
+419
+418
+417
+307
+495
+425
+418
+432
+420
+behnke48
+124
+125
+125
+125
+0
+125o
+125
+125
+126
+125
+behnke53
+211
+215
+214
+213
+46
+212o
+216
+214
+219
+217
+behnke55
+221
+223
+222
+223
+336
+228
+224
+222
+226
+226
+behnke56
+384
+390
+392
+388
+681
+429
+397
+392
+401
+393
+behnke57
+385
+390
+391
+389
+41
+450
+399
+396
+402
+392
+behnke59
+392
+398
+394
+395
+1195
+458
+400
+398
+405
+401
+behnke60
+397
+402
+402
+400
+115
+446
+401
+401
+406
+405
+With 120 s, the tabu search went below the best-known upper bound on 5 of the 32 open instances,
+matched it on 2 more, and found the optimum on 18 of the 28 closed instances. On average, it was 0.60%
+above the best-known upper bound, against 1.42% for CP Optimizer, 2.85% for Hexaly, and 6.42% for
+CP-SAT. It was better than CP Optimizer on 31 instances, equal on 21, and worse on 8. With 1,200 s on
+the open instances, the tabu search went below the best-known upper bound on 10 of them and matched it
+on 4 more, and it was 0.24% above it on average, against 0.79% for CP Optimizer with all 16 cores and
+2.01% for Hexaly. It was better than CP Optimizer on 19 open instances, equal on 9, and worse on 4. CP
+Optimizer went below the best-known upper bound on 7 open instances and found a new best-known value
+of 221 on behnke34. Hexaly improved no best-known value. A re-run of the tabu search with the same
+cores as CP Optimizer gave 0.45% and 0.34%. Over both blocks, the tabu search improved the best-known
+upper bound of 11 of the 32 open instances. CP-SAT found the optimum on 19 closed instances and
+reported 212 on behnke53 and 125 on behnke48 as optimal. Following the rule of Section 5.4, we do not
+count these verdicts. However, FJSPLib now lists behnke48 as closed and behnke53 with a lower bound
+of 212, so our CP-SAT schedule of 212 closes behnke53 with respect to the current library. On the large
+13
+
+
+--- Page 14 ---
+instances, CP-SAT was often 10–23% above the best-known value.
+Improvement campaign (mode C)
+Starting from the two Behnke solvers of the agents and the schedules
+above, one Claude Fable 5.1 session worked for 13.5 h on our workstation, with open-source tools only
+and the goal of closing as many instances as possible. It merged the two solvers into a new local search
+and used CP-SAT to search for schedules with a given makespan. The campaign reached the FJSPLib
+lower bound on six open instances (behnke32, 34, 40, 55, 56, and 60), which are therefore closed, and on
+all 28 closed instances. Thus, 34 of the 60 instances now have a schedule at the lower bound. Its values
+are below the best-known upper bound on 18 of the 32 open instances, against 11 for modes A and B.
+The new local search produced most of the improvements on the 100-job instances, and eight of the new
+values, including the six closures, came from CP-SAT runs that the agent started with a fixed or capped
+makespan (Table 14). Other processes ran on the workstation at the same time, so we do not compare run
+times. FJSPLib has changed during this study. Its current version (commit 8a6e36e, 22 October 2026)
+lists 27 open instances. Another contributor reported the same values as this campaign for behnke52 and
+behnke60 on 12 October, one week before the campaign, and CP-SAT runs raised several lower bounds.
+With respect to this version, the values of this campaign remain below the upper bound on 16 instances
+and close six (behnke32, 34, 38, 40, 55, and 56). On 9 November 2026, a further report to FJSPLib has
+claimed values equal to ours on behnke32, 34, 40, and 55 and better on behnke35, 53, 57, and 59 (on
+behnke53, equal to our CP-SAT value of 212), whereas our 387 on behnke38 is better than its 388.
+6.4
+Flexible job shop with transport robots
+Lower bounds
+We have re-implemented the bounds of Section 3.2 independently. CP-SAT and CPLEX
+proved the same optimal values of bound (1) on all 51 instances, and CP-SAT and CP Optimizer those of
+relaxation (3) on all Chambers–Barnes, small, and medium instances, before any rounding. No bound is
+above any of the 177 schedules certified by our checker, the 40 replayed schedules of Han et al. (2024)
+and Meng et al. (2025), or the 18 proven optima, and no bound exceeds the optimum of 403 random and
+sub-sampled instances. The bounds of Homayouni and Fontes (2021), recomputed on our files, reproduce
+their published values except on MKT03 and MKT04, which suggests that their experiments on these
+two instances used other data. An earlier relaxation written by an agent in this study is a special case of
+bound (1). Details are in the public repository.
+Structure of the solutions
+In the best MKT10 schedule, with a makespan of 499, the two vehicles are
+never idle. They carry jobs for 809 time units and drive empty for 172.5 units, so the makespan is half of
+this work plus a tail of about 8 units. On the critical path, 64 of 71 arcs connect consecutive tasks of the
+same vehicle when ties are broken toward job arcs (Figure 4). The left panel of this figure shows the two
+vehicles (dark for loaded travel, light for empty travel) and the machines over time. The right panel shows
+the share of vehicle, job, and machine arcs on the critical path of the best schedules of MKT04, MKT06,
+and MKT10.
+Progress over time
+During the assisted session, the first runs on MKT10, 20 minutes into the session,
+found 541.5, already below all values published before 2025. The 2-opt∗route exchange gave the largest
+gain of any single move (548 to 537.5 at equal budget). Slower cooling then yielded 522, ruin-and-recreate
+518, and long independent runs 499 after 2.9 hours. The run that found 499 used one thread for 31 minutes.
+By then, the campaign had used about 40 thread-hours on MKT10.
+MKT instances
+Table 8 gives the results on the ten MKT instances. LB is bound (1) of Section 3.2,
+which is above the best published lower bound of Homayouni and Fontes (2021) on all ten instances. The
+published upper bounds are those of LAHC (Homayouni and Fontes, 2021), IGA (Meng et al., 2023), tabu
+search (TS) (Berterottière et al., 2024), HA-DQN (DRL) (Dong et al., 2025), the better of DCGA (Han
+et al., 2024) and IVNDGA (Jia et al., 2025) (GA), and the better of the CP Optimizer models and the
+14
+
+
+--- Page 15 ---
+0
+100
+200
+300
+400
+Time
+AGV 1
+AGV 2
+M1
+M2
+M3
+M4
+M5
+M6
+M7
+M8
+M9
+M10
+M13
+MKT10 schedule of makespan 499: AGVs (dark = loaded, light = empty) and machines
+MKT04 MKT06 MKT10
+0
+20
+40
+60
+80
+100
+Critical-path arcs (%)
+Critical path
+vehicle arcs
+job arcs
+machine arcs
+Figure 4. MKT10 schedule with makespan 499 and critical-path arcs
+Table 8. Results on the ten MKT instances with two AGVs
+Published upper bounds
+Protocol (10 runs)
+Instance
+Size (ops)
+LB
+LAHC
+IGA
+TS
+DRL
+GA
+CP
+Ours
+Change
+Range
+Median
+Below
+CP-SAT
+MKT01
+10 × 6 (55)
+167
+187
+177
+187
+153×
+175
+174
+173
+−0.6
+173–175
+174
+1/10
+184
+MKT02
+10 × 6 (58)
+120
+148
+126
+134
+122
+124
+124
+124
++1.6
+124
+124
+0/10
+156
+MKT03
+15 × 8 (150)
+258
+371
+342
+342
+356
+322
+313
+294
+−6.1
+294–298
+297
+10/10
+556
+MKT04
+15 × 8 (90)
+235
+225×
+244
+254
+213×
+244
+237
+238
++0.4
+238–240
+239.5
+0/10
+310
+MKT05
+15 × 4 (106)
+285
+312
+295
+310
+251×
+290‡
+286‡
+286
+−2.4
+286–288
+288
+10/10
+397
+MKT06
+10 × 15c (150)
+244.5
+389.5
+321.5
+336.5
+329
+300
+288.5
+279.5
+−3.1
+279.5–284
+281.5
+10/10
+457
+MKT07
+20 × 5 (100)
+228
+291
+267
+289
+243
+260
+248
+245
++0.8
+245–247
+246
+0/10
+363
+MKT08
+20 × 10 (225)
+662.5
+846
+780.5
+770.5
+723
+757.5
+722
+696
+−3.6
+696–709
+702.25
+10/10
+1184.5
+MKT09
+20 × 10 (240)
+566.5
+794
+715
+709
+681
+663
+632
+598
+−5.4
+601–610.5
+606
+10/10
+1233
+MKT10
+20 × 15c (240)
+456
+712.5
+645
+616.5
+657
+549
+525
+499
+−5.0
+505–515
+509.5
+10/10
+1080
+cHeader value of the instance file. MKT06 uses machines 1–10, and MKT10 uses machines 1–10 and 13. Bold: below the
+reference value. ×Below LB. ‡The published schedule assigns an operation to a machine on which it is not eligible.
+CP-assisted genetic algorithm of Meng et al. (2025) (CP). The ant colony hybrid of He et al. (2025) is
+never the smallest. A published value below LB cannot be the makespan of a feasible schedule on these
+instance files, so we do not use it as a reference. We replayed every published schedule with our checker.
+All reproduce their makespans and are feasible, except on MKT05, where the schedules of 290 (Han et al.,
+2024) and 286 (Meng et al., 2025) assign an operation to a machine on which it is not eligible in the
+distributed file. The next value there is 293, from the CP Optimizer models of Meng et al. (2025). If these
+two schedules were accepted, MKT05 would be a tie, and six of the ten instances would be improved.
+The reference value is the smallest remaining published value. It is underlined, except on MKT05, where
+it is 293 and not shown. “Change” is relative to it, and “Below” counts the runs of the protocol (ten
+independent 20-minute single-thread runs per instance, 28 concurrent processes on 32 threads) that are
+below it. The last column is one 10-minute CP-SAT run with 8 threads from a greedy start. The lower
+bounds that CP-SAT proved in these runs (61 to 587) are below LB on all ten instances.
+On seven of the ten instances (MKT01, MKT03, MKT05, MKT06, MKT08, MKT09, and MKT10),
+the certified makespans are below the reference value. The largest changes are −6.1% on MKT03, −5.4%
+on MKT09, and −5.0% on MKT10. On all ten instances, the agent solver is at least as good as the CP
+Optimizer models of Meng et al. (2025), which ran for 3,600 s, and it is better on nine. The CP-assisted
+genetic algorithm of the same study reports 237 on MKT04, one unit below our 238, without a published
+schedule for this instance. The HA-DQN values on MKT01, MKT04, and MKT05 (153, 213, and 251)
+15
+
+
+--- Page 16 ---
+and the LAHC value on MKT04 (225) are below LB, and the closed-form bound of Section 3.2 (165, 234,
+and 282) is sufficient to show this. If one counts all published values without these checks, our values
+are below all of them on five instances. On MKT02 and MKT07, Dong et al. (2025) report 122 and 243,
+below our 124 and 245. These two values are not below LB, and they were published without schedules,
+so we could not check them. With respect to LB, our best schedules are 0.4–14.3% above it. On MKT05,
+the schedule of 286 is only one unit above the bound of 285. As a fixed protocol, we have run the final
+solver ten times for 20 minutes on each instance (Table 8). On the seven instances just mentioned, 61 of
+the 70 runs are below the reference value.
+Chambers–Barnes instances
+Table 9 gives the results on the 21 Chambers–Barnes transport instances.
+In this table, LB is relaxation (3) of Section 3.2, which CP-SAT and CP Optimizer solve to optimality on
+all 21 instances. “L/I/D” is the smallest value of LAHC (Homayouni and Fontes, 2021), IGA (Meng et al.,
+2023), and DCGA (Han et al., 2024), “DRL” the value of HA-DQN (Dong et al., 2025), and “CP” the best
+value of Meng et al. (2025). A dagger marks a CP value without a published schedule. All other CP values
+are the makespans of the published schedules replayed with our checker, which differ from the reported
+values on mt10xyzt (901 instead of 916), seti5xxxt (1,316 instead of 1,318), and seti5cct, whose
+schedule omits a transport of zero length and needs 1,263 instead of 1,261 when it is inserted. The column
+∆is relative to the smallest published value that is not below LB. The agent-written solver is better than
+L/I/D on 12 of the 21 instances. However, the approach of Meng et al. (2025), based on CP Optimizer,
+is better than our solver on 20 instances and equal on mt10xyt, where both schedules are optimal. Our
+solver is 0.0–6.5% above the best published value. It is weaker on these instances because processing
+times are much longer than travel times, and the critical path consists of machine arcs only, which a routing
+neighborhood cannot shorten. The relaxation remains informative. Seven HA-DQN values, published
+without schedules, are below LB, among them 872 and 816 on mt10xxxt and mt10xyzt, which are also
+below the optima of the same instances without transport in FJSPLib (ScheduleOpt, 2026a). Meng et al.
+(2025) report 14 of the 21 instances as proven optimal. On seven of them, their published schedule reaches
+LB (asterisks in Table 9), which confirms optimality independently of their solver. On mt10xyzt, under
+the benchmark model, which the schedules of Meng et al. (2023) and Berterottière et al. (2024) reproduce
+exactly, their schedule has a makespan of 901, equal to LB. The reported 916 may come from a different
+evaluation.
+Table 9. Chambers–Barnes instances with two AGVs
+Instance
+LB
+L/I/D
+DRL
+CP
+Ours
+∆%
+Instance
+LB
+L/I/D
+DRL
+CP
+Ours
+∆%
+mt10c1t
+978
+991
+969×
+979
+996
++1.7
+setb4xxxt
+961
+992
+–
+961∗
+978
++1.8
+mt10cct
+948
+973
+933×
+948∗
+973
++2.6
+setb4xyt
+943
+963
+–
+948
+975
++2.8
+mt10xt
+975
+986
+942×
+978
+987
++0.9
+setb4xyzt
+939
+972
+932×
+939∗
+968
++3.1
+mt10xxt
+979
+991
+–
+979∗
+992
++1.3
+seti5c12t
+1240
+1347
+1217×
+1283†
+1307
++1.9
+mt10xxxt
+963
+981
+872×
+963∗
+990
++2.8
+seti5cct
+1194
+1334
+1209
+1263
+1287
++6.5
+mt10xyt
+950
+959
+–
+950∗
+950∗
++0.0
+seti5xt
+1245
+1355
+–
+1312†
+1332
++1.5
+mt10xyzt
+901
+928
+816×
+901∗
+922
++2.3
+seti5xxt
+1253
+1373
+–
+1322†
+1326
++0.3
+setb4c9t
+954
+1004
+958
+957
+1005
++5.0
+seti5xxxt
+1246
+1350
+–
+1316
+1330
++1.1
+setb4cct
+940
+979
+946
+943
+991
++5.1
+seti5xyt
+1195
+1346
+–
+1258†
+1285
++2.1
+setb4xt
+959
+994
+–
+961
+1002
++4.3
+seti5xyzt
+1190
+1305
+1208
+1240
+1274
++5.5
+setb4xxt
+957
+1009
+–
+961
+993
++3.3
+×Below LB. †No published schedule. ∗Equal to LB, hence optimal.
+Generalization to other FJSPT instances
+We have run the final transport solver without any change on
+the other two-vehicle sets of Homayouni and Fontes (2021): ten small instances (SFJST) and ten medium
+instances (MFJST, built from the instances of Fattahi et al. 2007). Before the runs, we have checked the
+instance files, and the published schedules of Berterottière et al. (2024) and Meng et al. (2023) replay to
+their published makespans on these files. Each instance received five runs of 60 s on one thread. On the
+small instances, 48 of the 50 runs found the proven optimum, and every instance was solved to optimality
+by at least four runs. The medium instances are less uniform. The solver found the proven optimum
+(Homayouni and Fontes, 2021) on MFJST01, 03, and 06 in at least one of five runs, and matched the best
+16
+
+
+--- Page 17 ---
+published value of 900 on MFJST08, which equals relaxation (3) and is therefore optimal. On MFJST02,
+04, 05, and 07, its best run stayed 0.5–2.3% above the optimal value. On MFJST09, it found 1,090, below
+the values of DCGA and IVNDGA (Han et al., 2024; Jia et al., 2025) but above the 1,075 of Meng et al.
+(2025), whose schedule we replayed and which equals relaxation (3), so it is optimal. On MFJST10, it
+stayed 1.4% above the best published value of 1,227. These instances have long processing times compared
+with the travel times, and the final temperatures of the annealing (0.2 to 4 time units) are too small for
+them. We have not tuned the solver for these instances, because the goal was to test the unchanged method.
+Open-source baseline
+As an open-source baseline, we have run CP-SAT on a complete constraint model
+of the problem. The model uses optional intervals for the machine choice and a multiple-circuit constraint
+for the routes of the two vehicles, with empty travel times that depend on the chosen machines. It accepts
+every published schedule and every schedule of this work as feasible. CP-SAT started from a greedy
+dispatch schedule and ran for 10 minutes with 8 threads on the same workstation. Table 8 compares its
+result with the ten 20-minute single-thread runs of the agent solver. Although the agent solver used a
+quarter of the CPU time (1,200 thread-seconds against 4,800), CP-SAT ended 6–112% above the median
+of the agent solver.
+6.5
+Summary of the comparison with solvers
+Table 10 collects the comparisons of Sections 6.2–6.4. Gaps are relative to the best-known lower bound,
+and the Behnke rows show the mean deviation from the best-known upper bound. The upper part contains
+only runs on our workstation with the same budget for both solvers. The lower part compares with published
+values from other hardware. In the Behnke rows with CP Optimizer, values in parentheses come from the
+re-run of the tabu search with the same cores.
+Table 10. Summary of the comparisons with other solvers
+Reference solver
+Agent-written solver
+Instances
+Solver
+Budget
+Result
+Budget
+Result
+Same workstation, same budget
+tai_100_1000_1..10 CP Optimizer 22.2
+10 min, 1 core
+gap 4.0–6.6%
+10 min, 1 core
+gap 0.0–1.8%
+tai_100_1000_1..10 CP Optimizer 22.2
+30 min, 1 core
+gap 3.7–5.8%
+30 min, 1 core
+gap 0.0–1.8%
+tai_100_1000_1..10 CP Optimizer 22.2
+30 min, 16 cores
+gap 2.6–5.3%
+30 min, 16 cores
+gap 0.0–1.6%
+tai_100_1000_1..10 Hexaly 15.0
+10 min, 1 core
+gap 2.7–4.5%
+10 min, 1 core
+gap 0.0–1.8%
+tai_100_1000_1..10 Hexaly 15.0
+30 min, 1 core
+gap 2.7–4.4%
+30 min, 1 core
+gap 0.0–1.8%
+tai_100_1000_1..10 Hexaly 15.0
+30 min, 16 cores
+gap 2.4–4.2%
+30 min, 16 cores
+gap 0.0–1.6%
+Behnke 1–60
+CP Optimizer 22.2
+120 s, 8 threads
+mean +1.42%
+120 s, 8 threads
+mean +0.60% (+0.45%)
+Behnke, 32 open
+CP Optimizer 22.2
+1,200 s, 16 threads
+mean +0.79%
+1,200 s, 16 threads
+mean +0.24% (+0.34%)
+Behnke 1–60
+Hexaly 15.0
+120 s, 8 threads
+mean +2.85%
+120 s, 8 threads
+mean +0.60%
+Behnke, 32 open
+Hexaly 15.0
+1,200 s, 16 threads
+mean +2.01%
+1,200 s, 16 threads
+mean +0.24%
+Behnke 1–60
+CP-SAT (open source)
+120 s, 8 threads
+mean +6.42%
+120 s, 8 threads
+mean +0.60%
+MKT01–10
+CP-SAT (open source)
+10 min, 8 threads
+e.g. MKT10: 1,080 20 min, 1 thread
+e.g. MKT10: 509.5 (median)
+Published values, other hardware
+tai_100_1000_1..10 OptalCP
+10 min, 4-core laptop gap 2.6–3.8%
+10 min, 1 core
+gap 0.0–1.8%
+tai_100_1000_1
+OptalCP
+180 min, 16 workers
+533,080
+2.7–16.2 s, 1 core
+533,000
+MKT01–10
+CP Optimizer models (Meng et al., 2025) 3,600 s
+published values
+Table 8
+better on 9, equal on 1
+Chambers–Barnes
+CP-based approach (Meng et al., 2025)
+as published
+published values
+150–1,200 s, 1 thread worse on 20, equal on 1
+6.6
+New best-known values and closed instances
+Table 11 summarizes the instances on which the agents found a schedule better than the best-known value
+before this work (“New”) or equal to the lower bound (“Closed”), with the range of the time to solution of
+modes A and B. Appendix A lists all 28 instances of modes A and B with the previous bounds, the value,
+the run that found it, and its time to solution.
+Two instances are now closed. On tai_100_1000_2 and _3, the corridor solver of the agent found
+a schedule whose makespan equals the lower bound given by the longest job. Of the 28 values, 27 come
+from the agent-written solvers in mode B and one from an autonomous session (behnke16, 404). The
+agent-written solvers found their values in 28 s to 31 minutes, whereas the autonomous session that found
+17
+
+
+--- Page 18 ---
+Table 11. New best-known values and closed instances by problem family
+Modes A and B
+With mode C
+Family
+New
+Closed
+Time
+New
+Closed
+Job shop
+10
+2
+7 min–30 min
+10
+4
+Behnke–Geiger
+11
+0
+28 s–3.2 h
+18
+6
+FJSPT MKT
+7
+0
+3 min–31 min
+7
+0
+Chambers–Barnes
+0
+0
+–
+0
+0
+FJSPT MFJST
+0
+0
+–
+0
+0
+Total
+28
+2
+35
+10
+404 needed about 3.2 hours. Values of our own CP-SAT and CP Optimizer baselines are not counted.
+Including the improvement campaigns of mode C, the agents found new best-known values on 35 instances
+and closed ten (Tables 11 and 14). These counts refer to the bounds when our experiments started (FJSPLib
+commit f89e5b0, 11 October 2026). With respect to the current FJSPLib, the Behnke values of mode C
+are new on 16 instances and close six (Section 6.3). If the report of 9 November 2026 is accepted, they are
+new on 8 instances and close two. The new schedules will be submitted to JSPLib and FJSPLib.
+7
+Discussion
+7.1
+The agent as the solver, as the author of a solver, or as its improver
+Table 12 compares modes A and B of Section 5.3.
+In mode A, the agent itself is the algorithm. The user needs neither optimization knowledge nor code,
+and the agent adapts to each instance, up to changing the formulation. The job-shop session moved to a
+fixed-target formulation with time windows, a known technique in exact job-shop methods (Carlier and
+Pinson, 1994), and applied it at a scale of 100,000 operations. However, every new schedule requires a
+new session, which on tai_100_1000_1 cost US$2.43–22.69 and took 18–300 minutes, and the results
+vary considerably (527,000 to 554,332).
+Table 12. Modes A and B of a coding agent
+Mode A: the agent is the solver
+Mode B: the agent writes a solver
+Output
+one schedule
+a reusable program
+Development cost (once)
+none
+one session: US$10 (autonomous,
+101.6 min) or an assisted session (5–12 h)
+Cost of a new schedule
+a new session: US$2–23
+CPU time only
+Time to a new schedule
+0.3–5 h
+seconds to 30 minutes
+Run-to-run variance
+high
+low; controlled by seeds
+Repeatable
+no
+yes
+Similar instances
+new session each
+runs unchanged
+New structure
+adapts by itself
+needs a new session
+Auditable
+partly (transcript)
+fully (source code)
+In mode B, the agent writes a solver once, and from then on a new schedule costs only CPU time.
+Because the solver is code, an expert can read it, test it, and change it. It is also repeatable. We have
+recompiled the transport solver from its source, have used the same seed, and have obtained a schedule
+identical to the MKT10 schedule of this paper. The solvers also apply to similar instances without change
+(Section 6). On the job-shop family, the solver from one session has improved all ten instances and has
+closed two of them. The reusable tabu search has improved the best-known upper bound of 11 open
+Behnke instances, and the transport solver has found every optimum on the small transport instances. The
+18
+
+
+--- Page 19 ---
+drawback is that a solver tailored to one structure can be weak on another. The transport solver is strong
+when the vehicles are the bottleneck and weaker when the machines are (Section 6.4).
+In practice, the two modes work best together. An agent session identifies the structure of a problem
+and produces a method. A short assisted session then turns this method into a solver that the user runs again
+whenever a new instance with a similar structure arrives. This matches a common situation in industry,
+where a plant solves the same type of problem every day with different data.
+Mode C follows from these results. Once the solvers of mode B had been applied to whole instance
+families without change, we studied whether an agent can take the next step without human input: start
+from everything that modes A and B produced and coordinate its own campaign. In both campaigns, the
+agent planned the experiments, changed or combined the solvers, distributed the runs over the cores, and
+abandoned some search directions. We only set the goal and stopped the session. On the job shop, it
+analyzed why the corridor solver stalls close to the lower bound and changed the search instead of adding
+compute. On the Behnke instances, it merged the two agent-written solvers and used CP-SAT at a fixed
+makespan. The three modes thus form a sequence: an agent produces a method, the method becomes a
+reusable solver, and an agent then improves this solver with the results obtained so far. A campaign needs
+more time and compute than a single run (24 and 13.5 hours), but still no expert work and no commercial
+software.
+7.2
+Quality, speed, and cost
+In terms of quality, Section 6.5 gives the numbers. The published values of the commercial solvers come
+from other hardware and from time limits between 10 minutes and 6 hours. Our own runs of CP Optimizer
+and Hexaly remove this difference. With the same budget on the same workstation, both were weaker than
+the agent solvers on the job shop (2.4–5.3% against 0.0–1.6% above the lower bound with 16 cores), and
+weaker on the Behnke instances, where CP Optimizer nevertheless found the new best-known value 221 on
+behnke34. On the transport instances, the agent solver beats a published approach based on CP Optimizer
+when the vehicles are the bottleneck (MKT), but not when the machines are (Chambers–Barnes). Some
+agent results used more total CPU time than the reference runs, and the solver budgets do not include the
+time needed to develop the agent solvers (see below).
+In terms of speed, the agent-written solvers are also fast. On one core, the corridor solver reaches the
+180-minute OptalCP value of tai_100_1000_1 in 2.7–16.2 s, the reusable tabu found 406 on behnke16
+after 56.5 s, and the first runs of the transport session were below all MKT10 values published before 2025
+after 20 minutes. Developing a solver takes longer: 101.6 minutes for the corridor solver, and about 5 and
+12 hours for the two recorded assisted sessions.
+In terms of cost, we separate the cost of developing a solver from the cost of a new schedule. The
+16 autonomous job-shop sessions took 48 hours in total and cost US$167 in API charges for the 15 with
+a recorded cost (median US$12.72). The session that wrote the corridor solver cost US$10.07. The
+interactive sessions ran under a Claude Max subscription (US$100 per month) on a few days, together less
+than one month of subscription time, so we estimate their cost at about US$100. The two campaigns of
+mode C also ran within such a plan. At API list prices, the logged token use of the two recorded interactive
+sessions would cost about US$199. Our own time for goals, review, and verification is not included. Once
+a solver exists, each new schedule costs only CPU time on commodity hardware and needs no license,
+whereas a developer subscription of CP Optimizer starts at US$320 per user and month (IBM, 2026). A
+general-purpose solver must work well on every instance, whereas the agent can specialize to one structure.
+This specialization appears to be the main source of its advantage.
+7.3
+Limitations
+We have tested only models from one provider (Anthropic), namely Claude Opus and Claude Sonnet, and
+Claude Fable in one campaign of mode C. Controlled comparisons across models and problem classes are
+needed to show which models are suitable for this task (Section 8).
+All instances are benchmarks from the literature. Their generators can give them regular structure, for
+19
+
+
+--- Page 20 ---
+example the long, almost idle machines of the 100 × 1000 job shops or the clear stages of behnke16, and
+the agents have exploited such structure. It should be noted, however, that our conclusions may not hold
+for industrial problems, which are often less regular and include additional constraints.
+The agents did not raise the lower bound of any job-shop or Behnke instance.
+On the transport
+instances, the agent of the assisted session wrote a relaxation that bound (1) of Section 3.2 generalizes.
+The closed instances (tai_100_1000_2, _3, _4, and _9, and six Behnke instances in mode C) are closed
+because the schedules reach the known lower bound. tai_100_1000_1 and behnke16 remain open.
+The generalization runs used short budgets and few seeds (three runs of 30 minutes, or single runs of
+120 s and 1,200 s). We ran CP Optimizer and Hexaly with standard models and default parameters, as a
+typical user would. Models or parameters tuned by an expert for these instances may yield better results.
+On the medium transport instances, the unchanged solver stayed above the best known value on six of ten
+instances.
+MKT10 served as the main development instance of the transport solver, which may favor it. For this
+reason, we report the full instance sets. On the Chambers–Barnes instances, whose critical paths consist
+of machine arcs, the transport solver is weaker than a recent approach based on CP Optimizer (Meng
+et al., 2025). A solver tailored to the vehicles does not transfer to instances in which the machines are the
+bottleneck. Finally, Dong et al. (2025) report lower values than ours on five MKT instances. Three of
+these values are below our lower bound. They do not publish schedules, so we could not check the other
+two with our checker.
+8
+Conclusions and future research
+We have examined whether a frontier LLM coding agent can replace a commercial solver on difficult
+scheduling problems. On three established problem families, the agents found schedules better than the
+best published values, using only open-source tools and their own code. In autonomous sessions, without
+expert knowledge, they improved the 100,000-operation job shop tai_100_1000_1 and the flexible job
+shop behnke16. The solvers they wrote transfer to similar instances: unchanged, the job-shop solver
+improved all ten instances of its family and closed two, and in mode C agents closed two further job shops
+and six flexible job shops. With transport robots, the agent solver improved seven of the ten MKT instances
+but none of the Chambers–Barnes instances, on which a CP Optimizer approach is better. New, validated
+lower bounds for this problem are above eleven published values on the distributed instance files and certify
+eight published schedules as optimal. On large benchmark instances with exploitable structure, solvers
+written by current LLM agents can match or beat commercial solvers, both their published values and our
+own runs of CP Optimizer and Hexaly with the same budget. The cost is low. The job-shop solver took
+one autonomous session of 101.6 minutes and US$10, and each new schedule then costs only CPU time.
+The agents are strongest when an instance has a structure that a general-purpose solver does not exploit.
+This study provides evidence for models from one provider, three model lines, and three problem
+families, which were selected because they are open, large, and structurally rich. It does not show how
+other models perform, or how the results transfer to other classes of optimization problems. More studies
+are therefore required that compare different models on a wide range of optimization problems under
+controlled conditions. Such studies should vary the model family and size, keep the task text, the tools,
+the compute resources, and the time budget fixed, and report all runs, so that differences in performance
+can be attributed to the models.
+A natural next step is a standardized benchmark for this purpose. It would collect established instances
+from many problem classes, for example the job shop, the flexible job shop, the open shop (Gonzalez and
+Sahni, 1976), scheduling with transport resources, nurse rostering (Ceschia et al., 2018), and timetabling
+(McCollum et al., 2010), each with its source, its best-known bounds, and an independent checker. Runs
+of several model families on the same benchmark would show how each model performs on each problem
+class, and the evaluation of new model versions on the same tasks would show how this performance
+changes over time. A benchmark that covers many problem classes would also reduce the risk of an
+instance selection that favors one method, which is a limitation of the present study.
+20
+
+
+--- Page 21 ---
+A second open question is which behavior of the agents yields good solutions. Here, a change of
+formulation and the use of instance structure were decisive, but on a small number of sessions.
+A
+systematic analysis of many sessions could test whether these strategies are general.
+Data and materials availability
+All materials of this study are available in a public repository at https://github.com/andrealbrechtl/
+agent-heuristics-jobshop-supplement/. For each problem family, it contains the instance files with their
+sources and checksums, the certified schedules, an independent checker, the solver source code, the run
+commands, and the solver logs. It also contains the replays of published schedules (Meng et al., 2023;
+Berterottière et al., 2024; Han et al., 2024; Meng et al., 2025), the models, schedules, and logs of our CP
+Optimizer, Hexaly, and CP-SAT baselines, the campaigns of mode C, and the scripts and results of the
+lower bounds of Section 3.2. For setb4xxx, the distributed data file repeats the block of seti5xxx, and
+we used the original Chambers–Barnes data. The task texts of the autonomous job-shop and behnke16
+runs and the first message of the assisted transport-robot session are included verbatim. The other runs
+used the same or very similar task texts. One script re-checks every value in this paper.
+Use of generative AI
+The use of LLM coding agents to produce the experimental results is the subject of the study and is
+described in Section 5. During the preparation of the manuscript, the authors used Claude (Anthropic) to
+review the text and to rewrite parts of it. The lower bounds of Section 3.2 were derived and implemented
+by Claude Opus 5.5 (claude-opus-5-5, in Claude Code, November 2026) during the review of the
+manuscript. Bound (1) generalizes a relaxation written earlier by the agent of the transport session. The
+authors re-implemented and validated them independently with two solvers. The authors have checked the
+proofs. The authors reviewed and edited all content and take full responsibility for the publication.
+Acknowledgments
+This work was partly supported by the Canadian Natural Sciences and Engineering Research Council
+(NSERC) under grant 2025-03964. This support is gratefully acknowledged. This study was financed in
+part by the Coordenação de Aperfeiçoamento de Pessoal de Nível Superior – Brasil (CAPES) – Finance
+Code 001 and by the Conselho Nacional de Desenvolvimento Científico e Tecnológico (CNPq).
+Conflict of interest
+The authors have no conflict of interest to declare.
+References
+Abgaryan, H., Cazenave, T., Harutyunyan, A., 2025. Starjob: Dataset for LLM-Driven Job Shop Schedul-
+ing. 2503.01877.
+Abgaryan, H., Harutyunyan, A., Cazenave, T., 2024. LLMs can Schedule. 2408.06993.
+AhmadiTeshnizi, A., Gao, W., Udell, M., 2024. OptiMUS: Scalable Optimization Modeling with (MI)LP
+Solvers and Large Language Models. In Proceedings of the 41st International Conference on Machine
+Learning (ICML), Proceedings of Machine Learning Research. Vol. 235.
+Anthropic, 2026a.
+Claude code: an agentic coding tool.
+https://github.com/anthropics/claude-code.
+Accessed 2026-10-11.
+21
+
+
+--- Page 22 ---
+Anthropic, 2026b. Claude release notes. https://support.claude.com/en/articles/12138966-release-notes.
+Accessed 10 November 2026.
+Barr, R.S., Golden, B.L., Kelly, J.P., Resende, M.G.C., Stewart, W.R., 1995. Designing and reporting on
+computational experiments with heuristic methods. Journal of Heuristics 1, 1, 9–32.
+Beasley, J.E., 1990. OR-Library: Distributing Test Problems by Electronic Mail. Journal of the Operational
+Research Society 41, 11, 1069–1072.
+Behnke, D., Geiger, M.J., 2012. Test Instances for the Flexible Job Shop Scheduling Problem with Work
+Centers. Technical Report RR-12-01-01, Helmut-Schmidt-Universität, Lehrstuhl für Betriebswirtschaft-
+slehre, insbes. Logistik-Management.
+Benoist, T., Estellon, B., Gardi, F., Megel, R., Nouioua, K., 2011. LocalSolver 1.x: a black-box local-search
+solver for 0-1 programming. 4OR 9, 3, 299–316.
+Berterottière, L., Dauzère-Pérès, S., Yugma, C., 2024. Flexible job-shop scheduling with transportation
+resources. European Journal of Operational Research 312, 3, 890–909.
+Bilge, Ü., Ulusoy, G., 1995. A time window approach to simultaneous scheduling of machines and material
+handling system in an FMS. Operations Research 43, 6, 1058–1070.
+Brandimarte, P., 1993. Routing and scheduling in a flexible job shop by tabu search. Annals of Operations
+Research 41, 3, 157–183.
+Burke, E.K., Bykov, Y., 2017. The late acceptance hill-climbing heuristic. European Journal of Operational
+Research 258, 1, 70–78.
+Cao, S., Yuan, Y., 2025. ReflecSched: Solving Dynamic Flexible Job-Shop Scheduling via LLM-Powered
+Hierarchical Reflection. 2508.01724.
+Carlier, J., Pinson, E., 1994. Adjustment of heads and tails for the job-shop problem. European Journal
+of Operational Research 78, 2, 146–161.
+Ceschia, S., Dang, N., De Causmaecker, P., Haspeslagh, S., Schaerf, A., 2018. The Second International
+Nurse Rostering Competition. Annals of Operations Research 274, 1-2, 171–186.
+Chambers, J.B., Barnes, J.W., 1996. Classical and flexible job shop scheduling by tabu search. Technical
+Report ORP96-09, Graduate Program in Operations Research and Industrial Engineering, The University
+of Texas at Austin.
+Chen, M., Tworek, J., Jun, H., Yuan, Q., Pinto, H.P.d.O., Kaplan, J., et al., 2021. Evaluating Large
+Language Models Trained on Code. 2107.03374.
+Da Col, G., Teppan, E.C., 2022.
+Industrial-size job shop scheduling with constraint programming.
+Operations Research Perspectives 9, 100249.
+Da Ros, F., Soprano, M., Di Gaspero, L., Roitero, K., 2026. Large Language Models for Combinatorial
+Optimization: A Systematic Review. ACM Computing Surveys 58, 11, 1–53.
+Dong, X., Wan, G., Zeng, P., 2025. A heuristic-assisted deep reinforcement learning algorithm for flexible
+job shop scheduling with transport constraints. Complex & Intelligent Systems 11, 5, 210.
+Fattahi, P., Saidi Mehrabad, M., Jolai, F., 2007. Mathematical modeling and heuristic approaches to
+flexible job shop scheduling problems. Journal of Intelligent Manufacturing 18, 331–342.
+Frazzon, E.M., Albrecht, A., Pires, M., Israel, E., Kück, M., Freitag, M., 2018. Hybrid approach for the
+integrated scheduling of production and transport processes along supply chains. International Journal
+of Production Research 56, 5, 2019–2035.
+22
+
+
+--- Page 23 ---
+Garey, M.R., Johnson, D.S., Sethi, R., 1976.
+The complexity of flowshop and jobshop scheduling.
+Mathematics of Operations Research 1, 2, 117–129.
+Gleixner, A., Hendel, G., Gamrath, G., Achterberg, T., Bastubbe, M., Berthold, T., et al., 2021. MI-
+PLIB 2017: data-driven compilation of the 6th mixed-integer programming library. Mathematical
+Programming Computation 13, 3, 443–490.
+Gonzalez, T., Sahni, S., 1976. Open Shop Scheduling to Minimize Finish Time. Journal of the ACM 23,
+4, 665–679.
+Google, 2024. OR-Tools CP-SAT. https://developers.google.com/optimization.
+Ham, A., 2020. Transfer-robot task scheduling in flexible job shop. Journal of Intelligent Manufacturing
+31, 7, 1783–1793.
+Han, X., Cheng, W., Meng, L., Zhang, B., Gao, K., Zhang, C., Duan, P., 2024. A dual population
+collaborative genetic algorithm for solving flexible job shop scheduling problem with AGV. Swarm and
+Evolutionary Computation 86, 101538.
+Harbor Framework, 2026. Harbor: a framework for evaluating and improving agents. https://github.com/
+harbor-framework/harbor. Accessed 2026-10-11.
+He, N., Sahnoun, M., Zhang, D., Bettayeb, B., 2025. A hybrid approach using ant colony optimisation
+for integrated scheduling of production and transportation tasks within flexible manufacturing systems.
+Computers & Operations Research 180, 107059.
+Hexaly, 2026a. Hexaly optimizer. https://www.hexaly.com. Accessed 2026-10-11.
+Hexaly, 2026b. Hexaly pricing. https://www.hexaly.com/pricing. Accessed 2026-10-15. Business licence
+on request; academic licences free.
+Homayouni, S.M., Fontes, D.B.M.M., 2021. Production and transport scheduling in flexible job shop
+manufacturing systems. Journal of Global Optimization 79, 2, 463–502.
+Homayouni, S.M., Fontes, D.B.M.M., Gonçalves, J.F., 2023. A multistart biased random key genetic
+algorithm for the flexible job shop scheduling problem with transportation. International Transactions
+in Operational Research 30, 2, 688–716.
+Hooker, J.N., 1995. Testing heuristics: We have it all wrong. Journal of Heuristics 1, 1, 33–42.
+Hosseini, A., Otto, A., Pesch, E., 2024. Scheduling in manufacturing with transportation: Classification
+and solution techniques. European Journal of Operational Research 315, 3, 821–843.
+Huang, C., Tang, Z., Hu, S., Jiang, R., Zheng, X., Ge, D., Wang, B., Wang, Z., 2025. ORLM: A
+Customizable Framework in Training Large Models for Automated Optimization Modeling. Operations
+Research 73, 6, 2986–3009.
+IBM, 2026.
+IBM ILOG CPLEX Optimization Studio:
+pricing.
+https://www.ibm.com/products/
+ilog-cplex-optimization-studio/pricing. Accessed 2026-10-15. Developer subscription from US$320
+per authorized user and month (indicative); deployment on request; free Community Edition (up to
+1,000 variables and constraints) and free academic access.
+Jia, H., Chen, Y., Tian, Q., Pan, D., Yang, Y., 2025. Critical-path-based variable neighborhood descent for
+the joint scheduling of FJSP and AGVs. Mathematics 13, 3883.
+Jimenez, C.E., Yang, J., Wettig, A., Yao, S., Pei, K., Press, O., Narasimhan, K., 2024. SWE-bench: Can
+Language Models Resolve Real-World GitHub Issues?
+In The Twelfth International Conference on
+Learning Representations (ICLR).
+23
+
+
+--- Page 24 ---
+Laborie, P., Rogerie, J., Shaw, P., Vilím, P., 2018. IBM ILOG CP Optimizer for scheduling. Constraints
+23, 210–250.
+Leusin, M.E., Frazzon, E.M., Uriona Maldonado, M., Kück, M., Freitag, M., 2018. Solving the Job-Shop
+Scheduling Problem in the Industry 4.0 Era. Technologies 6, 4, 107.
+Liao, R., Qiu, J., Chen, X., Li, X., 2025. Online Operator Design in Evolutionary Optimization for Flexible
+Job Shop Scheduling via Large Language Models. 2511.16485.
+Liu, F., Tong, X., Yuan, M., Lin, X., Luo, F., Wang, Z., Lu, Z., Zhang, Q., 2024a. Evolution of Heuristics:
+Towards Efficient Automatic Algorithm Design Using Large Language Model. In Proceedings of the 41st
+International Conference on Machine Learning (ICML), Proceedings of Machine Learning Research.
+Vol. 235.
+Liu, F., Yao, Y., Guo, P., Yang, Z., Lin, X., Zhao, Z., et al., 2026a. A Systematic Survey on Large Language
+Models for Algorithm Design. ACM Computing Surveys 58, 8, 1–32.
+Liu, F., Zhang, R., Xie, Z., Sun, R., Li, K., Hu, Q., et al., 2024b. LLM4AD: A Platform for Algorithm
+Design with Large Language Model. 2412.17287.
+Liu, P., Meng, L., Yang, Y., Cheng, W., 2026b. Deep reinforcement learning for flexible job shop with
+multi-AGV production systems via heterogeneous graph neural networks. Mathematics 14, 2729.
+McCollum, B., Schaerf, A., Paechter, B., McMullan, P., Lewis, R., Parkes, A.J., et al., 2010. Setting
+the Research Agenda in Automated Timetabling: The Second International Timetabling Competition.
+INFORMS Journal on Computing 22, 1, 120–130.
+Meng, L., Cheng, W., Zhang, B., Zou, W., Fang, W., Duan, P., 2023. An improved genetic algorithm for
+solving the multi-AGV flexible job shop scheduling problem. Sensors 23, 8, 3815.
+Meng, L., Cheng, W., Zhang, C., Gao, K., Zhang, B., Ren, Y., 2025. Novel CP models and CP-assisted
+meta-heuristic algorithm for flexible job shop scheduling benchmark problem with multi-AGV. IEEE
+Transactions on Systems, Man, and Cybernetics: Systems 55, 8455–8468.
+Naderi, B., Ruiz, R., Roshanaei, V., 2023. Mixed-integer programming vs. constraint programming for
+shop scheduling problems: New results and outlook. INFORMS Journal on Computing 35, 4, 817–843.
+Novikov, A., V˜u, N., Eisenberger, M., Dupont, E., Huang, P.S., Wagner, A.Z., et al., 2025. AlphaEvolve:
+A coding agent for scientific and algorithmic discovery. 2506.13131.
+OptalCP, 2026a. Jobshop 16w 3h anc 100x1000: benchmark run record. https://optalcp.com/benchmarks/
+jobshop/anc/100-1000/main.html. Accessed 10 November 2026.
+OptalCP, 2026b. OptalCP editions. https://optalcp.com/docs/Quick%20Start/editions. Accessed 2026-
+10-15. Preview and Academic editions free; Full edition for commercial use requires a licence.
+Perron, L., Didier, F., Gay, S., 2023.
+The CP-SAT-LP Solver (Invited Talk).
+In 29th International
+Conference on Principles and Practice of Constraint Programming (CP 2023), Schloss Dagstuhl, pp.
+3:1–3:2.
+Potvin, J.Y., Rousseau, J.M., 1995. An exchange heuristic for routeing problems with time windows.
+Journal of the Operational Research Society 46, 12, 1433–1446.
+Ramamonjison, R., Yu, T., Li, R., Li, H., Carenini, G., Ghaddar, B., et al., 2022. NL4Opt competition:
+Formulating optimization problems based on their natural language descriptions.
+In Ciccone, M.,
+Stolovitzky, G. and Albrecht, J. (eds), Proceedings of the NeurIPS 2022 Competitions Track, PMLR,
+pp. 189–203.
+24
+
+
+--- Page 25 ---
+Romera-Paredes, B., Barekatain, M., Novikov, A., Balog, M., Kumar, M.P., Dupont, E., et al., 2024.
+Mathematical discoveries from program search with large language models. Nature 625, 7995, 468–
+475.
+Sánchez-Fernández, Á., Pernas-Álvarez, J., Crespo-Pereira, D., 2026. Agentic AI-Assisted Modeling for
+Production Scheduling: Assessment in Constraint Programming. 2610.10184.
+ScheduleOpt, 2026a. FJSPLib: Flexible job-shop scheduling benchmarks. https://scheduleopt.github.io/
+benchmarks/fjsplib. Accessed 2026-10-11 (commit f89e5b0).
+ScheduleOpt, 2026b.
+JSPLib:
+Job-shop scheduling benchmarks.
+https://scheduleopt.github.io/
+benchmarks/jsplib/. Accessed 2026-10-11 (commit f89e5b0). Instance tai_100_1000_1: LB 522298,
+UB 533080 (OptalCP).
+ScheduleOpt, 2026c. OptalCP. https://optalcp.com. Constraint-programming solver used for the tracked
+JSPLib upper bounds.
+Schrimpf, G., Schneider, J., Stamm-Wilbrandt, H., Dueck, G., 2000. Record breaking optimization results
+using the ruin and recreate principle. Journal of Computational Physics 159, 2, 139–171.
+Taillard, É., 1993. Benchmarks for basic scheduling problems. European Journal of Operational Research
+64, 2, 278–285.
+Wang, Y., 2025. A compact structure-aware and symmetry-breaking MILP for flexible job-shop schedul-
+ing with AGVs. https://github.com/wangyuting9836/FJSP_AGV_MILP. Code and benchmark files;
+accessed 2026-09-25.
+Wang, Z., Wan, C., Liu, J., Zhang, X., Wang, H., Hu, Y., Hu, Z., 2025. MASC: Large language model-
+based multi-agent scheduling chain for flexible job shop scheduling problem. Advanced Engineering
+Informatics 67, 103527.
+Xiao, Z., Zhang, D., et al., 2024. Chain-of-Experts: When LLMs Meet Complex Operations Research
+Problems. In The Twelfth International Conference on Learning Representations (ICLR).
+Yang, C., Wang, X., Lu, Y., Liu, H., Le, Q.V., Zhou, D., Chen, X., 2024a. Large Language Models as
+Optimizers. In The Twelfth International Conference on Learning Representations (ICLR).
+Yang, J., Jimenez, C.E., Wettig, A., Lieret, K., Yao, S., Narasimhan, K., Press, O., 2024b.
+SWE-
+agent: Agent-Computer Interfaces Enable Automated Software Engineering. In Advances in Neural
+Information Processing Systems (NeurIPS), Vol. 37.
+Yao, Y., Liu, Q., Fu, L., Li, X., Yu, Y., Gao, L., Zhou, W., 2025. A novel mathematical model for the
+flexible job-shop scheduling problem with limited automated guided vehicles. IEEE Transactions on
+Automation Science and Engineering 22, 7449–7462.
+Yao, Y., Liu, Q., Li, X., Gao, L., 2026.
+Constraint programming for AGV and machine integrated
+scheduling problem in flexible manufacturing system. IEEE Transactions on Automation Science and
+Engineering 23, 2378–2390.
+Ye, H., Wang, J., Cao, Z., Berto, F., Hua, C., Kim, H., Park, J., Song, G., 2024. ReEvo: Large Language
+Models as Hyper-Heuristics with Reflective Evolution. In Advances in Neural Information Processing
+Systems (NeurIPS), Vol. 37.
+Yuraszeck, F., Werner, F., Rossit, D., 2026. A comprehensive benchmark of constraint programming
+solvers for the makespan-minimisation job shop scheduling problem. Mathematics 14, 12, 2179.
+25
+
+
+--- Page 26 ---
+A
+New best-known values found by the agents
+Table 13 lists every instance on which an agent of mode A or B found a new best-known value (Section 6.6),
+and Table 14 the values of mode C below both the best value of modes A and B (A/B) and the previous
+best-known value. LB and UB are the best-known bounds before this work (JSPLib, FJSPLib, and, for
+MKT, the bound of Homayouni and Fontes (2021) and the reference value of Table 8). “Run” gives the
+resources of the run that found the value (16 × 1 core: 16 single-core workers), and “Time” the wall time
+to the value (FJSPT: to the end of its cooling run). Notes: a from file timestamps; c one run of a campaign
+of about 40 thread-hours; d our CP-SAT baseline later found 212 and reported it as optimal. “Compaction”
+starts every operation of the mode-B schedule as early as possible in its machine order, “corridor search”
+is the solver of Section 6.2, and “new local search” that of the Behnke campaign.
+Table 13. All instances on which an agent found a new best-known value
+Instance
+LB
+UB
+Ours
+Status
+Found by
+Run
+Time
+Job shop
+tai_100_1000_1
+522,298
+533,080
+525,515
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+29.5 min
+tai_100_1000_2
+530,375
+538,067
+530,375
+closed
+Agent solver (B)
+1 core, 30 min
+22.6 min
+tai_100_1000_3
+530,560
+538,757
+530,560
+closed
+Agent solver (B)
+1 core, 30 min
+7.0 min
+tai_100_1000_4
+527,101
+534,746
+528,156
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+26.6 min
+tai_100_1000_5
+517,728
+529,580
+525,865
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+20.3 min
+tai_100_1000_6
+522,907
+534,969
+524,812
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+29.2 min
+tai_100_1000_7
+522,537
+534,974
+527,000
+improved
+Agent solver (B)
+1 core, 30 min
+8.8 min
+tai_100_1000_8
+526,428
+535,757
+528,473
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+29.9 min
+tai_100_1000_9
+528,097
+536,993
+529,470
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+28.5 min
+tai_100_1000_10
+521,766
+529,918
+526,000
+improved
+Agent solver (B)
+16 × 1 core, 30 min
+16.1 min
+Behnke–Geiger
+behnke16
+391
+412
+404
+improved
+Auto session (A)
+4-CPU container
+≈3.2 ha
+behnke13
+223
+229
+227
+improved
+Agent solver (B)
+16 thr, 1,200 s
+2.8 min
+behnke32
+220
+224
+223
+improved
+Agent solver (B)
+16 thr, 1,200 s
+28 s
+behnke35
+211
+214
+213
+improved
+Agent solver (B)
+16 thr, 1,200 s
+78 s
+behnke40
+415
+419
+417
+improved
+Agent solver (B)
+16 thr, 1,200 s
+5.1 min
+behnke53
+211
+215
+213d
+improved
+Agent solver (B)
+16 thr, 1,200 s
+46 s
+behnke55
+221
+223
+222
+improved
+Agent solver (B)
+8 thr, 120 s
+31 s
+behnke56
+384
+390
+388
+improved
+Agent solver (B)
+16 thr, 1,200 s
+11.4 min
+behnke57
+385
+390
+389
+improved
+Agent solver (B)
+16 thr, 1,200 s
+41 s
+behnke59
+392
+398
+394
+improved
+Agent solver (B)
+8 thr, 120 s
+92 s
+behnke60
+397
+402
+400
+improved
+Agent solver (B)
+16 thr, 1,200 s
+115 s
+FJSPT, MKT
+MKT01
+125
+174
+173
+improved
+Agent solver (B)
+1 thr, 1,200 s
+3.4 min
+MKT03
+206
+313
+294
+improved
+Agent solver (B)
+1 thr, 1,200 s
+12.2 min
+MKT05
+231
+293
+286
+improved
+Agent solver (B)
+1 thr, 900 s
+13.3 min
+MKT06
+222.8
+288.5
+279.5
+improved
+Agent solver (B)
+1 thr, 1,200 s
+13.2 min
+MKT08
+591.5
+722
+696
+improved
+Agent solver (B)
+1 thr, 1,200 s
+10.9 min
+MKT09
+481.8
+632
+598
+improved
+Agent solver (B)
+1 thr, 2,700 s
+21.2 min
+MKT10
+386.8
+525
+499
+improved
+Agent solver (B)
+1 thr, 1,900 s
+30.6 minc
+26
+
+
+--- Page 27 ---
+Table 14. Values of the two improvement campaigns of mode C
+Instance
+LB
+UB
+A/B
+Mode C
+Status
+Method
+Job shop
+tai_100_1000_1
+522,298
+533,080
+525,515
+525,389
+improved
+compaction of the B schedule
+tai_100_1000_4
+527,101
+534,746
+528,156
+527,101
+closed
+corridor search, propagated windows
+tai_100_1000_5
+517,728
+529,580
+525,865
+525,657
+improved
+compaction of the B schedule
+tai_100_1000_6
+522,907
+534,969
+524,812
+524,604
+improved
+compaction of the B schedule
+tai_100_1000_7
+522,537
+534,974
+527,000
+526,771
+improved
+compaction of the B schedule
+tai_100_1000_8
+526,428
+535,757
+528,473
+527,280
+improved
+modified corridor search, compaction
+tai_100_1000_9
+528,097
+536,993
+529,470
+528,097
+closed
+corridor search, propagated windows
+tai_100_1000_10
+521,766
+529,918
+526,000
+525,782
+improved
+compaction of the B schedule
+Behnke–Geiger
+behnke14
+221
+230
+232
+228
+improved
+new local search
+behnke32
+220
+224
+223
+220
+closed
+CP-SAT at a fixed makespan
+behnke34
+219
+223
+223
+219
+closed
+CP-SAT at a fixed makespan
+behnke36
+381
+388
+389
+386
+improved
+new local search
+behnke38
+386
+389
+391
+387
+improved
+CP-SAT at a fixed makespan
+behnke39
+384
+389
+392
+387
+improved
+new local search
+behnke40
+415
+419
+417
+415
+closed
+CP-SAT at a fixed makespan
+behnke52
+210
+212
+214
+211
+improved
+CP-SAT at a fixed makespan
+behnke55
+221
+223
+222
+221
+closed
+CP-SAT with a makespan cap
+behnke56
+384
+390
+388
+384
+closed
+CP-SAT at a fixed makespan
+behnke57
+385
+390
+389
+386
+improved
+new local search
+behnke58
+392
+397
+398
+394
+improved
+new local search
+behnke60
+397
+402
+400
+397
+closed
+CP-SAT at a fixed makespan
+27

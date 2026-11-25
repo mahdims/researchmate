@@ -1,0 +1,1279 @@
+--- Page 1 ---
+Structure-Aware Skill Retrieval and Arbitration for Optimization Modeling
+Anran Liu, Benzhao Hou, Zongsheng Cao, Daichao Wang, Lang Chen, and Shitong Chen∗
+Abstract
+Large Language Models (LLMs) can turn natural-language
+optimization tasks into solver-checked answers, but current
+agents remain brittle under narrative rewrites and often store
+reusable experience at the instance level. We introduce Ar-
+chOR, an archetype-centric skill agent that builds on Opt-
+Skills by adding two retrieval-focused modules. Centroid-
+Aware Representation Learning (CARL) refines the ordering
+of cached skill representations through a low-rank prototype
+residual.
+Signature-Guided Retrieval (S3R) attaches open-
+dimensional structural signatures to skills, prioritizes can-
+didates by weighted Jaccard overlap, and bounds semantic
+re-ranking to a top-K set.
+A baseline-preserving arbitra-
+tion rule determines when the structural route should replace
+the original selector.
+Experiments on the same five opti-
+mization benchmarks with the same DeepSeek-V4.1-Flash
+backbone and the unchanged released skill library show that
+these access-level changes produce consistent improvements
+in solver-verified accuracy.
+1
+Introduction
+Operational optimization underlies many industrial decision
+pipelines, including routing, production scheduling, energy
+dispatch, and workforce planning. Turning these business
+descriptions into executable models is still a labor-intensive
+expert task: practitioners must identify decision variables,
+formalize constraints, choose objectives, and translate the
+formulation into solvercode. Large language models(LLMs)
+have therefore become an attractive interface for optimization
+modeling. Recent systems improve this interface through
+multi-agent orchestration (AhmadiTeshnizi, Gao, and Udell
+2024; Xiao et al. 2024), domain-oriented fine-tuning (Jiang
+et al. 2025a; Huang et al. 2025a), or reinforcement learning
+with solver feedback (Chen et al. 2025; Ding et al. 2026).
+However, strong benchmark accuracy does not by itself
+solve the reuse problem that matters in practice.
+A de-
+ployed modeling agent should recognize that two differ-
+ently narrated requests may instantiate the same optimiza-
+tion archetype, route repeated instances through a stable
+workflow, and extend its library when the distribution shifts.
+Recent experience-based systems move in this direction: Al-
+phaOPT (Kong et al. 2025) maintains solver-verified insights,
+∗Corresponding author: Shenzhen University.
+while LEAN-LLM-OPT (Liang et al. 2026) retrieves struc-
+tured exemplars to seed workflow construction. Their stored
+artifacts are still largely instance-centered, so surface narra-
+tives, noisy descriptions, and missing coverage can distort
+retrieval even when the underlying mathematical structure is
+familiar.
+The central difficulty is that optimization skills are defined
+by structure rather than by wording alone. Two assignment
+problems can mention different commodities, agents, and
+budgets while requiring the same variable pattern and con-
+straint family; conversely, two descriptions can share terms
+such as “distribute” or “mix” while calling for incompatible
+formulations. A raw cached vector and a natural-language
+skill card have no explicit reason to preserve these archetype
+boundaries, leaving robust generalization and in-distribution
+routing unresolved. A convincing skill-reuse system should
+therefore show that its retrieval space and selection rules
+align with optimization structure.
+We address this issue with ArchOR, an archetype-centric
+skill agent for LLM-based optimization modeling. Rather
+than modifying skill construction, ArchOR starts from the
+released OptSkills library, whose workflow-level skills con-
+solidate successful and failed trajectories for optimization
+archetypes. The proposed system changes how a query is
+routed to those skills: CARL refines cached skill-vector
+ordering, S3R imposes structural filtering, and baseline-
+preserving arbitration retains the original route when struc-
+tural coverage is uncertain. Two lightweight modules make
+this archetype view operational. Centroid-Aware Represen-
+tation Learning (CARL) transforms cached skill vectors with
+archetype prototypes and a low-rank residual so that neigh-
+boring skills are ordered by structural archetype rather than
+surface wording. Signature-Guided Retrieval (S3R) attaches
+an open-dimensional structural signature to every skill, with
+attributes such as problem_class, var_pattern, and
+constraint_family. At test time, a query signature
+prioritizes compatible candidates by weighted overlap be-
+fore LLM semantic re-ranking over a bounded candidate
+set. Because neither signal is reliable on every cross-domain
+query, ArchOR treats the inherited selector as a fallback and
+overrides it only when inference-time evidence supports the
+structural route.
+Both components are needed because a fixed solver can
+be effective for one family of optimization structures yet
+arXiv:2610.41909v1  [cs.AI]  30 Oct 2026
+
+
+--- Page 2 ---
+fail when the variable pattern or constraint family changes.
+ArchOR therefore represents the problem structure, keeps a
+portfolio of complementary workflow skills, and routes each
+query to the most compatible workflow. CARL improves
+the ordering of cached archetype representations, while S3R
+provides a discrete guardrail against semantically plausible
+but structurally wrong skills. Table 4 further validates the
+representation-level improvement on the learned skill library.
+Empirically, with the same DeepSeek-V4.1-Flash back-
+bone (DeepSeek-AI 2026), ArchOR produces consistent
+end-to-end accuracy improvements across five complemen-
+tary benchmarks, while system-level and module ablations
+separate retrieval quality, routing behavior, and arbitration
+safety. Our contributions are threefold:
+1. We identify retrieval as the limiting component of
+archetype-centric skill libraries: raw cached skill vec-
+tors can blur archetype boundaries, while semantics-only
+skill cards can make structurally incompatible workflows
+appear applicable.
+2. We introduce two complementary modules that opera-
+tionalize this view: one sharpens cached-vector neigh-
+borhoods, and the other records auditable structural at-
+tributes and uses their overlap to restrict the candidate set.
+A baseline-preserving arbitration rule prevents incom-
+plete signature coverage from discarding reliable baseline
+skills.
+3. We evaluate ArchOR across five benchmarks with the
+same backbone and released skill library; system-level
+ablations, module ablations, and leave-one-out retrieval
+diagnostics show when structural routing helps and when
+it must fall back to the baseline.
+2
+Related Work
+2.1
+Optimization Modeling with LLMs
+Post-Training Methods.
+A first line of work embeds opti-
+mization competence directly into the model weights. Recent
+representatives cover supervised fine-tuning (ORLM (Huang
+et al. 2025a), OptMATH (Lu et al. 2025), AutoOR (Motwani
+et al. 2026)), preference optimization (LLMOPT (Jiang et al.
+2025a)), and reinforcement learning with solver-based re-
+ward (SIRL (Chen et al. 2025), OR-R1 (Ding et al. 2026)).
+Solver feedback gives these models a stronger training sig-
+nal than ordinary instruction tuning, especially when the
+objective value can be checked exactly. The cost is speci-
+ficity: competence is tied to model parameters, updating it
+requires additional training, and a deployed system cannot
+easily inspect which learned procedure is being reused for a
+new query. ArchOR instead keeps the backbone frozen and
+places reusable procedures in an auditable skill library, so a
+routing decision can be explained by cached-vector similar-
+ity, signature overlap, and arbitration status.
+These two families also imply different update cycles. A
+fine-tuned checkpoint can enforce a consistent modeling style
+and amortize competence into parameters, but correcting a
+recurrent formulation error may require another training run
+or a prompt workaround. A library can be versioned, in-
+spected, and revised one workflow at a time. That trans-
+parency shifts the burden from learning a procedure to de-
+ciding when the procedure applies: an external skill is useful
+only if the retriever preserves its boundary conditions and
+the router does not override a safer known workflow.
+Agent-Based Methods.
+A second line keeps the base
+model frozen and instead composes a multi-stage LLM
+pipeline in which formulation, coding, execution, and re-
+pair are handled by distinct agents. Chain-of-Experts (Xiao
+et al. 2024) and OptiMUS (AhmadiTeshnizi, Gao, and Udell
+2024) route sub-tasks through role-specialized experts glued
+together by a conductor. ORMind (Wang et al. 2025) and
+ORThought (Yang et al. 2025b) layer cognitive-style heuris-
+tics on top of the pipeline so that business intent is progres-
+sively refined into a mathematical formulation and executable
+solver code. These systems improve error recovery and task
+decomposition, but their reusable knowledge is usually en-
+coded as prompts, agent roles, or execution habits rather
+than as an explicitly indexed optimization workflow. Con-
+sequently, two problems with the same variable pattern may
+still be solved from scratch unless the pipeline itself main-
+tains an external memory. ArchOR is complementary to
+this direction: it supplies a structure-aware retrieval layer
+that can decide when an existing workflow is applicable and
+when the original selector should remain authoritative.
+Experience-Enhanced Methods.
+The design question
+here is not merely whether experience should be reused,
+but which artifact is indexed and what boundary controls
+reuse.
+Constraint-centered systems such as DRoC (Jiang
+et al. 2025b) and ConstraintLLM (Shi et al. 2025) are effec-
+tive when the bottleneck is translating stated requirements
+into formal atoms, but isolated constraints do not specify the
+order of modeling decisions or the checking steps required
+after a solver returns. Exemplar-based systems such as MIR-
+ROR (Shi et al. 2026) and LEAN-LLM-OPT (Liang et al.
+2026) provide fuller scaffolds, yet a retrieved instance can
+also import incidental quantities, objective conventions, or
+domain assumptions. AlphaOPT (Kong et al. 2025) makes
+those boundaries more explicit by refining insights from
+failed attempts, although a lesson must still be matched at
+the right level of generality. OptSkills (Yang et al. 2026a)
+occupies an informative middle point: its reusable artifact
+is an end-to-end workflow, while archetype clustering re-
+duces dependence on narrative details during library con-
+struction.
+ArchOR starts after that construction step.
+It
+does not change how workflows are formed; instead, it deter-
+mines whether a stored workflow is admissible for the current
+query and whether it is safe to supersede the inherited base-
+line route.
+A closely related concurrent system, OptiSkill (Zhao et al.
+2026), also builds a reusable optimization-specific skill bank,
+organizing solver-verified experience into global strategies
+and step-level error-prevention rules and evolving the bank
+with validated test-time experience. Its emphasis is library
+construction and evolution. ArchOR instead keeps the re-
+leased OptSkills library frozen and studies the downstream
+access decision: candidate admissibility, ordering, and over-
+ride safety.
+
+
+--- Page 3 ---
+2.2
+From Skill Acquisition to Skill Access
+Research on agent skills can be viewed around a lifecy-
+cle: XSkill (Jiang et al. 2026) asks what part of an execu-
+tion trace should be abstracted into transferable procedure;
+EvoSkill (Alzubi et al. 2026), Memento-Skills (Zhou et al.
+2026), and AutoSkill (Yang et al. 2026b) study how a cat-
+alog is discovered, routed to, and revised; Trace2Skill (Ni
+et al. 2026) consolidates local trajectory lessons; and Mem-
+Skill (Zhang et al. 2026) turns memory management itself
+into a learned competence. SkillRet (Kang, Cho, and Kim
+2026) further shows that selecting one skill from a large
+library is itself a retrieval problem rather than an inciden-
+tal prompt detail. This line shows that reusable knowledge
+must be neither an unstructured trace nor an overly broad
+prompt. It also makes clear that skill content and skill access
+are separate problems: a well-formed catalog can still fail if
+incompatible entries dominate the candidate list.
+Optimization sharpens the access problem because com-
+patibility is typed rather than merely topical. A candidate
+must agree on decision roles, conservation and capacity re-
+lations, objective orientation, integrality, and the assump-
+tions expected by its solver backend. Two workflows can
+share a transportation vocabulary while imposing different
+directed-arc or shipment semantics; both may execute, but
+only one represents the stated decision problem.
+Multi-
+signal structural-semantic consistency has also been used
+to select generated MILP programs without solving every
+candidate (Zeng et al. 2026); ArchOR addresses the com-
+plementary earlier decision of retrieving an applicable work-
+flow from a reusable skill library and deciding whether it
+may override a stable baseline.
+This separation suggests three operational requirements
+for an access layer. The first is recall: plausible archetypes
+must remain visible after caching, filtering, and re-ranking.
+The second is typed admissibility: topical similarity can-
+not authorize a workflow whose decision roles or solver
+assumptions conflict with the query. The third is override
+safety: a new route should replace a stable baseline only
+when inference-time evidence indicates that it is executable
+and structurally credible. Treating these requirements sep-
+arately avoids collapsing retrieval quality into end-to-end
+correctness, since a semantically near workflow can execute
+successfully yet encode the wrong decision semantics. The
+three components of ArchOR follow this decomposition:
+CARL improves candidate ordering, S3R supplies explicit
+compatibility evidence, and arbitration decides whether that
+evidence is strong enough to supersede the inherited route.
+ArchOR therefore contributes an access layer for a stable
+optimization-skill library. CARL improves the geometry of
+cached candidates, S3R supplies explicit compatibility at-
+tributes, and arbitration controls when the resulting route
+may supersede the baseline.
+This separation is diagnos-
+tic as well as empirical: signature overlap, candidate rank,
+the chosen route, and solver validity distinguish omitted in-
+gredients, over-broad aliases, ranking failures, and unsafe
+overrides. It also explains why nearest-neighbor gains need
+not imply end-to-end gains—an executable model with the
+wrong semantics can still return a finite objective.
+3
+Methodology
+ArchOR inherits the OptSkills (Yang et al. 2026a) skill
+library, structural extractor, solver execution loop, and ver-
+ification rule unchanged. Figure 1 summarizes the result-
+ing inference pipeline. In the inherited interface, extracted
+optimization ingredients and a scenario-neutral rewrite are
+embedded and fused, while an LLM selector compares the
+query with natural-language skill metadata over the library.
+We keep this semantics-only route as the fallback baseline,
+but focus on the missing retrieval decision: which skills are
+structurally admissible, how those candidates should be or-
+dered, and when the resulting structural route is allowed to
+override the original selector. The proposed components are
+therefore CARL, S3R, and baseline-preserving arbitration.
+3.1
+Centroid-Aware Representation Learning
+CARL is implemented as a lightweight cached-vector pro-
+totype residual. Each skill text is represented by a normal-
+ized inverse-document-frequency vector zs. Skills carry an
+archetype label when the label is available; unlabeled skills
+are assigned to the nearest archetype center, and the centers
+are recomputed after this deterministic assignment. Let aℓ
+denote the center of archetype ℓ, let g(z) = arg maxℓz⊤aℓ,
+and let Pr contain the top r right singular vectors of the
+centered archetype centers. CARL maps
+CARL(z) = Norm
+ z + λPrP ⊤
+r
+ ag(z) −z
+
+,
+(1)
+where λ = 0.35 and r = 16 in the reported setting. A query
+is vectorized with the same vocabulary and IDF statistics,
+transformed by Equation (1), and compared with transformed
+skill vectors by cosine similarity. This realization requires
+no GPU, no additional LLM call, and no gradient training;
+it is a compact approximation of the archetype-aware repre-
+sentation used to order candidate skills.
+The construction has three steps. First, labeled skills are
+grouped by archetype and each group is summarized by its
+normalized centroid. Second, an unlabeled skill is attached
+to the nearest centroid, after which the centroids are recom-
+puted; this gives every library entry a prototype even when
+the released metadata are incomplete. Third, the centered
+prototype matrix is decomposed and only its top-r direc-
+tions are used to move a cached vector toward its assigned
+archetype.
+The additive form is intentional: the original
+token distribution remains available, while the correction
+sharpens the directions along which archetypes differ. Con-
+sequently, CARL changes only the candidate ordering and
+does not alter a skill’s workflow, pitfalls, or applicability
+boundary.
+The transformation moves a query toward the nearest
+cached archetype while constraining the correction to a low-
+rank subspace.
+The leave-one-out diagnostic in Table 4
+shows that it increases Hit@1 from 0.607 to 0.804.
+The
+diagnostic also motivates the final arbitration rule: better
+neighborhood ranking alone does not guarantee better end-
+to-end solving accuracy when a query falls outside the cov-
+erage of the current signature taxonomy.
+The implementation applies the same transformation to
+both sides of retrieval. Skill vectors are transformed once
+
+
+--- Page 4 ---
+Figure 1: Overview of ArchOR. Starting from the OptSkills skill library, CARL orders cached skill representations by
+archetype similarity. Each skill and query also receives an open-dimensional structural signature. S3R first filters skills by
+signature overlap and then invokes LLM semantic re-ranking only on the remaining candidates. Baseline-preserving arbitration
+decides whether to use the structural route or preserve the original OptSkills route.
+when the library is loaded; a query is first represented in
+the shared vocabulary, assigned to its nearest prototype, pro-
+jected onto the residual subspace, and normalized. Retrieval
+then uses cosine similarity in this transformed space. This
+symmetric treatment avoids the mismatch of comparing a
+raw query with prototype-shifted skills. Since the library is
+frozen, the repeated cost is only prototype lookup, a rank-r
+projection, and similarity scoring; no encoder fine-tuning or
+gradient update is introduced. The residual also gives a con-
+trollable bias–variance trade-off: λ = 0 recovers the cached
+representation, larger values impose stronger archetype ge-
+ometry, and the low-rank basis prevents every token differ-
+ence from being interpreted as an archetype boundary.
+3.2
+Open-Dimensional Skill Signatures
+Natural-language skill cards are expressive but not directly
+comparable. ArchOR therefore attaches a signature to each
+skill. Given a cluster-level skill sC and its source trajectory
+analyses, a Signature Extractor Σ emits
+σs = Σ(sC, {qi | i ∈C}),
+σs = {(k1, V1), . . . , (kL, VL)},
+(2)
+where each pair contains an attribute name and a set of
+canonical tokens.
+Examples include problem_class,
+var_pattern,
+constraint_family,
+objective_form, and solver_backend. Canonical
+aliases map surface terms such as “unit commitment” and
+“binary run decision” to stable structural tokens.
+The
+schema is deliberately open-dimensional: attributes absent
+for a skill may be omitted rather than forced into a fixed
+taxonomy.
+The same canonicalizer maps extracted query ingredients
+and the scenario-neutral rewrite to σx. Signature construc-
+tion reuses the structural-extraction call already performed
+by the agent, so S3R does not require a separate retrieval
+model. Unlike embedding similarity, signatures expose why
+two items match, making the hard-filter stage deterministic
+and auditable.
+The signature layer is deliberately finer than a problem-
+class label.
+Two mixed-integer problems can differ in
+whether binaries represent on/off capacity, assignment, rout-
+ing arcs, or piecewise activation; two apparently similar flow
+problems can differ in directed-arc semantics, source/sink
+balance, or shipment integrality.
+Therefore, a signature
+records multiple attribute-value sets rather than a single class.
+Missing attributes are omitted instead of being assigned a
+meaningless default value, which keeps the schema extensi-
+ble when the library encounters a new side condition.
+Canonicalization is intended to preserve modeling seman-
+tics rather than instance details. Numerical demands, costs,
+and fleet sizes are not copied into the signature because they
+change across queries in the same archetype; instead, the sig-
+nature records the decision role, constraint family, objective
+form, and solver assumption that determine whether a work-
+flow is applicable. Synonyms are merged only when they
+imply the same modeling structure. For example, startup
+equipment, fixed opening cost, and binary run decision can
+share a fixed-charge token, whereas a routing arc and an as-
+signment binary remain distinct because they induce different
+constraint matrices. This separation makes signature errors
+easier to audit: a failed retrieval can be traced to a missing
+attribute, an overly broad alias, or a wrongly canonicalized
+token.
+
+
+--- Page 5 ---
+3.3
+Signature-Guided Retrieval
+At test time the library M∗is frozen. For every skill s ∈M∗,
+S3R computes a weighted Jaccard affinity over attributes
+present in both signatures:
+J(σx, σs) =
+X
+k∈σx∩σs
+ωk · |V x
+k ∩V s
+k |
+|V x
+k ∪V s
+k |,
+(3)
+with ωk = 1/|σx ∩σs| by default. Attributes present in only
+one signature contribute zero, and J = 0 when no attribute is
+shared. Skills with positive overlap are ranked first; if fewer
+than K skills have positive overlap, the remaining slots are
+filled by library order so that structural sparsity does not
+starve the selector. The resulting top-K set is denoted by
+CK. We use K = 8.
+CARL then orders the candidates in CK, and the LLM
+performs semantic re-ranking only over this ordered subset.
+Thus, semantics remains useful for final workflow choice,
+but the selector cannot freely promote an arbitrary card from
+the 46-skill catalog. When positive-overlap skills number
+fewer than K, deterministic fallback entries preserve recall;
+these entries remain subject to the later arbitration check.
+This stage combines a discrete prioritization signal with a
+continuous ordering signal. Positive Jaccard overlap places
+a skill in the structural tier before fallback entries are consid-
+ered. CARL then determines the order in which candidates
+are presented, which matters because the selector receives
+only a short list and is sensitive to neighborhood quality.
+Candidate construction is organized as two explicit tiers.
+Skills with positive weighted overlap form the structural tier,
+with affinity determining tier membership; fallback entries
+are used only when this tier has fewer than K members.
+Within the final candidate set, CARL supplies the contin-
+uous presentation order and the LLM selector supplies the
+final workflow choice. The affinity, shared attributes, se-
+lected skill, and candidate rank are logged for each query,
+so a failure can be distinguished from selector misunder-
+standing, structural over-filtering, or an incorrect workflow
+execution. This audit trail is a direct consequence of rep-
+resenting compatibility as attributes rather than only as an
+embedding score.
+3.4
+Baseline-Preserving Integration
+Structural filtering is useful only when its signature cover-
+age matches the query. To prevent an incomplete signature
+taxonomy from discarding a reliable baseline skill, ArchOR
+preserves the original OptSkills route and arbitrates be-
+tween the two routes using only inference-time information.
+Let b denote the baseline route and a the CARL+S3R
+route. Let cb and ca be their selector confidences, let ra
+be the rank of the selected structural skill in CK, and let
+V (ya) indicate that route a returns a nonempty, finite solver
+prediction. ArchOR uses the structural route when
+V (ya) ∧(cb ≤0.62 ∨ca > cb ∨ra ≥7) .
+(4)
+Otherwise it returns the baseline route. The rule does not use
+the ground-truth answer, the objective gap, or any evaluation
+label. It accepts the structural route when the baseline se-
+lector is uncertain, when the structural selector is more con-
+fident, or when the selected skill appears late in the filtered
+candidate list. In the five-benchmark evaluation, this rule
+routes 374 of 1,100 queries through the structural branch and
+preserves the baseline branch for the remaining 726 queries.
+Each condition addresses a different observed failure
+mode.
+The low-confidence threshold handles queries for
+which the baseline selector has already identified several
+plausible but indistinguishable skills. The confidence-gain
+condition allows structural evidence to break a semantic tie.
+The late-rank condition is coverage-oriented: if the selected
+structural skill appears near the boundary of CK, it may
+encode a specialized assumption that the natural-language
+card did not reveal. Requiring V (ya) excludes empty, non-
+finite, or execution-failed structural predictions before they
+can replace a usable baseline answer.
+In practice, integration is a routing procedure rather than
+a new solver.
+The system first records the baseline skill
+and confidence, extracts the query signature, constructs CK,
+obtains the structural selection and its solver output, and
+then applies Equation (4). If arbitration rejects the structural
+route, the original OptSkills answer is returned unchanged.
+Thus, S3R can reduce the selector’s search space without
+being allowed to delete the baseline path, and CARL can im-
+prove candidate ordering without being treated as evidence of
+correctness by itself. This separation is what makes the final
+system robust to incomplete signatures while still allowing
+structural evidence to correct semantic mistakes.
+Library refinement and expansion operators are inherited
+unchanged from OptSkills. In the main evaluation the re-
+leased learned library is frozen, so the comparison isolates
+retrieval and arbitration rather than additional library growth.
+4
+Experiments
+Setup.
+The
+controlled
+comparison
+uses
+the
+same
+self-hosted DeepSeek-V4.1-Flash backbone (DeepSeek-AI
+2026). We use the official OptSkills repository, its released
+learned skill library, and the official five evaluation sets:
+OptiBench (Yang et al. 2025c) (605 queries), OptMATH-
+Bench (Lu et al. 2025) (166), Mamo.C (Huang et al. 2025b)
+(211), IndustryOR (Huang et al. 2025a) (100), and Com-
+plexOR (Xiao et al. 2024) (18), for 1,100 queries in total.
+The baseline is the unmodified OptSkills semantic selector.
+ArchOR adds the CARL and S3R routes described in Sec-
+tion 3. For context, Table 1 also retains the external-baseline
+results reported by OptSkills (Yang et al. 2026a) under its
+original evaluation protocol.
+Protocol.
+The five suites are deliberately complementary.
+OptiBench and Mamo.C stress natural-language modeling
+and LP/MILP structures, OptMATH contains longer and
+more diverse solver-verified formulations, IndustryOR intro-
+duces practical business scenarios, and ComplexOR requires
+implicit constraints and multi-step combinatorial reasoning.
+Reporting both averages therefore avoids interpreting a gain
+on short textbook-style prompts as general optimization com-
+petence. The controlled systems use temperature 0, request
+seed 42, a maximum generation length of 8,192 tokens, eight
+evaluation workers, a 120-second solver timeout, and at most
+12 agent turns. Each controlled system is evaluated once per
+query. The selector returns three solver candidates. S3R uses
+
+
+--- Page 6 ---
+K = 8; CARL uses strength 0.35 and residual rank 16. A
+query is correct only when the executed solver returns a finite
+objective value equal to the rounded ground truth, or when
+rounded values are unavailable and the absolute gap is at
+most 0.005. We report Macro-Avg. over the five benchmark
+accuracies and Micro-Avg. over all 1,100 queries. External
+rows follow the evaluation protocol used in the OptSkills
+report and are not re-run here.
+The arbitration constants
+are fixed globally for all reported queries: cb ≤0.62 and
+ra ≥7. They are not adapted per query or per benchmark;
+independent calibration of these thresholds remains future
+work.
+The experiments evaluate same-backbone end-to-end im-
+provement over OptSkills, the individual and combined
+effects of CARL and S3R, whether CARL improves retrieval
+quality independently of final solver success, and where
+baseline-preserving arbitration helps or fails.
+4.1
+End-to-End Results
+Same-backbone comparison.
+Table 1 shows that Ar-
+chOR improves Macro-Avg. by 2.68 pp and Micro-Avg. by
+1.64 pp over the controlled OptSkills baseline. The gain
+corresponds to 18 additional correct answers (697 →715);
+an exact McNemar test on the 23 improved and 5 degraded
+paired outcomes gives p = 0.0009. Improvements occur on
+all five benchmarks, with the largest absolute gains on Com-
+plexOR (5.55 pp), OptMATH (4.22 pp), and IndustryOR
+(2.00 pp). ArchOR also has the highest averaged accura-
+cies in the combined table, although the causal comparison
+is restricted to the controlled systems because the external
+rows follow their original settings. The smaller OptiBench
+and Mamo.C gains reflect the mixed coverage of the current
+structural signatures: the modules help on many queries but
+can still discard a reliable baseline skill when the signature
+schema is incomplete.
+Context among external systems.
+Among the retained
+OptSkills-reported results, Trace2Skill is the strongest ex-
+ternal baseline, with 63.46% Micro-Avg. and 56.97% Macro-
+Avg. ArchOR is 1.54 pp higher in Micro-Avg. and 3.64 pp
+higher in Macro-Avg., but we treat this as contextual rather
+than a same-setting claim because the external systems use
+different backbones and protocols. The benchmark profile
+is nevertheless informative. ArchOR has the highest Opt-
+MATH result (69.88%) and ties for the best IndustryOR
+result (35.00%), where reusable solver workflows and ex-
+plicit variable/constraint structure are especially valuable. It
+reaches 72.22% on ComplexOR, matching the best listed re-
+sult, while Trace2Skill remains stronger on OptiBench and
+AlphaOPT remains slightly stronger on Mamo.C. This pat-
+tern suggests that structural retrieval is most useful when
+the narrative is difficult but the underlying optimization
+archetype can still be recovered reliably.
+4.2
+Routing and Representation Ablations
+Why direct structural routing is insufficient.
+Table 2
+shows that replacing the baseline selector on every query
+is harmful: direct CARL+S3R obtains 61.45% Micro-Avg.,
+1.91 pp below OptSkills. Relative to the baseline, direct
+routing turns 39 wrong answers into correct answers but
+also turns 60 correct answers into wrong answers (exact Mc-
+Nemar p = 0.044). The cause is coverage: the signature
+taxonomy does not yet cover every cross-domain narrative,
+so the top-8 structural filter can remove a baseline skill that
+would have succeeded. Baseline-preserving arbitration re-
+moves most of this regression: relative to OptSkills, Ar-
+chOR turns 23 wrong answers into correct answers and only
+5 correct answers into wrong answers.
+The OptMATH ablation in Table 3 shows that neither
+module is uniformly beneficial when used as a mandatory
+replacement. CARL-only and S3R-only each lose 4.21 pp
+relative to the baseline, while their direct combination loses
+3.01 pp. In contrast, the integrated system gains 4.22 pp.
+This distinction is the main empirical motivation for arbitra-
+tion: CARL improves neighborhood ranking, S3R reduces
+the selector input, but neither signal alone is reliable enough
+to override the baseline on every query.
+Direct routing improves ComplexOR and IndustryOR
+when signatures match, but loses 1.90–3.01 pp on the other
+three suites when extraction is incomplete. Arbitration re-
+tains the two gains while recovering those losses: structural
+retrieval is used as selective evidence, not as a universal
+replacement.
+Retrieval diagnostic.
+Table 4 evaluates cached skill rep-
+resentations with a leave-one-out protocol in which a query
+is correct when a skill of the same problem class appears
+among its neighbors. CARL increases Hit@1 from 0.607
+to 0.804, Hit@3 from 0.732 to 0.893, Hit@5 from 0.821 to
+0.893, and MRR from 0.682 to 0.839. Thus, the represen-
+tation change is effective at the retrieval level even though
+mandatory structural routing does not improve end-to-end
+accuracy.
+The module ablation also separates representation quality
+from decision policy.
+A better nearest-neighbor ordering
+does not determine whether the baseline route should be
+abandoned, and a smaller candidate set is helpful only if the
+retained skills cover the binding structure of the query. The
+large MRR gain in Table 4 is nevertheless relevant because
+the LLM selector sees only a short candidate list: moving
+the correct archetype toward the top can affect selection even
+when the correct skill already appears among five neighbors.
+Routing analysis.
+The final system uses the structural
+branch on 374 queries and preserves the baseline branch
+on 726 queries. The most useful cases are those in which
+the baseline selector has low confidence, the structural se-
+lector has higher confidence, or a structurally plausible skill
+appears late in the filtered candidate list. Failures remain in
+three forms: the extractor can omit a binding ingredient, the
+signature can assign a coarse but incomplete problem class,
+and two routes can select different skills whose workflows
+are both syntactically valid but encode different assumptions.
+These failures motivate a larger independently calibrated sig-
+nature taxonomy and a conditional online implementation
+that executes the second route only when the two selectors
+disagree.
+
+
+--- Page 7 ---
+Table 1: Solver-verified Pass@1 accuracy. External rows reproduce the results reported by OptSkills (Yang et al. 2026a) under
+its original evaluation protocol; OptSkills, Direct CARL+S3R, and ArchOR are controlled runs with the same DeepSeek-V4.1-
+Flash backbone and released skill library. Bold marks the best Macro- and Micro-Avg.; the contextual rank follows Micro-Avg.
+Category
+Models / Methods
+Macro-Avg.
+Micro-Avg.
+Rank
+OptiBench
+Mamo.C
+OptMATH
+IndustryOR
+ComplexOR
+General
+Models
+GPT-5.4 (OpenAI 2026)
+51.71
+57.82
+7
+69.09
+47.39
+46.39
+29.00
+66.67
+Gemini-3.1-Pro (Google DeepMind 2026)
+53.58
+57.88
+6
+66.56
+46.45
+54.22
+34.00
+66.67
+Qwen3-235B (Yang et al. 2025a)
+42.63
+52.36
+8
+63.80
+41.71
+39.76
+29.00
+38.89
+DeepSeek-V3.2 (DeepSeek-AI 2025)
+43.21
+49.45
+10
+62.64
+27.49
+40.36
+30.00
+55.56
+Agent-Based
+Methods
+Chain-of-Experts (Xiao et al. 2024)
+38.84
+52.36
+8
+62.31
+51.66
+35.54
+28.00
+16.67
+OptiMUS (AhmadiTeshnizi, Gao, and Udell 2024)
+34.14
+45.18
+14
+60.99
+27.49
+22.89
+26.00
+33.33
+ORMind (Wang et al. 2025)
+36.69
+47.37
+12
+61.82
+34.60
+21.69
+32.00
+33.33
+ORThought (Yang et al. 2025b)
+41.92
+46.91
+13
+57.69
+38.86
+26.51
+31.00
+55.56
+Experience-
+Enhanced
+LEAN-LLM-OPT (Liang et al. 2026)
+41.23
+49.27
+11
+62.15
+43.13
+22.89
+28.00
+50.00
+AlphaOPT (Kong et al. 2025)
+50.92
+58.55
+5
+70.25
+54.50
+36.75
+32.00
+61.11
+Skill-Based
+Methods
+Trace2Skill (Ni et al. 2026)
+56.97
+63.46
+2
+75.21
+54.03
+49.40
+34.00
+72.22
+OptSkills (Yang et al. 2026a)
+57.93
+63.36
+3
+71.24
+53.08
+65.66
+33.00
+66.67
+Direct CARL+S3R
+57.96
+61.45
+4
+68.76
+51.18
+62.65
+35.00
+72.22
+ArchOR (ours)
+60.61
+65.00
+1
+72.40
+53.55
+69.88
+35.00
+72.22
+Table 2: System-level ablation across all five benchmarks. “Direct CARL+S3R” always replaces the baseline selector with
+the structural route. ArchOR additionally applies the baseline-preserving arbitration rule. Bold marks the best value in each
+column.
+Configuration
+Macro-Avg.
+Micro-Avg.
+OptiBench
+Mamo.C
+OptMATH
+IndustryOR
+ComplexOR
+OptSkills
+57.93
+63.36
+71.24
+53.08
+65.66
+33.00
+66.67
+Direct CARL+S3R
+57.96
+61.45
+68.76
+51.18
+62.65
+35.00
+72.22
+ArchOR (ours)
+60.61
+65.00
+72.40
+53.55
+69.88
+35.00
+72.22
+Table 3:
+Module ablation on OptMATH. For compute-
+budget reasons, standalone CARL and S3R runs are reported
+on OptMATH and are not averaged with the five-benchmark
+system-level results.
+Configuration
+OptMATH Pass@1 (%)
+OptSkills
+65.66
+CARL only
+61.45
+S3R only
+61.45
+Direct CARL+S3R
+62.65
+ArchOR (ours)
+69.88
+Case study.
+Full problem statements and route details are
+in Appendix A. S1 corrects a low-confidence knapsack mis-
+assignment with a fixed-charge workflow. S2 shows that a
+late-rank structural skill can repair an overconfident wrong
+baseline. F1 is the mirror image: the same late-rank rule
+overrides a correct transportation answer with an incompati-
+ble flow workflow. Thus, arbitration helps when the baseline
+archetype is wrong, but is risky when coarse signatures con-
+flate different flow assumptions.
+5
+Conclusion
+ArchOR builds on OptSkills and improves its retrieval
+space with CARL and S3R. With the same DeepSeek-V4.1-
+Flash backbone and released skill library, the integrated sys-
+Table 4: Leave-one-out retrieval diagnostic on the learned
+skill library.
+Representation
+Hit@1
+Hit@3
+Hit@5
+MRR
+Cached skill vectors
+0.607
+0.732
+0.821
+0.682
+CARL
+0.804
+0.893
+0.893
+0.839
+Table 5: Representative arbitration cases.
+cb is baseline
+confidence and ra is the rank in CK.
+Case
+Benchmark / trigger
+Baseline →structural
+S1
+OptiBench #579; cb=.55, ra=1
+knapsack 360,000 →fixed-charge 3,600 ✓
+S2
+IndustryOR #43; cb=.95, ra=8
+inventory −10,000 →dispatch 10,000 ✓
+F1
+Mamo.C #133; cb=.95, ra=8
+transportation 1,490 →flow 16,381 ×
+tem obtains a 1.64 pp Micro-Avg. gain over OptSkills across
+five benchmarks, while the signature gate reduces the maxi-
+mum selector input from 46 skills to 8. Directly replacing the
+selector on every query is harmful, but baseline-preserving
+arbitration preserves most baseline successes and captures
+additional structural successes. Looking forward, expanding
+the signature taxonomy on independent calibration data, im-
+plementing a conditional online version that executes the sec-
+ond route after selector disagreement, and adding symbolic
+verification of extracted structures are natural next steps.
+
+
+--- Page 8 ---
+References
+AhmadiTeshnizi, A.; Gao, W.; and Udell, M. 2024. Opti-
+MUS: Scalable Optimization Modeling with (MI)LP Solvers
+and Large Language Models. In Proceedings of the 41st In-
+ternational Conference on Machine Learning. Vienna, Aus-
+tria.
+Alzubi, S.; Provenzano, N.; Bingham, J.; Chen, W.; and Vu,
+T. 2026. EvoSkill: Automated Skill Discovery for Multi-
+Agent Systems. arXiv:2603.02766.
+Chen, Y.; Xia, J.; Shao, S.; Ge, D.; and Ye, Y. 2025. Solver-
+Informed RL: Grounding Large Language Models for Au-
+thentic Optimization Modeling. In Advances in Neural In-
+formation Processing Systems.
+DeepSeek-AI. 2025. DeepSeek-V3.2: Pushing the Frontier
+of Open Large Language Models. arXiv:2512.02556.
+DeepSeek-AI. 2026.
+DeepSeek-V4.1-Flash.
+https:
+//huggingface.co/deepseek-ai/DeepSeek-
+V4.1-Flash.
+Ding, Z.; Tan, Z.; Zhang, J.; and Chen, T. 2026. OR-R1:
+Automating Modeling and Solving of Operations Research
+Optimization Problem via Test-Time Reinforcement Learn-
+ing. In Proceedings of the AAAI Conference on Artificial
+Intelligence, volume 40, 228–236.
+Google
+DeepMind.
+2026.
+Gemini
+3.1
+Pro.
+https://ai.google.dev/gemini-api/docs/
+models/gemini-3.1-pro-preview.
+Huang, C.; Tang, Z.; Hu, S.; Jiang, R.; Zheng, X.; Ge, D.;
+Wang, B.; and Wang, Z. 2025a. ORLM: A Customizable
+Framework in Training Large Models for Automated Opti-
+mization Modeling. Operations Research.
+Huang, X.; Shen, Q.; Hu, Y.; Gao, A.; and Wang, B. 2025b.
+LLMs for Mathematical Modeling: Towards Bridging the
+Gap Between Natural and Mathematical Languages. In Find-
+ings of the Association for Computational Linguistics 2025,
+2678–2710.
+Jiang, C.; Shu, X.; Qian, H.; Lu, X.; Zhou, J.; Zhou, A.; and
+Yu, Y. 2025a. LLMOPT: Learning to Define and Solve Gen-
+eral Optimization Problems from Scratch. In Proceedings of
+the 13th International Conference on Learning Representa-
+tions.
+Jiang, G.; Su, Z.; Qu, X.; and Fung, Y. R. 2026. XSkill: Con-
+tinual Learning from Experience and Skills in Multimodal
+Agents. arXiv:2603.12056.
+Jiang, X.; Wu, Y.; Zhang, C.; and Zhang, Y. 2025b. DRoC:
+Elevating Large Language Models for Complex Vehicle
+Routing via Decomposed Retrieval of Constraints. In Pro-
+ceedings of the 13th International Conference on Learning
+Representations.
+Kang, R.; Cho, H.; and Kim, Y. 2026.
+SkillRet:
+A
+Large-Scale Benchmark for Skill Retrieval in LLM Agents.
+arXiv:2605.05726.
+Kong, M.; Qu, A.; Guo, X.; Ouyang, W.; Jiang, C.; Zheng,
+H.; Ma, Y.; Zhuang, D.; Tang, Y.; Li, J.; Wang, S.;
+Koutsopoulos, H.; Wang, H.; Wu, C.; and Zhao, J. 2025.
+AlphaOPT: Formulating Optimization Programs with Self-
+Improving LLM Experience Library. arXiv:2510.18428.
+Liang, K.; Lu, Y.; Mao, J.; Sun, S.; Yang, C.; Zeng, C.;
+Jin, X.; Qin, H.; Zhu, R.; and Teo, C.-P. 2026. Large-Scale
+Optimization Model Auto-Formulation: Harnessing LLM
+Flexibility via Structured Workflow. arXiv:2601.09635.
+Lu, H.; Xie, Z.; Wu, Y.; Ren, C.; Chen, Y.; and Wen, Z.
+2025. OptMATH: A Scalable Bidirectional Data Synthesis
+Framework for Optimization Modeling. In Proceedings of
+the 42nd International Conference on Machine Learning.
+Motwani, S. R.; Du, C.; Petrov, A.; Davis, C.; Torr, P.;
+Papania-Davis, A.; and Yan, W. 2026. AutoOR: Scalably
+Post-Training LLMs to Autoformalize Operations Research
+Problems. arXiv:2604.16804.
+Ni, J.; Liu, Y.; Liu, X.; Sun, Y.; Zhou, M.; Cheng, P.; Wang,
+D.; Zhao, E.; Jiang, X.; and Jiang, G. 2026. Trace2Skill: Dis-
+till Trajectory-Local Lessons into Transferable Agent Skills.
+arXiv:2603.25158.
+OpenAI. 2026. Introducing GPT-5.4. https://openai.
+com/index/introducing-gpt-5-4/.
+Shi, W.; Liu, M.; Zhang, W.; Shi, L.; Jia, F.; Ma, F.; and
+Zhang, J. 2025. ConstraintLLM: A Neuro-Symbolic Frame-
+work for Industrial-Level Constraint Programming. In Pro-
+ceedings of the 2025 Conference on Empirical Methods in
+Natural Language Processing, 15999–16019.
+Shi, Y.; Shi, J.; Wang, J.; Fan, Y.; and Sun, J. 2026. MIR-
+ROR: A Multi-Agent Framework with Iterative Adaptive Re-
+vision and Hierarchical Retrieval for Optimization Modeling
+in Operations Research. arXiv:2602.03318.
+Wang, Z.; Chen, B.; Huang, Y.; Cao, Q.; He, M.; Fan, J.;
+and Liang, X. 2025. ORMind: A Cognitive-Inspired End-
+to-End Reasoning Framework for Operations Research. In
+Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Industry Track), 104–131.
+Xiao, Z.; Zhang, D.; Wu, Y.; Xu, L.; Wang, Y. J.; Han, X.;
+Fu, X.; Zhong, T.; Zeng, J.; Song, M.; and Chen, G. 2024.
+Chain-of-Experts: When LLMs Meet Complex Operations
+Research Problems. In Proceedings of the 12th International
+Conference on Learning Representations.
+Yang, A.; Li, A.; Yang, B.; Zhang, B.; Hui, B.; Zheng, B.;
+Yu, B.; Gao, C.; Huang, C.; Lv, C.; et al. 2025a. Qwen3
+Technical Report. arXiv:2505.09388.
+Yang, B.; Zhou, Q.; Li, J.; Su, C.; Angeloudis, P.; and
+Hu, S. 2025b. ORThought: Benchmarking and Automating
+Logistics Optimization Modeling. arXiv:2508.14410.
+Yang, H.; Zhao, K.; Ma, M.; Lu, X.; Wang, X.; and Qian,
+H. 2026a. OptSkills: Learning Generalizable Optimization
+Skills from Problem Archetypes via Cluster-Based Distilla-
+tion. arXiv:2605.29829.
+Yang, Y.; Li, J.; Pan, Q.; Zhan, B.; Cai, Y.; Du, L.; Zhou,
+J.; Chen, K.; Chen, Q.; Li, X.; Zhang, B.; and He, L. 2026b.
+AutoSkill: Experience-Driven Lifelong Learning via Skill
+Self-Evolution. arXiv:2603.01145.
+Yang, Z.; Wang, Y.; Huang, Y.; Guo, Z.; Shi, W.; Han,
+X.; Feng, L.; Song, L.; Liang, X.; and Tang, J. 2025c.
+OptiBench Meets ReSocratic: Measure and Improve LLMs
+for Optimization Modeling. In Proceedings of the 13th In-
+ternational Conference on Learning Representations.
+
+
+--- Page 9 ---
+Zeng, S.; Liu, G.; Chen, Y.; Xie, W.; Liu, J.; Tang, S.; Wu,
+F.; Zhang, S.; and Li, X.-Y. 2026. MILP-Solve-Free Se-
+lection of LLM-Generated MILP Programs via Multi-Signal
+Structural-Semantic Consistency. In Proceedings of the 2026
+Conference on Empirical Methods in Natural Language Pro-
+cessing, 53068–53084.
+Zhang, H.; Long, Q.; Bao, J.; Feng, T.; Zhang, W.; Yue,
+H.; and Wang, W. 2026. MemSkill: Learning and Evolving
+Memory Skills for Self-Evolving Agents. arXiv:2602.02474.
+Zhao, R.; Liu, R.; Zuo, Y.; Zhang, H.; Han, X.; and Wu, J.
+2026. OptiSkill: A Hierarchical and Evolving SkillBank for
+LLM-Based Optimization Modeling. arXiv:2609.22987.
+Zhou, H.; Guo, S.; Liu, A.; Yu, Z.; Gong, Z.; Zhao, B.; Chen,
+Z.; Zhang, M.; Chen, Y.; Li, J.; Yang, R.; Liu, Q.; Yu, X.;
+Zhou, J.; Wang, N.; Sun, C.; and Wang, J. 2026. Memento-
+Skills: Let Agents Design Agents. arXiv:2603.18743.
+
+
+--- Page 10 ---
+A
+Qualitative Case Studies
+This appendix expands the three arbitration cases summa-
+rized in Table 5. For each case we report the (condensed)
+problem statement, the baseline and structural skill choices
+with their selector confidences, the rank ra of the structural
+skill in the S3R-filtered list, and the solver-verified objective
+values against the ground truth.
+Only the confidence values used by the reported routing
+decisions are included.
+A.1
+Success S1: Signature Recovers a
+Fixed-Charge Pricing Archetype
+Benchmark. OptiBench, query #579.
+Problem. Choose a selling price in increments of $0.10.
+At a price of $1.50 demand is 5,000 units, and every $0.10
+reduction adds 1,000 units. Production has a $2,000 start-up
+cost and a $0.50 per-unit cost. Maximize total profit.
+Routing.
+The
+baseline
+selector
+chooses
+integer_linear_programming_
+with_multiple_knapsack_constraints
+with
+confidence cb = 0.55.
+Its solver path reports 360,000,
+while the ground-truth optimum is 3,600—a 100× over-
+estimate caused by modeling the problem as a generic
+knapsack-style allocation.
+The extracted signature in-
+stead contains problem_class={fixed_charge},
+variables
+{price_decision,
+sales_quantity, nonnegative_integer},
+and
+constraints
+{price_multiple,
+demand_price_relationship}.
+S3R
+places
+fixed_charge_production_planning
+at
+rank
+ra = 1, and its workflow returns exactly 3,600.
+Decision.
+Arbitration activates the structural route be-
+cause cb = 0.55 ≤0.62 and the structural confidence is
+higher (ca = 0.72 > 0.55).
+This case illustrates the in-
+tended use of the low-confidence and confidence-gain trig-
+gers: the narrative mentions no knapsack or capacity struc-
+ture, and the signature correctly separates the fixed-charge
+pricing archetype from generic integer allocation.
+A.2
+Success S2: Late-Rank Promotion Corrects
+an Overconfident Baseline
+Benchmark. IndustryOR, query #43.
+Problem.
+A
+company
+with
+40
+workers
+(20
+units/worker/month) must meet six monthly demands
+(700, 600, 500, 800, 900, 800). Flexibility comes from over-
+time (at most 6 units/worker/month at EUR 5/unit), inven-
+tory (EUR 10/unit/month), and workforce changes (±5 per
+month; hiring EUR 500, layoff EUR 700). Inventory starts
+and must end empty. Meet all demands at minimum total
+overtime, inventory, hiring, and layoff cost, and report the
+relaxed-objective value.
+Routing.
+The
+baseline
+selector
+chooses
+multi_period_production_
+inventory_planning
+with
+high
+confidence
+cb = 0.95, but its solver path returns −10,000 whereas
+the correct relaxed objective is +10,000.
+The struc-
+tural signature captures the operative decision struc-
+ture.
+Its
+variables
+are
+production_quantity,
+inventory_level,
+workforce_level,
+overtime_production,
+hiring_quantity,
+and
+layoff_quantity;
+its
+constraints
+are
+demand_satisfaction,
+inventory_balance,
+workforce_change_limit,
+overtime_capacity_limit,
+and
+terminal_inventory.
+The
+selected
+structural
+skill,
+generator_commitment_and_dispatch,
+appears only at rank ra = 8; its workflow nevertheless
+encodes the on/off capacity and dispatch structure that
+matches overtime and workforce adjustment, and returns the
+exact value 10,000.
+Decision. The late-rank condition ra = 8 ≥7 activates
+the structural route despite the high baseline confidence. This
+case shows why confidence alone is an insufficient arbitration
+signal: a selector can be certain about the wrong archetype,
+and a structurally appropriate workflow can rank late when
+the signature is only partially extracted.
+A.3
+Failure F1: The Same Late-Rank Trigger
+Overrides a Correct Baseline
+Benchmark. Mamo.C, query #133.
+Problem.
+Six
+cities
+hold
+food
+supplies
+of
+255, 250, 314, 8, 385, 440
+tons
+and
+require
+251, 200, 366, 114, 59, 287 tons.
+Supplies may be re-
+located along an asymmetric cost matrix.
+Satisfy all
+requirements at minimum transportation cost.
+Routing.
+The
+baseline
+selector
+chooses
+transportationproblemsolver
+with
+confidence
+cb = 0.95 and returns the correct optimum 1,490.
+The
+signature is also structurally sensible: its problem classes
+are resource_allocation and transportation;
+its
+variables
+are
+transportation_quantity,
+flow_variable, and nonnegative_continuous;
+and
+its
+constraints
+are
+flow_balance,
+demand_satisfaction, and flow_conservation.
+The
+structural
+route
+selects
+the
+same-family
+skill
+transportation_flow_optimizer at rank ra = 8.
+However, that workflow encodes different flow assumptions
+and returns 16,381, an order of magnitude above the
+optimum.
+Decision. The same late-rank condition that rescued S2
+activates here and replaces a correct answer with an incor-
+rect one. The failure is not caused by a wrong archetype
+label: both skills plausibly match the transportation signa-
+ture. Instead, the taxonomy is too coarse to distinguish which
+flow formulation each workflow implements (e.g., directed-
+arc capacities, source/sink semantics, or integrality of ship-
+ments). This motivates refining signature attributes below
+the problem-class level and conditioning the late-rank trigger
+on additional evidence of baseline fragility, such as solver-
+path failure or selector disagreement.

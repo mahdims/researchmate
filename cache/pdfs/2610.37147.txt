@@ -1,0 +1,1832 @@
+--- Page 1 ---
+1
+MAPLE-Sec: Mobility-Aware Partitioned
+Language-Model Engine for Roaming IoT Security
+Yuhang Qiu, Member, IEEE, Ziwei Li, Jinfeng Xu, Jialiang Xie, Fangmin Ren, Shirong Guo, Jing Yang, Sunil
+Prajapat, and Por Lip Yee, Senior Member, IEEE
+Abstract—Mobile Internet-of-Things (IoT) endpoints such as
+connected vehicles, wearables, and drones continuously cross
+heterogeneous network domains, creating handover-driven attack
+surfaces that static, cloud-anchored detectors cannot follow. How-
+ever, three obstacles block real-time detection on such roaming
+endpoints: detection state is lost at every inter-domain handover;
+transmitting raw telemetry to a fixed detector exhausts the
+uplink and the device battery; and full-depth language model
+inference cannot meet millisecond latency budgets on constrained
+hardware. To tackle these challenges, we propose MAPLE-Sec,
+a mobility-aware partitioning framework that splits a compact,
+security-tuned language model across a roaming device and its
+nearest edge node. First, a trajectory-conditioned partition sched-
+uler recomputes the split point from predicted handover timing,
+residual battery, and uplink quality. Second, a token-budgeted
+early-exit mechanism emits a verdict at the shallowest layer
+that meets a confidence threshold. Finally, a learned activation-
+compression codec migrates the intermediate inference state
+across edge nodes during handover without retransmitting raw
+telemetry. We formalize the partition-and-migration decision as
+an on-device constrained optimization solved in sub-millisecond
+time. Extensive experiments across the CIC-IoT and Edge-
+IIoTset corpora under both IID and non-IID roaming conditions
+demonstrate that MAPLE-Sec sustains detection across mobility
+events, improving the converged F1-score by up to 9.3% relative
+to Cloud-only and by 2.9 percentage points over the strongest
+edge-collaborative baseline (EdgeShard), while reducing end-to-
+end latency by up to 2.5×. Ablation confirms that the activation-
+compression codec reduces migration energy by 2.4× versus the
+raw-activation migration variant.
+Index Terms—Mobile IoT security, intrusion detection, large
+language models, model partitioning, early exit, mobile edge
+computing, handover.
+I. INTRODUCTION
+Mobile IoT platforms increasingly combine vehicular and
+non-terrestrial systems with edge intelligence and distributed
+Yuhang Qiu, Jialiang Xie, Fangmin Ren and Shirong Guo are with
+the School of Science, Jimei University, Xiamen, China. Shirong Guo
+is also with the Faculty of Engineering, Monash University, Wellington
+Road, Clayton, Victoria 3800, Australia. (e-mail: yuhang.qiu@jmu.edu.cn;
+xiejialiang@jmu.edu.cn; fangmren@126.com; shirong.guo@monash.edu)
+Ziwei Li is with the School of Computer Science and Technology,
+University of Science and Technology of China, Hefei, China (e-mail:
+gslgsl00@126.com)
+Jinfeng Xu is with the Department of Electrical and Computer Engi-
+neering, The University of Hong Kong, Hong Kong, China (e-mail: jin-
+feng@connect.hku.hk).
+Sunil
+Prajapat
+is
+with
+the
+IMT,
+Department
+of
+Humanities
+and
+Technology, Roskilde University, Roskilde, Denmark. (e-mail: sunilpra-
+japat645@gmail.com).
+Jing Yang and Por Lip Yee are with the Center of Research for Cyber
+Security and Network (CSNET), Faculty of Computer Science and Informa-
+tion Technology, Universiti Malaya, 50603 Kuala Lumpur, Malaysia (e-mail:
+s2147529@siswa.um.edu.my; porlip@um.edu.my).
+model execution [1], [2], [3], [4], [5], [6], [7], [8], [9]. These
+systems exchange safety-critical and latency-sensitive data
+while moving across heterogeneous network domains, creating
+a threat surface that differs from that of stationary networks.
+Recent threat-detection studies address smart-city and web
+environments [10], [11], but do not consider continuity of
+stateful detection across edge handovers.
+Recent advances in language-model-based intrusion detec-
+tion have demonstrated substantial improvements over clas-
+sical signature and shallow machine-learning detectors [12],
+[13], [14], [15]. Complementary heterogeneous split and fed-
+erated learning frameworks address resource variation during
+distributed model training [16], [17], [18]. Security-tuned
+encoders can capture semantic behavioral patterns in network
+flows, generalizing across attack families that would require
+separate classifiers in traditional systems. Edge-collaborative
+inference frameworks [19], [20] have further made it practical
+to run such models at inference latencies compatible with
+mobile workloads, by distributing computation between the
+device and a nearby edge node. Mobility-aware offloading
+[21], [22], [23] and resource scheduling under handover [24],
+[25], [26] have matured into a well-studied sub-field of mobile
+edge computing.
+Despite these advances, a critical gap remains unaddressed:
+none of the existing paradigms accounts for the loss of
+inference state at inter-domain handover. When a roaming
+endpoint moves from one edge domain to another, any stateful
+language-model detector bound to the departing edge node
+loses the accumulated behavioral context for that device.
+The detection system must either restart from a cold state,
+producing a blind spot of several hundred milliseconds to
+several seconds, or fall back to a distant cloud anchor at the
+cost of prohibitive uplink latency and energy. This handover-
+induced detection gap is not a corner case: in the mobility
+profile evaluated in this study, handovers occur every 6–12
+seconds, so repeated restarts can occupy a non-negligible frac-
+tion of the mission. Existing intrusion-detection surveys for
+IoT and vehicular networks [27], [28], [29] discuss mobility-
+related security challenges but do not provide a mechanism for
+migrating intermediate inference state between edge nodes.
+Three specific obstacles prevent existing methods from solv-
+ing this problem. First, intermediate inference state is bound
+to a fixed compute location, making mobility and detection
+continuity structurally incompatible without explicit migration
+support. Second, even if state were migrated, doing so by
+transmitting raw activations or raw telemetry would consume
+scarce uplink bandwidth and device battery, both of which
+arXiv:2610.37147v1  [cs.NI]  27 Oct 2026
+
+
+--- Page 2 ---
+2
+are already degraded at cell edges. Third, running a full-depth
+language model on every flow violates the millisecond latency
+budgets imposed by mobile IoT applications, particularly on
+constrained endpoint hardware.
+To
+close
+this
+gap,
+this
+paper
+presents
+MAPLE-Sec,
+a Mobility-Aware Partitioned Language-model Engine for
+Security in roaming IoT networks. MAPLE-Sec partitions a
+compact, security-tuned language model between the roaming
+device and the nearest edge node, and migrates compressed
+intermediate inference state across edge domains during han-
+dover. The framework couples three co-designed mecha-
+nisms: a trajectory-conditioned partition scheduler (TPS), a
+token-budgeted early-exit mechanism (TBEE), and a learned
+activation-compression codec (ACC). Their design is directly
+motivated by the three obstacles above, and their experimental
+gains close the loop back to the original three-challenge
+framing. Fig. 1 shows the overall system scenario; Fig. 6
+details how each component differs from its na¨ıve counterpart.
+The main contributions of this paper are as follows.
+1) Novel state-migration mechanism for roaming IoT
+security (ACC): MAPLE-Sec introduces, to the best
+of our knowledge, the first confidence-gated, rate-
+constrained activation-compression codec that migrates
+language-model inference state across edge nodes dur-
+ing handover. Unlike generic Follow-Me Cloud service
+migration [30], [31], which moves service containers
+without preserving neural inference context, ACC com-
+presses the split activation to 16% of its original size
+using a task-informed rate-distortion loss, guaranteeing
+that behavioral context survives the handover interval.
+2) Mobility-adaptive
+partition
+scheduling
+(TPS): A
+trajectory-conditioned partition scheduler recomputes
+the device/edge split point at every inference step from
+three runtime signals: predicted time-to-handover ˆh,
+residual battery b, and uplink quality q. This dynamic
+adaptation, absent from all prior static-partition frame-
+works [19], [2], [20], reduces migrated payload and
+device energy by matching the partition to the current
+mobility state rather than fixing it at deployment time.
+3) Budget-constrained early exit (TBEE): A token-
+budgeted early-exit mechanism terminates inference at
+the shallowest layer meeting a calibrated confidence
+threshold, with a hard budget that bounds worst-case la-
+tency even for adversarially difficult flows. This extends
+prior early-exit work [32], [33], [34] with an explicit
+budget parameter, providing latency guarantees that prior
+confidence-only exit rules cannot deliver.
+4) Joint constrained optimization: The three mechanisms
+are coupled through a mixed-integer program over la-
+tency, energy, and detection confidence, solved in O(L2)
+time via enumeration over the small discrete domain.
+A bounded-suboptimality proposition (Proposition 1)
+quantifies the cost gap as a function of classifier cali-
+bration error, providing the first formal optimality guar-
+antee for this class of mobility-aware inference control
+problems.
+5) Comprehensive
+empirical
+validation: Experiments
+on CIC-IoT 2023 and Edge-IIoTset, replayed under a
+SUMO/LuST urban mobility trace on a physical Jetson
+Orin Nano, show that MAPLE-Sec achieves a 9.3%
+relative F1 improvement over the stationary Cloud-only
+detector and a 2.9 percentage-point gain over EdgeShard
+[2], while reducing end-to-end latency by 2.5×. Ablation
+confirms that each module is individually necessary.
+The remainder of this paper is organized as follows. Sec-
+tion II presents background and motivating measurements.
+Section III surveys related work and identifies the research
+gap. Section IV describes the MAPLE-Sec architecture and
+its three modules. Section V formulates and solves the
+joint optimization. Section VI details the experimental setup.
+Section VII reports and interprets performance results. Sec-
+tion VIII concludes with directions for future work.
+II. BACKGROUND AND MOTIVATION
+We motivate MAPLE-Sec with three measurements that
+establish the reality of each challenge. All motivating experi-
+ments use the same 12-layer security-tuned encoder (L = 12)
+and the same CIC-IoT corpus used in the main evaluation
+(Section VI), replayed under a 5G NR mobility trace (cell
+radius 250 m, UE speed 30–90 km/h, handover every 6–12 s)
+generated with SUMO 1.18 on the LuST Luxembourg sce-
+nario. Malicious flows are sampled from CIC-IoT and injected
+onto the replayed trace at a 20% attack rate.
+A. Threat Model
+MAPLE-Sec targets roaming IoT endpoints whose traffic
+traverses multiple administrative domains. The adversary is
+any network entity that injects, replays, or manipulates flows
+between the roaming device and the edge node. Concretely,
+we assume: (a) the endpoint itself may be compromised and
+may inject malicious flows into its own uplink stream; (b)
+on-path attackers between the device and the serving edge
+node can observe or replay packets; (c) edge nodes are honest-
+but-curious: they execute the model tail faithfully but are not
+trusted with plaintext behavioral anchors. MAPLE-Sec does
+not defend against a fully compromised edge node. The ACC
+migration payload zk carries only compressed activations and
+anchor scores, not raw traffic; it must be integrity-protected
+(e.g., via DTLS or a MAC tag) in transit between edge
+nodes to prevent replay attacks during handover. Detection
+confidentiality is not required because verdicts are consumed
+locally.
+B. Handover-Induced Detection Discontinuity
+A stateful detector bound to a single compute location
+cannot follow a roaming endpoint without interruption. To un-
+derstand the magnitude of this effect, we conduct a motivating
+experiment in which an endpoint streams a mixed benign and
+malicious flow while handing over at t = 6 s. We compare a
+static cloud-anchored detector, an edge-pinned detector that
+cannot migrate state, and MAPLE-Sec. Fig. 2 shows that
+the static detector’s F1-score collapses from 0.94 to below
+0.40 around the handover and recovers only slowly, while the
+edge-pinned detector permanently loses behavioral context and
+
+
+--- Page 3 ---
+3
+Cloud Anchor
+persists anchor state for continuity
+1
+TPS
+trajectory
+conditioned partition
+scheduler
+anticipates the handover
+from the endpoint trajectory
+3
+ACC
+activation compression
+codec
+Edge Node A
+Edge Tail A
+deep tail, layers k+1 to L
+Edge Node B
+Edge Tail B
+deep tail, layers k+1 to L
+2
+TBEE
+token budgeted early
+exit
+verdict
+budget check
+exit
+On Device Head
+shallow head of security
+tuned language model,
+layers 1 to k
+Roaming IoT
+endpoint
+migrate intermediate 
+inference state
+handover A to B
+recompute
+split
+point on
+handover
+easy flows exit early, hard
+flows continue to the tail
+offload activations Zk
+Edge Node A
+Edge Node B
+motion
+endpoint roams 
+from A to B
+shallow verdict
+for easy flows
+KV = key value
+behavioral context
+survives the handover
+Cloud Level
+Edge Level
+Ground Level
+(optional)
+anchors
+Fig. 1. MAPLE-Sec application scenario. A roaming IoT endpoint runs the shallow “head” of a security-tuned language model on-device and offloads the
+“tail” to the nearest edge node. As the endpoint hands over from edge node A to B, the trajectory-conditioned partition scheduler (TPS) recomputes the split
+point, the token-budgeted early-exit (TBEE) module returns shallow verdicts for easy flows, and the activation-compression codec (ACC) migrates intermediate
+inference state between edge nodes so behavioral context survives the handover.
+plateaus near 0.62. These results show that binding inference
+state to a fixed location creates prolonged detection blind spots
+that accumulate across thousands of handover events, directly
+motivating the state-migration approach taken by MAPLE-Sec.
+Therefore, it is essential to migrate anchored inference state
+across edge nodes as the device moves.
+Fig. 2. At handover (t = 6 s), Cloud-only loses 54 F1 points and takes 4 s
+to recover; edge-pinned loses behavioral context permanently and plateaus
+at 0.62 F1. MAPLE-Sec holds F1 above 0.90 throughout, confirming that
+inference-state migration is the key enabler for continuous detection under
+mobility.
+C. Uplink and Energy Cost Under Motion
+Shipping raw telemetry to a fixed detector is wasteful
+when the device can summarize locally. To quantify this, we
+measure normalized uplink volume and device energy for three
+strategies: cloud-only with raw telemetry, edge offload with
+raw activations, and MAPLE-Sec with its learned activation
+codec. Fig. 3 shows, on a logarithmic scale, that MAPLE-Sec
+reduces uplink volume by more than an order of magnitude
+relative to cloud-only and roughly 6× relative to raw-activation
+offload, with commensurate energy savings. The results reveal
+that uncompressed offload squanders the scarce uplink and
+battery of a moving device. Therefore, it is paramount to
+migrate a compressed representation of inference state rather
+than raw telemetry.
+Fig. 3.
+ACC reduces uplink volume by 6× and device energy by 5.8×
+relative to raw-activation offload (log scale), confirming that rate-distortion
+compression is the key enabler for practical state migration.
+
+
+--- Page 4 ---
+4
+D. Latency-Bounded Inference on Constrained Hardware
+Many roaming flows are benign and separable at shallow
+depth, yet fixed-depth inference pays the full cost regardless.
+We profile per-layer cumulative latency and verdict confidence
+for the security encoder. Fig. 4 shows that cumulative latency
+grows linearly with depth while verdict confidence saturates
+above the threshold τ = 0.90 by the fourth layer for the ma-
+jority of flows. This saturation is structural rather than dataset-
+specific: the encoder learns shallow discriminative features
+that separate benign from attack traffic without requiring full-
+depth processing for most flows. Therefore, it is imperative
+to terminate inference at the shallowest layer that is confident
+enough.
+Fig. 4. Per-layer cumulative latency (left axis) and verdict confidence (right
+axis). Confidence saturates above τ = 0.90 at layer 4 for the majority of
+flows, showing that full-depth inference wastes over half the latency budget
+on flows that are already separable at shallow depth.
+Challenge-to-module mapping. The three challenges above
+map one-to-one onto the three MAPLE-Sec modules intro-
+duced in Section IV:
+• C1 (detection discontinuity) →ACC, the activation-
+compression codec that migrates state across edge nodes
+(Sec. IV-E).
+• C2
+(uplink/energy
+cost)
+→
+TPS,
+the
+trajectory-
+conditioned partition scheduler that minimizes transmit-
+ted volume under motion (Sec. IV-C).
+• C3 (latency-bounded inference) →TBEE, the token-
+budgeted early-exit mechanism (Sec. IV-D).
+III. RELATED WORK
+A. LLM and Transformer-Based Intrusion Detection
+Language-model detectors have rapidly advanced from
+proof-of-concept to near-production accuracy for IoT and ve-
+hicular intrusion detection. SecurityBERT [14] and IoV-BERT-
+IDS [13] fine-tune BERT-class encoders on IoT and V2X
+traffic, achieving strong F1 across multiple attack families.
+Kheddar [12] surveys transformer and LLM architectures for
+intrusion detection across IoT, ICS, and mobile domains,
+concluding that language-model detectors consistently out-
+perform CNN and LSTM baselines on complex multi-class
+traffic. Zhang et al. [15] extend the paradigm to malicious-
+traffic detection via prompting and in-context learning, while
+the Zero-X framework [35] combines federated learning with
+open-set detection for zero-day attacks in IoV. Lai et al. [36]
+add a privacy-preserving transformer layer for secure V2X
+intrusion detection. Fan et al. [37] propose cloud-edge-vehicle
+collaboration for auto-updating IDS in vehicular networks,
+and Liu et al. [38] use blockchain and federated learning for
+collaborative IDS in vehicular edge computing. Al-Hawawreh
+and Hossain [39] adopt federated learning over satellite mesh
+networks for autonomous vehicle protection. None of these
+works addresses the handover-driven loss of stateful inference
+context that MAPLE-Sec targets.
+B. Edge Inference and Model Partitioning
+Splitting large models between device and edge has received
+substantial attention. EdgeLLM [19] accelerates on-device
+LLM inference via speculative decoding; EdgeShard [2] shards
+LLM layers across multiple edge nodes with static partition-
+ing; and Ye et al. [20] explore hybrid model parallelism for
+collaborative edge transformer inference. Zhang et al. [40]
+analyze edge inference for generative LLMs under wireless
+constraints, while Picano et al. [41] model LLM layer de-
+ployment across heterogeneous edge networks as a matching
+game. Xu et al. [42] study joint inference offloading and model
+caching for collaborative small-and-large LLM deployments.
+He et al. [43] apply active inference for LLM offloading
+and resource allocation at the cloud-edge boundary. Hu et
+al. [44] propose a cloud-edge architecture for multimodal
+LLM-based driver assistance. Friha et al. [27] survey LLM-
+based edge intelligence broadly. All of these works assume
+a stationary device-to-edge association; none addresses state
+migration during handover.
+C. Early-Exit Neural Inference
+ClassyNet [32] demonstrates class-aware early-exit net-
+works for edge devices, showing that per-sample depth adap-
+tation dramatically cuts latency. UCBEE [33] frames the exit
+decision as a multi-armed bandit, providing online policies
+with regret guarantees. Rahmath et al. [34] survey early-
+exit deep networks comprehensively, and Xun et al. [45]
+realize early-exit networks on reconfigurable hardware. Ferrag
+et al. [28] survey vulnerabilities and defenses for 6G IoT
+edge learning. TBEE in MAPLE-Sec extends the early-exit
+paradigm with an explicit token budget that guarantees worst-
+case exit under mobility-induced latency constraints, a feature
+absent from prior works.
+D. Mobile Task Offloading Under Mobility
+MESON [21] proposes mobility-aware dependent task of-
+floading for urban vehicular edge computing, jointly optimiz-
+ing execution and migration. Maleki et al. [22] study handover-
+enabled dynamic offloading for vehicular MEC. Dai et al. [23]
+use meta-reinforcement learning for multi-task offloading in
+vehicular edge computing, and Liu et al. [24] optimize task
+offloading with dependency guarantees via distributed deep
+RL. Li et al. [25] address computation offloading in resource-
+constrained MEC, and Yang et al. [26] optimize task offloading
+under user satisfaction constraints in C-RAN with MEC. These
+
+
+--- Page 5 ---
+5
+works migrate compute tasks but do not migrate inference state
+for a neural model serving security verdicts; MAPLE-Sec fills
+this gap through ACC.
+E. Research Gap and Positioning
+Table I maps the capabilities of the three closest 2024–2026
+works against MAPLE-Sec. The table reveals that no prior
+work simultaneously satisfies all four required properties: (i)
+a device-to-edge model partition that adapts to mobility state;
+(ii) inference-state migration that preserves behavioral context
+across handover; (iii) a latency bound enforced by an early-exit
+mechanism with a worst-case budget; and (iv) evaluation under
+realistic roaming conditions on mobile-class hardware. LLM-
+based IDS works [13], [12], [14] address property (iv) only
+under stationary conditions. Model-partitioning works [19],
+[2], [20] address property (i) with a static partition, which
+is insufficient under mobility. Early-exit works [32], [33],
+[34] address property (iii) without the budget enforcement or
+the mobility context. Task-offloading works [21], [22], [23]
+address mobility-driven computation migration but do not pre-
+serve neural inference state. The 2026 works on control-plane
+anomaly detection [46], adaptive Wi-Fi IPS [47], and CAV
+misbehavior detection [29] address subsets of the problem
+but leave the combination unresolved. MAPLE-Sec is the first
+framework to close all four gaps jointly through the co-design
+of TPS, TBEE, and ACC.
+IV. MAPLE-SEC SYSTEM DESIGN
+A. System Model
+We consider a roaming IoT endpoint and a set of edge nodes
+E = {e1, . . . , eM} deployed across administrative domains.
+The participating entities are:
+• the endpoint, which holds the shallow head of the model
+(layers 1..k) and a partition controller;
+• the serving edge node em, which executes the tail (layers
+k+1..L) and stores migrated state;
+• the anchor store, a lightweight cloud service holding the
+shared behavioral anchors against which traffic is scored.
+The security model is an L-layer encoder f = fL◦· · ·◦f1 with
+an early-exit classifier gℓattached at each layer ℓ. A flow x is
+embedded and processed layer by layer; the partition point k
+determines which layers run on-device. The global objective is
+to minimize a weighted sum of end-to-end latency and device
+energy subject to a detection-confidence constraint:
+min
+k, ℓ⋆, µ Ex
+
+λ1T(x)+λ2E(x)
+
+s.t.
+Pr[ˆy(x) = y(x)] ≥1−ϵ,
+(1)
+where T(x) and E(x) are the latency and energy for flow
+x, ℓ⋆is the exit layer, µ is the binary migration flag, and
+ϵ bounds the detection-error probability. Table II summarizes
+the notation.
+B. Framework Overview
+Fig. 5 shows how the three modules interact. The training
+and inference workflow follows three steps: i) the partition
+controller queries TPS with the current (ˆh, b, q) to obtain a
+split point k; ii) the endpoint executes layers 1..k, and TBEE
+checks at each layer whether an early verdict is admissible,
+otherwise the compressed activation zk is sent to the serving
+edge node for the tail; iii) when a handover is predicted, ACC
+migrates zk and the running anchor scores to the next edge
+node so inference resumes without restart. The full per-flow
+procedure is given in Algorithm 1. Recalling the mapping in
+Section II, TPS addresses C2, TBEE addresses C3, and ACC
+addresses C1.
+C. Trajectory-Conditioned Partition Scheduler (TPS)
+TPS resolves C2: it chooses the split point k that minimizes
+transmitted volume and energy under motion. The design
+rationale is that the optimal split depends on time-to-handover
+ˆh, residual battery b, and uplink quality q: when a handover is
+imminent or uplink is poor, the device should run more layers
+locally to shrink the migrated payload; when battery is scarce,
+it should offload earlier. We model the expected device cost
+of split k as
+J(k | ˆh, b, q) = α cdev(k) + β s(k)
+q
++ γ Φ(ˆh, k),
+(2)
+where cdev(k) is the on-device compute cost of layers 1..k,
+s(k) is the size of the activation crossing the split, s(k)/q
+approximates uplink time, and Φ(ˆh, k) penalizes splits whose
+migrated state cannot be transferred before the predicted
+handover. The weights α, β, γ are normalized by b so that
+a low battery raises the relative price of on-device compute.
+TPS selects k⋆= arg mink J(k | ˆh, b, q) over the discrete
+layer set, which is solved exactly by enumeration in O(L).
+Remark. Because L is small (tens of layers), the enumer-
+ation is trivially cheap and runs between inference steps; the
+scheduler reacts to a new handover prediction within one
+inference interval.
+D. Token-Budgeted Early Exit (TBEE)
+TBEE resolves C3: it terminates inference at the shallowest
+confident layer. At each layer ℓ, the attached classifier gℓ
+produces a verdict distribution pℓand a confidence κℓ=
+maxc pℓ(c). Inference exits at
+ℓ⋆= min{ℓ: κℓ≥τ ∨Bℓ≤0},
+(3)
+where τ is the confidence threshold and Bℓis a remaining
+token budget decremented by the cost of each layer. The
+budget guarantees a worst-case exit even for hard flows,
+bounding tail latency. The threshold τ is calibrated on a
+validation split to hold the detection-error constraint ϵ in (1).
+Complexity. TBEE adds one lightweight classifier evaluation
+per layer, an O(1) overhead per layer that is dominated by the
+layer’s own compute, and it strictly reduces expected inference
+cost relative to fixed-depth execution.
+E. Activation-Compression Codec (ACC)
+ACC resolves C1: it migrates inference state across edge
+nodes during handover without retransmitting raw telemetry.
+The codec C : ak 7→zk is a learned encoder/decoder pair
+
+
+--- Page 6 ---
+6
+TABLE I
+COMPARISON WITH RECENT 2026 DETECTION AND MITIGATION APPROACHES
+Capability
+Prince & Renjith [46]
+Sharma et al. [47]
+Lone et al. [29]
+MAPLE-Sec
+Roaming IoT or vehicular focus
+Yes
+Partial
+Yes
+Yes
+LLM-based detection
+Yes
+No
+Partial
+Yes
+Device-to-edge model partition
+No
+No
+No
+Yes
+Mobility-aware split adaptation
+No
+No
+No
+Yes
+State migration across handover
+No
+No
+No
+Yes
+Latency-bounded early exit
+No
+Partial
+No
+Yes
+Real-time mitigation orientation
+Yes
+Yes
+Partial
+Yes
+Fig. 5. MAPLE-Sec framework overview. The partition controller consults TPS to set the split point k; the device head and edge tail run the model with
+TBEE gating early exits; ACC migrates the compressed state zk and anchor scores during handover. The anchor store A supplies the behavioral references
+used for scoring.
+TABLE II
+KEY NOTATIONS
+Symbol
+Meaning
+L
+total number of model layers
+k
+device/edge partition (split) point
+ℓ⋆
+early-exit layer for a given flow
+gℓ
+early-exit classifier at layer ℓ
+τ
+confidence threshold for early exit
+ak
+intermediate activation at the split point
+zk
+codec-compressed activation, zk = C(ak)
+ˆh
+predicted time-to-handover
+b
+residual battery budget
+q
+uplink quality estimate
+T(x), E(x)
+end-to-end latency and device energy for flow x
+λ1, λ2
+latency/energy trade-off weights
+ϵ
+detection-error tolerance
+A
+set of behavioral anchors
+µ
+binary migration flag (µ = 1 triggers ACC state migration)
+αs
+anchor-score smoothing coefficient in (9)
+πc, πtx
+compute and transmit power of the endpoint (W)
+tmig
+migration latency for one ACC payload transfer
+trained to preserve the information in the split activation that
+is relevant to the downstream verdict, under a rate penalty:
+LACC = KL
+ g>k(ak) ∥g>k(ˆak)
+
+|
+{z
+}
+verdict fidelity
++ρ R(zk)
+| {z }
+rate
+,
+(4)
+where ˆak = C−1(zk) is the reconstructed activation, g>k
+denotes the tail classifier, R(·) is the coded rate, and ρ trades
+fidelity against size. On a predicted handover, the serving
+edge node forwards zk and the running anchor scores to the
+next node, which decodes and resumes the tail. Because the
+migrated payload is the compact zk rather than raw telemetry
+or full activations, migration completes within the handover
+interval.
+ACC architecture and training. The encoder C is a two-
+layer MLP with hidden dimension 128 and ReLU activations;
+the decoder C−1 mirrors this structure. For a 12-layer encoder
+with hidden size 256, the split activation ak has 256 floats
+(1 024 B); the codec bottleneck is 40 floats (160 B), giving
+a compression ratio of 6.4× at ρ = 0.05. The codec has
+134 K trainable parameters. It is trained jointly with the
+encoder head on the CIC-IoT training split for 20 epochs
+using Adam with learning rate 10−3. Encode and decode each
+take under 0.3 ms on the Jetson Orin Nano (measured via
+clock_gettime(CLOCK_MONOTONIC_RAW)), contribut-
+ing approximately 0.6 ms to the end-to-end 23 ms budget at
+k = 6. The migrated payload per flow is 160 B; over a 4 Mb/s
+cell-edge uplink this transfer takes 0.32 ms, well within the
+6–12 s handover interval.
+Fig. 6 illustrates how each of the three MAPLE-Sec compo-
+
+
+--- Page 7 ---
+7
+Algorithm 1 MAPLE-Sec per-flow inference with mobility
+Require: flow x; handover prediction ˆh; battery b; uplink q
+Ensure: verdict ˆy
+1: k ←arg mink J(k | ˆh, b, q) /** TPS, runs on device **/
+2: a0 ←embed(x)
+3: for ℓ= 1 to k do
+4:
+aℓ←fℓ(aℓ−1); κℓ←maxc gℓ(aℓ)
+/** device **/
+5:
+if κℓ≥τ then
+6:
+return ˆy ←arg maxc gℓ(aℓ)
+/** TBEE exit **/
+7:
+end if
+8: end for
+9: zk ←C(ak); send zk to serving edge em
+/** ACC
+encode **/
+10: if handover predicted before tail completes then
+11:
+forward zk, anchor scores to next edge em′
+/** ACC
+migrate **/
+12:
+em′ decodes ˆak ←C−1(zk)
+13: end if
+14: for ℓ= k + 1 to L do
+15:
+aℓ←fℓ(aℓ−1); κℓ←maxc gℓ(aℓ)
+/** edge **/
+16:
+if κℓ≥τ then
+17:
+break
+18:
+end if
+19: end for
+20: return ˆy ←arg maxc gℓ⋆(aℓ⋆)
+nents differs from its na¨ıve counterpart. Panel (a) shows that
+TPS shifts the split point from k = 6 (fixed) to k = 10 when
+uplink degrades to 4 Mb/s, shrinking the migrated payload.
+Panel (b) shows the confidence and budget exits of TBEE: the
+τ-exit fires at layer 4 for easy flows while the B0-exit provides
+a hard deadline guarantee at layer 8. Panel (c) shows the ACC
+rate-distortion tradeoff: at ρ = 0.05 the payload is 160 B (84%
+smaller than raw activations) with verdict fidelity 0.968, the
+operating point that minimizes latency subject to the fidelity
+constraint in (4).
+Algorithm 2 ACC offline training (joint with encoder head)
+Require: training flows D; pre-trained encoder f1..L; rate
+weight ρ; learning rate η; epochs E
+Ensure: trained codec (C, C−1)
+1: for epoch = 1 to E do
+2:
+for each mini-batch B ⊆D do
+3:
+Compute split activation: ak ←fk(embed(x))
+/**
+forward through head **/
+4:
+Encode: zk ←C(ak)
+5:
+Decode: ˆak ←C−1(zk)
+6:
+Run tail on reconstruction: ˆp ←g>k(ˆak)
+7:
+Run tail on original: p ←g>k(ak) /** no grad **/
+8:
+Compute loss: L = KL(p∥ˆp) + ρ R(zk) /** (4) **/
+9:
+Update (C, C−1) via Adam with step η
+10:
+end for
+11: end for
+12: return (C, C−1)
+V. PROBLEM FORMULATION AND SOLUTION
+A. Problem Formulation
+We make the joint decision in (1) concrete. The decision
+variables are:
+• k ∈{1, . . . , L}: the device/edge partition point;
+• ℓ⋆∈{1, . . . , L}: the per-flow exit layer;
+• µ ∈{0, 1}: whether to migrate state at the upcoming
+handover.
+The end-to-end latency of a flow is
+T = tdev(min(ℓ⋆, k))
+|
+{z
+}
+device
++⊮[ℓ⋆> k]
+
+s(k)
+q
+|{z}
+uplink
++ tedge(ℓ⋆−k)
+|
+{z
+}
+edge
+
++µ tmig,
+(5)
+and the device energy is
+E = πc tdev(min(ℓ⋆, k)) + ⊮[ℓ⋆> k] πtx
+s(k)
+q
+,
+(6)
+where πc (W) and πtx (W) are the compute and transmit power
+of the endpoint, respectively. The optimization is
+min
+k,ℓ⋆,µ
+λ1T + λ2E
+(7)
+s.t.
+κℓ⋆≥τ,
+(OC1)
+s(k)/q + tmig ≤ˆh if µ = 1,
+(OC2)
+E ≤b,
+(OC3)
+1 ≤k ≤L,
+1 ≤ℓ⋆≤L
+(OC4)
+Constraint (OC1) enforces the detection-confidence require-
+ment; (OC2) requires that a migrated payload transfer before
+the predicted handover; (OC3) caps device energy at the
+residual battery budget; (OC4) keeps the split no deeper than
+the exit. Problem (7) is a mixed-integer program over a small
+discrete domain.
+The handover penalty function in (2) is defined as
+Φ(ˆh, k) = max
+
+0, s(k)
+q
++ tmig −ˆh
+
+,
+(8)
+which is zero when the payload can be transferred before the
+handover and grows linearly with the deficit otherwise. The
+behavioral anchor score for a flow x is updated after each
+verdict via the exponential moving average
+At+1(c) = (1 −αs) At(c) + αs pℓ⋆(c),
+(9)
+where αs ∈(0, 1) is a smoothing coefficient and pℓ⋆(c) is the
+per-class probability at the exit layer. Anchor scores in (9) are
+the quantities migrated by ACC alongside zk.
+Complexity statement. The feasible domain has size O(L2)
+in (k, ℓ⋆) with a binary µ, so the exact optimum is found
+by enumeration in O(L2), which for L of a few tens is
+microsecond-scale on the endpoint.
+B. Complexity Analysis
+Table III summarizes the per-flow computational cost of
+each MAPLE-Sec component and contrasts it with the full-
+depth static-partition baseline (EdgeShard).
+Here d = 256 is the model hidden dimension and dz = 40
+is the codec bottleneck. The speedup of MAPLE-Sec over
+
+
+--- Page 8 ---
+8
+Fig. 6. Component-level comparison showing how each MAPLE-Sec module differs from its na¨ıve counterpart. (a) TPS increases the number of on-device
+layers as uplink degrades, whereas a fixed-split baseline (EdgeShard) does not react; at 4 Mb/s this reduces the migrated payload from 1 024 B to 160 B.
+(b) TBEE exits at the confidence threshold τ for easy flows (layer 4) and falls back to the hard budget B0 = 8 for difficult flows, bounding worst-case
+latency at 38 ms and keeping all flows within the 40 ms deadline. (c) ACC selects ρ = 0.05 as the operating point that achieves 84% payload reduction while
+maintaining verdict fidelity of 0.968; raw activation transfer (ρ →0, 1 024 B) exceeds the cell-edge transfer budget.
+TABLE III
+PER-FLOW COMPLEXITY: MAPLE-SEC VS. STATIC-PARTITION BASELINE
+Component
+Time complexity
+Concrete cost (ms)
+TPS lookup (offline table)
+O(1)
+<0.01
+Device head (ℓ≤k)
+O(k · d2)
+2.1–12.6
+ACC encode
+O(d · dz)
+0.30
+Uplink transfer (160 B)
+O(1)
+0.32
+Edge tail (k < ℓ≤ℓ⋆)
+O((ℓ⋆−k) · d2)
+1.4–9.8
+ACC migrate (on handover)
+O(dz)
+0.28
+MAPLE-Sec total (mean)
+O(L · d2)
+23
+EdgeShard (full depth)
+O(L · d2)
+58
+EdgeShard is not asymptotic (both are O(Ld2)) but constant-
+factor: TBEE exits at layer 4.3 on average (out of 12), cutting
+executed layers by 64%, and TPS reduces the uplink payload
+from 1 024 B to 160 B. The ACC encode and migrate steps
+together add less than 0.6 ms, which is negligible relative to
+the 35 ms saved by the early exit.
+C. Solution Approach
+We decouple (7) into an offline split policy and an online
+exit decision. Offline, TPS precomputes, for a grid of (ˆh, b, q),
+the split k⋆minimizing the expected objective in (2); this
+yields a lookup policy evaluated in O(1) at run time. Online,
+TBEE realizes the exit decision ℓ⋆per flow via (3), and the
+migration flag µ is set when a handover is predicted within the
+tail’s remaining time. The combined controller runs in O(L)
+on-device per flow with no iterative solver, satisfying the sub-
+millisecond budget.
+Convergence and optimality. The online exit rule (3) is
+monotone in κℓ: once the threshold is crossed it is never
+revoked, so the rule terminates in O(L) steps and returns a
+feasible solution to (7) whenever constraint (OC1) is satisfied.
+The following proposition formalizes the cost gap incurred
+when confidence estimates are imperfect.
+Proposition 1 (Bounded suboptimality). Let δ = E[|κℓ−
+Pr[ˆy = y|aℓ]|] be the expected calibration error of the per-
+layer classifiers, and let L⋆
+δ=0 denote the offline-optimal exit
+layer under perfect calibration. Then the expected per-flow
+cost of the online controller satisfies
+E[λ1T +λ2E] ≤E[λ1T ⋆+λ2E⋆]+(λ1cmax +λ2emax) L δ,
+(10)
+where cmax and emax are the per-layer latency and energy
+bounds. The suboptimality gap vanishes as δ →0, and for
+the temperature-scaled classifiers used in Section VI the gap
+is empirically below 3% of the optimal cost.
+Proposition 2 (Detection continuity across handover). Let
+∆denote the payload transfer time for zk at the cell-edge
+uplink rate qmin, and let ˆh be the predicted time-to-handover.
+If ACC is active and constraint (OC2) is satisfied, then the
+probability that a handover event produces a detection blind
+spot of duration longer than ∆is bounded by
+Pr[blind spot > ∆] ≤Pr
+
+ˆh < s(k⋆)
+qmin
++ tmig
+
+(11)
+which approaches zero as handover prediction accuracy im-
+proves. In our SUMO/LuST evaluation, this probability is em-
+pirically 0.038, compared to 1.0 for the edge-pinned detector
+without state migration.
+VI. IMPLEMENTATION AND EXPERIMENTAL SETUP
+Hardware and runtime platform. The device head runs on
+a physical NVIDIA Jetson Orin Nano (8-core Arm Cortex-
+A78AE, 8 GB LPDDR5, 15 W TDP) under NVIDIA Linux
+for Tegra (L4T) 36.3 (Ubuntu 22.04 base). Inference on the
+device head is executed via TensorRT 8.6 with FP16 precision.
+The model tail runs on an NVIDIA RTX 4090 edge server
+(24 GB VRAM, 64 GB host RAM) under Ubuntu 22.04 and
+TensorRT 8.6. The two hosts are connected by a Linux tc
+
+
+--- Page 9 ---
+9
+netem link configured to emulate a 5G NR channel: cell-
+edge uplink 4 Mb/s with 15 ms RTT and 1% packet loss; mid-
+cell 25 Mb/s with 5 ms RTT and 0.1% packet loss. Handover
+events are injected by toggling the active tc qdisc every
+6 to 12 s according to the SUMO mobility trace described
+below. End-to-end latency is measured on the Jetson Orin
+Nano using clock_gettime(CLOCK_MONOTONIC_RAW)
+bracketing the full inference path from packet arrival to verdict
+emission.
+Mobility
+model. The mobility trace is generated with
+SUMO 1.18 on the LuST (Luxembourg SUMO Traffic) sce-
+nario, a 400 km2 urban and suburban road network. We extract
+1 200 vehicle traces (mean speed 42 km/h, peak 90 km/h).
+Each trace drives the tc netem handover schedule and
+the predicted time-to-handover ˆh fed to TPS. CIC-IoT and
+Edge-IIoTset flows are replayed onto the mobility trace in
+temporal order, with malicious flows injected at a 20% rate.
+The resulting dataset spans 14 000 handover events across the
+two corpora.
+Datasets. We evaluate on two public IoT intrusion corpora.
+CIC-IoT 2023 [48] contains 33 attack types across 47 feature
+classes and approximately 2.9 M flows; we use the 80/10/10
+train/val/test split released by the dataset authors. Edge-IIoTset
+[49] covers fourteen attack categories over IoT and IIoT
+protocols (MQTT, CoAP, Modbus, DNP3) with approximately
+1.1 M flows; we use the same 80/10/10 split. Both corpora
+are stationary traffic captures; malicious flows are injected
+onto the SUMO/LuST mobility trace as described above.
+Each corpus is independently partitioned both IID (uniform
+attack distribution across the 4 emulated domains) and non-IID
+(Dirichlet α = 0.3 attack-class skew per domain). All results
+figures report per-corpus performance separately; Figs. 7 and 8
+show CIC-IoT results.
+Benchmarks. We compare against four representative base-
+lines:
+• Cloud-only: full-depth detection at a fixed cloud anchor
+with raw telemetry upload, the de facto stationary detec-
+tor.
+• EdgeLLM [19]: on-device speculative LLM inference,
+adapted to the detection task with fixed depth.
+• EdgeShard [2]: collaborative device/edge sharding of the
+model with a static partition.
+• Active-Infer [43]: active-inference offloading and re-
+source allocation between device and edge, without state
+migration.
+Hyperparameters. Table IV lists the key settings. Unless
+noted, τ = 0.90, λ1 = λ2 = 0.5, and the codec rate weight ρ is
+tuned so the migrated payload is ∼16% of the raw activation.
+VII. PERFORMANCE EVALUATION
+A. Evaluation Metrics
+We evaluate MAPLE-Sec across four complementary di-
+mensions that together cover detection quality, system effi-
+ciency, and mobility resilience.
+Detection quality. The primary detection metric is the macro-
+averaged F1-score computed over all attack classes, reported
+as the converged value after 60 s of wall-clock time in each
+TABLE IV
+SIMULATION PARAMETERS AND DEPLOYMENT COSTS
+Parameter
+Value
+Model layers L
+12
+Security encoder parameter count
+6.2 M
+Security encoder FLOPs per flow
+1.8 GFLOPs
+Peak resident memory (Jetson Orin Nano)
+412 MB
+ACC codec parameter count
+134 K
+ACC codec encode/decode latency (device)
+<0.6 ms
+Migrated payload per flow
+160 B
+Confidence threshold τ
+0.90
+Token budget B0
+8 layer-units
+Latency/energy weights λ1, λ2
+0.5, 0.5
+Codec rate weight ρ
+0.05
+Emulated uplink (cell-edge / mid-cell)
+4 / 25 Mb/s
+Emulated RTT (cell-edge / mid-cell)
+15 / 5 ms
+Handover interval
+6–12 s
+Number of edge nodes M
+1–32
+Batch size
+64
+Learning rate
+2 × 10−4
+Random seeds per experiment
+5
+experiment. We also report precision and recall per class,
+and the area under the receiver-operating-characteristic curve
+(AUC-ROC) for binary (benign vs. attack) discrimination.
+For multi-class settings we use the one-vs.-rest AUC macro-
+average. All quality metrics are computed on the held-out test
+split (10% of each corpus) that was never used during training
+or validation.
+Latency. End-to-end latency is defined as the elapsed time
+from packet arrival at the device head to verdict emis-
+sion, measured on the physical Jetson Orin Nano using
+clock_gettime(CLOCK_MONOTONIC_RAW). We report
+mean latency, 95th-percentile tail latency (P95), and the frac-
+tion of flows that violate the 40 ms application-layer deadline.
+Energy and uplink cost. Device energy per flow is measured
+via the on-board INA3221 power monitor (POM_5V_IN rail)
+sampled at 50 ms and integrated over the inference interval.
+Uplink volume per flow is the number of bytes transmitted
+from device to edge (either raw telemetry, raw activations, or
+compressed zk), reported on a log scale normalized to the
+cloud-only baseline.
+Mobility resilience. We define the handover recovery time
+as the duration from a handover event until F1 returns to
+within 5 percentage points of its pre-handover value. A shorter
+recovery time indicates better state preservation. We also
+report the blind-spot rate: the fraction of handover events
+during which no verdict is emitted for more than ∆= 200 ms,
+the threshold above which an attacker can inject a detectable
+burst undetected.
+Throughput. Verdict throughput is measured in verdicts per
+second at a fixed pipeline depth, scaling the number of coop-
+erating edge nodes from 1 to 32 to characterize coordination
+overhead.
+B. Superiority of MAPLE-Sec
+All experiments are repeated across five random seeds (data
+shuffle and model initialization); figures show the mean and
+shaded one-standard-deviation bands. Pairwise comparisons
+
+
+--- Page 10 ---
+10
+against EdgeShard use a paired Wilcoxon signed-rank test; all
+reported differences are statistically significant at p < 0.01.
+Fig. 7 and Fig. 8 present detection F1 versus wall-clock
+time under IID and non-IID partitions. MAPLE-Sec converges
+fastest and to the highest F1 in both settings. Specifically,
+under IID it reaches 0.962 F1, a 2.9 percentage-point absolute
+gain over EdgeShard and a 9.3% relative F1 improvement
+over Cloud-only ( 0.962−0.880
+0.880
+), while converging roughly 1.6×
+faster. Under the harder non-IID partition the gap widens:
+MAPLE-Sec reaches 0.941 F1 versus 0.892 for EdgeShard.
+This is primarily attributed to ACC, which preserves behav-
+ioral context across handovers so the detector does not relearn
+after each domain change. In contrast, Cloud-only suffers from
+handover blind spots and EdgeShard’s static partition stalls
+when uplink degrades at cell edges, leading to slower and
+lower convergence.
+These results close the loop on the three-challenge framing
+of Section II. The 9.3% relative F1 gain over Cloud-only
+directly quantifies the benefit of resolving C1: in Fig. 2,
+Cloud-only loses 54 F1 points during a single handover and
+recovers over approximately 4 s; the IID convergence curve
+in Fig. 7 shows that, summed over 14 000 handover events,
+this repeated recovery cost accounts for nearly all of the F1
+gap. The 2.5× latency reduction over EdgeShard reflects the
+interplay of C2 and C3: TPS reduces the uplink payload
+so that transmission cost no longer dominates end-to-end
+time, and TBEE exits at layer 4.3 on average so that tail
+compute cost drops proportionally. The non-IID advantage
+(0.941 vs. 0.892 for EdgeShard) is attributable to the anchor-
+score migration in ACC: anchor scores in (9) capture the per-
+domain attack distribution, so migrating them to the next edge
+node eliminates the distribution-shift penalty that a cold-start
+detector would pay on each domain arrival.
+Table V reports the converged detection quality metrics
+for all baselines and MAPLE-Sec on both corpora under IID
+conditions. MAPLE-Sec achieves the highest F1, precision,
+recall, and AUC-ROC on both datasets, with consistent gains
+across all metrics. The precision gain over EdgeShard (0.965
+vs. 0.941 on CIC-IoT) reflects the reduction in false positives
+attributable to the behavioral anchor migration in ACC: mi-
+grating anchor scores preserves the per-class prior, reducing
+the tendency to misclassify benign post-handover flows as
+attacks. The recall gap (0.937 vs. 0.905 on Edge-IIoTset)
+reflects the elimination of handover blind spots, during which
+the edge-pinned and static-partition detectors miss attacks
+entirely.
+Fig. 9 traces the converged-F1 versus end-to-end-latency
+frontier. MAPLE-Sec dominates the frontier, attaining the
+highest F1 at the lowest latency (23 ms), a 2.5× latency
+reduction over EdgeShard at higher accuracy. This is attributed
+jointly to TBEE, which avoids full-depth inference for easy
+flows, and TPS, which keeps the migrated payload small under
+motion.
+Table VI reports the full latency and energy breakdown
+per method. MAPLE-Sec achieves the lowest mean latency
+(23 ms), lowest tail latency (38 ms at P95), and zero deadline
+violations, while reducing uplink volume to 160 B per flow
+and device energy to 17.4 mJ per flow. The blind-spot rate
+Fig. 7. Under IID conditions, MAPLE-Sec reaches F1 = 0.962 while Edge-
+Shard plateaus at 0.933 and Cloud-only at 0.880, confirming that state
+migration and adaptive partitioning together account for a 2.9 pp absolute
+gain over the best static-partition baseline.
+Fig. 8. Under non-IID domain skew (α = 0.3), the F1 gap between MAPLE-
+Sec (0.941) and EdgeShard (0.892) widens relative to IID, validating that
+ACC anchor migration eliminates the distribution-shift penalty at each domain
+boundary.
+Fig. 9. MAPLE-Sec occupies the upper-left Pareto corner (highest F1, lowest
+latency at 23 ms), a 2.5× latency reduction over EdgeShard at 0.935 F1 with
+no accuracy loss, confirming the complementary benefit of TBEE and TPS.
+of 3.8% under MAPLE-Sec (compared to 100% for edge-
+pinned and 61% for Cloud-only) quantifies the direct impact
+of ACC on mobility resilience. Cloud-only’s high blind-spot
+rate despite relatively moderate mean latency reflects its burst-
+recovery pattern: individual flows complete quickly when the
+cloud anchor is reachable, but during the 4 s post-handover
+recovery window all flows are treated as cold-start detections,
+
+
+--- Page 11 ---
+11
+TABLE V
+CONVERGED DETECTION QUALITY UNDER IID CONDITIONS (MEAN ± STD OVER 5 SEEDS)
+Dataset
+Method
+F1
+Precision
+Recall
+AUC-ROC
+CIC-IoT 2023
+Cloud-only
+0.880 ± 0.008
+0.891 ± 0.007
+0.869 ± 0.010
+0.934 ± 0.005
+EdgeLLM [19]
+0.901 ± 0.006
+0.913 ± 0.006
+0.889 ± 0.007
+0.948 ± 0.004
+EdgeShard [2]
+0.933 ± 0.005
+0.941 ± 0.005
+0.925 ± 0.006
+0.967 ± 0.003
+Active-Infer [43]
+0.918 ± 0.006
+0.927 ± 0.006
+0.909 ± 0.007
+0.955 ± 0.004
+MAPLE-Sec
+0.962 ± 0.003
+0.965 ± 0.003
+0.959 ± 0.004
+0.981 ± 0.002
+Edge-IIoTset
+Cloud-only
+0.863 ± 0.009
+0.874 ± 0.008
+0.852 ± 0.011
+0.921 ± 0.006
+EdgeLLM [19]
+0.887 ± 0.007
+0.898 ± 0.007
+0.876 ± 0.008
+0.939 ± 0.005
+EdgeShard [2]
+0.914 ± 0.006
+0.923 ± 0.005
+0.905 ± 0.007
+0.958 ± 0.004
+Active-Infer [43]
+0.901 ± 0.007
+0.911 ± 0.006
+0.891 ± 0.008
+0.947 ± 0.004
+MAPLE-Sec
+0.944 ± 0.004
+0.951 ± 0.003
+0.937 ± 0.005
+0.973 ± 0.002
+producing systematic blind spots at every handover event.
+C. Impact of Residual Battery Budget
+Device
+energy
+is
+measured
+using
+the
+Jetson
+Orin
+Nano on-board INA3221 power monitor via tegrastats
+(POM_5V_IN rail), sampled at 50 ms. Fig. 10 reports end-to-
+end latency as the residual battery budget varies. MAPLE-Sec
+adapts its split point through TPS: at high battery it runs more
+layers on-device and migrates a smaller payload, reaching
+23 ms; at 20% battery it offloads earlier, trading a modest
+latency rise to 41 ms while respecting the energy cap (OC3).
+The fixed-split baseline cannot adapt and holds a constant
+55 ms regardless of budget. Notably, even at 80% battery the
+TPS adaptation still yields a 12 ms latency advantage over the
+fixed-split baseline because the dynamic payload reduction
+(160 B to 110 B) saves transmission time at every inference
+step, not only in the most energy-scarce regime. This confirms
+that TPS adapts correctly across the full battery range.
+Fig. 10. End-to-end latency versus residual battery budget. TPS adapts the
+split point to the energy budget and outperforms the fixed-split baseline across
+the full battery range, not only at low battery.
+D. Impact of Edge-Node Scale
+A verdict is defined as one per-flow detection decision
+(benign or attack class). Fig. 11 shows verdict throughput
+as the number of cooperating edge nodes grows from 1 to
+32 on a base-2 logarithmic x-axis. MAPLE-Sec throughput
+scales approximately linearly in the number of nodes (ap-
+pearing as an exponential curve on the log x-axis), reaching
+19.4k verdicts/s at 32 nodes because ACC migration cost is
+small and decoupled from tail compute. EdgeShard scales
+sub-linearly (a flattening curve on the log x-axis) as its static
+sharding incurs growing coordination overhead. This confirms
+that the design scales to dense edge deployments without
+coordination overhead.
+Fig. 11.
+Verdict throughput versus number of cooperating edge nodes.
+MAPLE-Sec tracks the linear-ideal trend more closely than EdgeShard.
+E. Ablation Study: Design Priority and Tradeoffs
+The ablation study is structured to answer the question
+posed in the introduction: which of the three challenges (C1
+detection discontinuity, C2 uplink/energy cost, C3 latency-
+bounded inference) is most damaging when left unaddressed,
+and do the modules interact or remain independent? Fig. 12
+reports convergence (panel a) and per-variant cost (panel b).
+The design-priority order from most to least impactful is
+C1 (ACC) > C3 (TBEE) > C2 (TPS).
+w/o ACC (raw migrate): addressing C1 is most critical.
+Removing ACC and migrating raw activations degrades con-
+verged F1 to 0.889, the largest single-module drop in the
+study, and raises migration energy by 2.4×. The root cause
+is that 38% of handover events fail to complete payload
+transfer within the handover window at 4 Mb/s cell-edge
+uplink, recreating exactly the detection blind spot described
+in Section II. This result closes the loop on Challenge C1: the
+F1 degradation magnitude (0.962 −0.889 = 0.073) matches
+the gap between MAPLE-Sec and the cold-restart baseline
+observed in Fig. 2.
+w/o TBEE (full depth): addressing C3 is the second priority.
+Forcing full-depth inference inflates latency from 23 ms to
+
+
+--- Page 12 ---
+12
+TABLE VI
+LATENCY, ENERGY, AND MOBILITY RESILIENCE COMPARISON (CIC-IOT 2023, IID)
+Method
+Mean Latency
+P95 Latency
+Deadline
+Uplink
+Device Energy
+Blind-Spot
+(ms)
+(ms)
+Violations (%)
+Volume (B/flow)
+(mJ/flow)
+Rate (%)
+Cloud-only
+141
+198
+78.4
+14 800
+52.1
+61.0
+EdgeLLM [19]
+58
+91
+31.2
+14 800
+48.6
+100.0
+EdgeShard [2]
+58
+87
+29.7
+1 024
+34.2
+100.0
+Active-Infer [43]
+49
+76
+18.3
+1 024
+31.7
+100.0
+MAPLE-Sec
+23
+38
+0.0
+160
+17.4
+3.8
+47 ms, violating the 40 ms application-layer deadline for 23%
+of flows. This confirms the motivation from Fig. 4: the
+confidence plateau at layer 4 is not an artifact of the motivation
+experiment; it is structural. TBEE’s budget parameter B0 = 8
+ensures that even the hardest flows exit no later than layer 8,
+bounding worst-case latency at 38 ms.
+w/o TPS (fixed split): addressing C2 is the third priority.
+Fixing the partition at k = 6 regardless of battery and uplink
+raises energy by 1.7× and latency from 23 ms to 39 ms. The
+mechanism is that TPS shifts to k = 9 (more on-device layers)
+when the uplink degrades below 6 Mb/s, cutting the payload
+from 160 B to 80 B. This is a design tradeoff, not a free lunch:
+the device-side compute rises, but total energy falls because
+πtx ≫πc at cell edges. TPS alone cannot substitute for ACC
+(removing both collapses F1 below 0.82), confirming that the
+modules are complementary rather than redundant.
+Table VII summarizes the quantitative outcomes of the
+ablation study across all five metrics. The table makes the
+design-priority ordering C1 > C3 > C2 precise: removing
+ACC causes the largest F1 drop (7.3 pp) and the highest blind-
+spot rate (38.2%), confirming it is the most critical module.
+Removing TBEE does not affect F1 but doubles tail latency
+and produces 23% deadline violations, confirming its role as
+the latency guard. Removing TPS raises energy by 1.7× and
+slightly inflates latency but does not degrade detection quality
+in isolation; its value becomes apparent only under energy-
+scarce conditions or when combined with ACC removal.
+F. Hyperparameter Sensitivity
+We
+evaluate
+sensitivity
+to
+the
+three
+main
+hyperpa-
+rameters.
+(i)
+Confidence
+threshold
+τ:
+sweeping
+τ
+∈
+{0.70, 0.80, 0.90, 0.95, 0.99} shows that IID F1 peaks at τ =
+0.90 (0.962) and degrades gracefully to 0.943 at τ = 0.70
+(more early exits, higher error rate) and to 0.958 at τ =
+0.99 (fewer exits, higher latency). (ii) Codec rate weight ρ:
+sweeping ρ across three orders of magnitude from 10−4 to
+10−1 shows that the payload size decreases from 310 B at
+ρ = 10−4 to 60 B at ρ = 10−1, with F1 remaining above
+0.950 throughout; ρ = 0.05 provides the best latency-accuracy
+trade-off. (iii) Trade-off weights λ1, λ2: varying the latency-
+energy balance from (1.0, 0.0) to (0.0, 1.0) in steps of 0.1
+confirms that MAPLE-Sec outperforms EdgeShard in F1 at
+every setting, confirming the insensitivity of MAPLE-Sec to
+objective weighting.
+Table VIII extends the main comparison to the harder non-
+IID partition (α = 0.3 Dirichlet skew), showing that the F1
+gaps observed under IID conditions widen under distribution
+shift. MAPLE-Sec’s non-IID advantage over EdgeShard grows
+from 2.9 pp (IID) to 4.9 pp (non-IID) on CIC-IoT, and from
+3.0 pp to 5.3 pp on Edge-IIoTset. This widening is attributable
+to the anchor-score migration in ACC: by carrying the per-
+domain attack prior to the next edge node, MAPLE-Sec avoids
+the cold-start distribution-shift penalty that all non-migrating
+baselines incur at each domain boundary.
+G. Comparative Analysis with Recent Approaches
+We
+position
+MAPLE-Sec
+against
+three
+recent
+2026
+detection-and-mitigation approaches that share parts of its
+problem setting, summarized in Table I. Prince and Renjith
+detect control-plane signaling anomalies in 5G and 6G cores
+and, like MAPLE-Sec, partition the model for slice-level
+scalability and use language models for explainable detection
+on a roaming IoT platform [46]. However, their partitioning
+targets core-network scalability rather than the device-to-edge
+split, and the model stays anchored in the core, so it does not
+address the handover-induced loss of on-device inference state
+that MAPLE-Sec resolves through ACC migration. Sharma
+et al. propose an adaptive Wi-Fi intrusion prevention system
+whose context- and score-aware policy engine enforces real-
+time mitigation once an attack is flagged [47]. That design
+is complementary to ours on the mitigation side, but it runs
+as a fixed-location prevention layer and neither partitions the
+detector nor preserves detection continuity as the endpoint
+roams across domains. Lone et al. survey machine-learning
+misbehavior detection for connected and autonomous vehicles
+and explicitly identify compromise during handover and roam-
+ing, as well as spatial partitioning of the monitored region, as
+open issues [29]. MAPLE-Sec offers a concrete mechanism
+for exactly that gap, migrating anchored inference state across
+edge nodes so detection survives the handover that the survey
+flags as unresolved.
+Across the three works, MAPLE-Sec is distinguished by
+jointly providing a device-to-edge partition that adapts to
+mobility, state migration that preserves detection continuity
+across handovers, and latency-bounded inference suitable for
+constrained endpoints. The first two properties are absent from
+all three recent approaches, and the combination is what allows
+MAPLE-Sec to sustain detection under motion rather than
+treating mobility as an exception.
+VIII. CONCLUSION
+In this paper, we have proposed MAPLE-Sec, a mobility-
+aware partitioned language-model engine for real-time threat
+detection on roaming IoT endpoints, directly addressing the
+
+
+--- Page 13 ---
+13
+Fig. 12.
+Ablation results establish the design priority C1 > C3 > C2: removing ACC degrades F1 the most (to 0.889) and inflates migration energy by
+2.4×; removing TBEE violates the 40 ms deadline for 23% of flows; removing TPS increases energy by 1.7× but does not reduce F1.
+TABLE VII
+ABLATION STUDY: QUANTITATIVE IMPACT OF EACH MODULE (CIC-IOT 2023, IID)
+Variant
+Conv. F1
+Mean Latency (ms)
+P95 Latency (ms)
+Device Energy (mJ/flow)
+Blind-Spot Rate (%)
+MAPLE-Sec (full)
+0.962
+23
+38
+17.4
+3.8
+w/o ACC (raw migrate)
+0.889
+27
+51
+41.8
+38.2
+w/o TBEE (full depth)
+0.960
+47
+79
+24.6
+3.8
+w/o TPS (fixed split)
+0.958
+39
+62
+29.6
+4.1
+w/o ACC + w/o TPS
+0.812
+44
+74
+58.3
+41.7
+TABLE VIII
+DETECTION QUALITY UNDER NON-IID DOMAIN SKEW (α = 0.3, MEAN ± STD OVER 5 SEEDS)
+Dataset
+Method
+F1
+Precision
+Recall
+AUC-ROC
+CIC-IoT 2023
+Cloud-only
+0.851 ± 0.011
+0.863 ± 0.010
+0.839 ± 0.012
+0.916 ± 0.007
+EdgeLLM [19]
+0.873 ± 0.009
+0.884 ± 0.009
+0.862 ± 0.010
+0.930 ± 0.006
+EdgeShard [2]
+0.892 ± 0.007
+0.901 ± 0.007
+0.883 ± 0.008
+0.947 ± 0.005
+Active-Infer [43]
+0.881 ± 0.008
+0.890 ± 0.008
+0.872 ± 0.009
+0.938 ± 0.005
+MAPLE-Sec
+0.941 ± 0.005
+0.948 ± 0.004
+0.934 ± 0.006
+0.969 ± 0.003
+Edge-IIoTset
+Cloud-only
+0.836 ± 0.012
+0.847 ± 0.011
+0.825 ± 0.013
+0.903 ± 0.008
+EdgeLLM [19]
+0.858 ± 0.010
+0.869 ± 0.010
+0.847 ± 0.011
+0.920 ± 0.007
+EdgeShard [2]
+0.874 ± 0.009
+0.883 ± 0.008
+0.865 ± 0.010
+0.934 ± 0.006
+Active-Infer [43]
+0.862 ± 0.010
+0.872 ± 0.009
+0.852 ± 0.011
+0.924 ± 0.006
+MAPLE-Sec
+0.927 ± 0.006
+0.934 ± 0.005
+0.920 ± 0.007
+0.961 ± 0.004
+handover-driven detection gap identified as a key open chal-
+lenge in mobile IoT security. We have observed that binding
+detection state to a fixed location creates handover-induced
+blind spots, and that uncompressed offload and fixed-depth
+inference waste the scarce uplink, energy, and latency budgets
+of moving devices. To preserve detection continuity, we have
+designed an activation-compression codec (ACC) that migrates
+inference state across edge nodes; to control uplink and energy
+under motion, we have designed a trajectory-conditioned parti-
+tion scheduler (TPS); and to meet millisecond latency budgets,
+we have designed a token-budgeted early-exit mechanism
+(TBEE). Extensive experiments on CIC-IoT and Edge-IIoTset
+under realistic SUMO-generated mobility have validated the
+effectiveness of MAPLE-Sec, demonstrating a 9.3% relative
+F1 improvement over Cloud-only and a 2.9 percentage-point
+gain over EdgeShard, with 2.5× lower latency. Ablation shows
+that the ACC codec reduces migration energy by 2.4× over
+raw activation transfer, with near-linear scaling to dense edge
+deployments. A pivotal direction for future research involves
+jointly learning the codec and the anchor representation end-
+to-end across mobility traces. In parallel, we plan to extend
+MAPLE-Sec to multi-endpoint cooperative detection, where
+neighboring roaming devices share migrated anchors to de-
+fend against coordinated attacks. The broader vision is a
+fully distributed, mobility-resilient intrusion detection layer
+for heterogeneous wireless IoT infrastructure, where detection
+continuity is treated as a first-class design objective alongside
+latency and energy, rather than an afterthought to be resolved
+by cloud fallback.
+MAPLE-Sec has three principal limitations that future work
+should address. First, the mobility model is constructed by
+replaying stationary traffic captures onto SUMO-generated
+vehicular traces; flows are not natively generated on moving
+devices, so the statistical interdependence between mobility
+state and traffic pattern is approximated rather than measured.
+Second, although the device head is executed on a physical
+Jetson Orin Nano and the link emulator uses calibrated tc
+netem parameters, the edge tail and ACC decoder run on a
+desktop GPU; end-to-end system evaluation on a fully em-
+bedded edge node (e.g., Jetson AGX Orin) remains as future
+
+
+--- Page 14 ---
+14
+work. Third, the ACC codec was compared in the ablation
+against raw activation migration but not against quantization-
+only baselines (8-bit, 4-bit) or established learned image-
+compression codecs; this comparison will be carried out in
+our future work. Addressing these limitations will require
+natively mobile traffic generation, fully embedded deployment,
+and a broader codec comparison study. As a potential future
+direction, we are looking forward to extending our method to
+improve the performance of various applications, such as large
+language models [50], [51], [52], [53] and distributed learning
+system [54], [55], [56].
+REFERENCES
+[1] Z. Lin, W. Wei, Z. Chen, C.-T. Lam, X. Chen, Y. Gao, and J. Luo,
+“Hierarchical Split Federated Learning: Convergence Analysis and Sys-
+tem Optimization,” IEEE Trans. Mobile Comput., vol. 24, no. 10, pp.
+9352–9367, 2025.
+[2] M. Zhang, X. Shen, J. Cao, Z. Cui, and S. Jiang, “EdgeShard: Efficient
+LLM Inference via Collaborative Edge Computing,” IEEE Internet
+Things J., vol. 12, no. 10, pp. 13 119–13 131, 2025.
+[3] G. Yan, K. Liu, C. Liu, and J. Zhang, “Edge Intelligence for Internet
+of Vehicles: A Survey,” IEEE Trans. Consum. Electron., vol. 70, no. 2,
+pp. 4858–4877, 2024.
+[4] Z. Fang, Z. Lin, Z. Chen, X. Chen, Y. Gao, and Y. Fang, “Automated
+Federated Pipeline for Parameter-Efficient Fine-Tuning of Large Lan-
+guage Models,” IEEE Trans. Mobile Comput., vol. 25, no. 6, pp. 8782–
+8797, 2026.
+[5] Z. Lin, Y. Zhang, Z. Chen, Z. Fang, C. Wu, X. Chen, Y. Gao, and
+J. Luo, “LEO-Split: A Semi-Supervised Split Learning Framework over
+LEO Satellite Networks,” IEEE Trans. Mobile Comput., vol. 25, no. 2,
+pp. 1565–1579, 2026.
+[6] Z. Lin, G. Qu, W. Wei, X. Chen, and K. K. Leung, “Adaptsfl: Adaptive
+Split Federated Learning in Resource-Constrained Edge Networks,”
+IEEE Trans. Netw., 2025.
+[7] H. Yuan, Z. Chen, Z. Lin, J. Peng, Z. Fang, Y. Zhong, Z. Song,
+X. Wang, and Y. Gao, “Graph Learning for Multi-Satellite Based
+Spectrum Sensing,” in Proc. IEEE Int. Conf. Commun. Technol. (ICCT),
+2023, pp. 1112–1116.
+[8] J. Peng, Z. Chen, Z. Lin, H. Yuan, Z. Fang, L. Bao, Z. Song, Y. Li,
+J. Ren, and Y. Gao, “SUMS: Sniffing Unknown Multiband Signals under
+Low Sampling Rates,” IEEE Trans. Mobile Comput., 2024.
+[9] Z. Lin, Z. Wang, Y. Zhang, Y. Wang, O. Aouedi, Z. Fang, J. Xu,
+J. Yang, V. N. Ha, Y. Liu, M.-S. Alouini, and S. Chatzinotas, “Satellite
+Intelligence: Distributed Training, Collaborative Inference, and LLM
+Adaptation in LEO Constellation,” arXiv preprint arXiv:2610.35282,
+2026.
+[10] J. Yang and L. Y. Por, “Intelligent Spatiotemporal Cyber Threat Detec-
+tion in Smart Cities Using Trust Region Policy Optimization and Online
+Data Augmentation,” Reliab. Eng. Syst. Saf., vol. 277, p. 113053, 2027.
+[11] J. Yang, Y. Wu, Y. Yuan, H. Xue, S. Bourouis, M. Abdel-Salam, L. Y. Por
+et al., “LLM-AE-MP: Web Attack Detection Using a Large Language
+Model with Autoencoder and Multilayer Perceptron,” Expert Syst. Appl.,
+vol. 274, p. 126982, 2025.
+[12] H. Kheddar, “Transformers and Large Language Models for Efficient
+Intrusion Detection Systems: A Comprehensive Survey,” Inf. Fusion,
+vol. 124, p. 103347, 2025.
+[13] M. Fu, P. Wang, M. Liu, Z. Zhang, and X. Zhou, “IoV-BERT-IDS: Hy-
+brid Network Intrusion Detection System in IoV Using Large Language
+Models,” IEEE Trans. Veh. Technol., vol. 74, no. 2, pp. 1909–1921,
+2025.
+[14] M. A. Ferrag, M. Ndhlovu, N. Tihanyi, L. C. Cordeiro, M. Debbah,
+T. Lestable, and N. S. Thandi, “Revolutionizing Cyber Threat Detec-
+tion with Large Language Models: A Privacy-Preserving BERT-Based
+Lightweight Model for IoT/IIoT Devices,” IEEE Access, vol. 12, pp.
+23 733–23 750, 2024.
+[15] X. Zhang, H. Meng, Q. Li, Y. Tan, and L. Zhang, “Large Language
+Models Powered Malicious Traffic Detection: Architecture, Opportuni-
+ties, and Case Study,” IEEE Netw., vol. 39, no. 5, pp. 51–57, 2025.
+[16] Z. Lin, Y. Zhang, Z. Chen, Z. Fang, X. Chen, P. Vepakomma, W. Ni,
+J. Luo, and Y. Gao, “HSplitLoRA: A Heterogeneous Split Parameter-
+Efficient Fine-Tuning Framework for Large Language Models,” IEEE
+Trans. Mobile Comput., vol. 25, no. 10, pp. 15 543–15 559, 2026.
+[17] Z. Lin, Z. Chen, X. Chen, W. Ni, and Y. Gao, “HASFL: Heterogeneity-
+Aware Split Federated Learning over Edge Computing Systems,” IEEE
+Trans. Mobile Comput., vol. 25, no. 8, pp. 12 455–12 471, 2026.
+[18] Z. Lin, G. Qu, W. Wei, X. Chen, and K. K. Leung, “AdaptSFL: Adaptive
+Split Federated Learning in Resource-Constrained Edge Networks,”
+IEEE Trans. Netw., vol. 33, no. 6, pp. 2993–3008, 2025.
+[19] D. Xu, W. Yin, H. Zhang, X. Jin, Y. Zhang, S. Wei, M. Xu, and
+X. Liu, “EdgeLLM: Fast On-Device LLM Inference with Speculative
+Decoding,” IEEE Trans. Mobile Comput., vol. 24, no. 4, pp. 3256–3273,
+2025.
+[20] S. Ye, B. Ouyang, J. Du, L. Zeng, T. Qian, W. Ou, X. Chu, D. Guo,
+Y. Lu, and X. Chen, “Resource-Efficient Collaborative Edge Transformer
+Inference with Hybrid Model Parallelism,” IEEE Trans. Mobile Comput.,
+vol. 24, no. 10, pp. 10 945–10 962, 2025.
+[21] L. Zhao, E. Zhang, S. Wan, A. Hawbani, A. Y. Al-Dubai, G. Min, and
+A. Y. Zomaya, “MESON: A Mobility-Aware Dependent Task Offloading
+Scheme for Urban Vehicular Edge Computing,” IEEE Trans. Mobile
+Comput., vol. 23, no. 5, pp. 4259–4272, 2024.
+[22] H. Maleki, M. Bas¸aran, and L. Durak-Ata, “Handover-Enabled Dynamic
+Computation Offloading for Vehicular Edge Computing Networks,”
+IEEE Trans. Veh. Technol., vol. 72, no. 7, pp. 9394–9405, 2023.
+[23] P. Dai, Y. Huang, K. Hu, X. Wu, H. Xing, and Z. Yu, “Meta Reinforce-
+ment Learning for Multi-Task Offloading in Vehicular Edge Computing,”
+IEEE Trans. Mobile Comput., vol. 23, no. 3, pp. 2123–2138, 2024.
+[24] H. Liu, W. Huang, D. I. Kim, S. Sun, Y. Zeng, and S. Feng, “Towards
+Efficient Task Offloading with Dependency Guarantees in Vehicular
+Edge Networks through Distributed Deep Reinforcement Learning,”
+IEEE Trans. Veh. Technol., vol. 73, no. 9, pp. 13 665–13 681, 2024.
+[25] K. Li, X. Wang, Q. He, J. Wang, J. Li, S. Zhan, G. Lu, and S. Dustdar,
+“Computation Offloading in Resource-Constrained Multi-Access Edge
+Computing,” IEEE Trans. Mobile Comput., vol. 23, no. 11, pp. 10 665–
+10 677, 2024.
+[26] Q. Yang, S.-C. Chu, C.-C. Hu, L. Kong, and J.-S. Pan, “A Task
+Offloading Method Based on User Satisfaction in C-RAN with Mobile
+Edge Computing,” IEEE Trans. Mobile Comput., vol. 23, no. 4, pp.
+3452–3465, 2024.
+[27] O. Friha, M. A. Ferrag, B. Kantarci, B. Cakmak, A. Ozgun, and
+N. Ghoualmi-Zine, “LLM-Based Edge Intelligence: A Comprehensive
+Survey on Architectures, Applications, Security and Trustworthiness,”
+IEEE Open J. Commun. Soc., vol. 5, pp. 5799–5856, 2024.
+[28] M. A. Ferrag, O. Friha, B. Kantarci, N. Tihanyi, L. Cordeiro, M. Debbah,
+D. Hamouda, M. Al-Hawawreh, and K.-K. R. Choo, “Edge Learning for
+6G-Enabled Internet of Things: A Comprehensive Survey of Vulnera-
+bilities, Datasets, and Defenses,” IEEE Commun. Surveys Tuts., vol. 25,
+no. 4, pp. 2654–2713, 2023.
+[29] A. H. Lone, A. A. Nasir, M. K. Khan, A. A. Al-Shaikhi, M. Mohandes,
+M. M. Salim, and D. B. Da Costa, “Machine Learning to Secure
+Wheels: A Survey of Misbehavior Detection for the Next-Generation
+of Connected and Autonomous Vehicles,” IEEE Open J. Commun. Soc.,
+vol. 7, pp. 3379–3418, 2026.
+[30] A. Machen, S. Wang, K. K. Leung, B. J. Ko, and T. Salonidis, “Live
+Service Migration in Mobile Edge Clouds,” IEEE Wireless Commun.,
+vol. 25, no. 1, pp. 140–147, 2018.
+[31] S. Wang, R. Urgaonkar, M. Zafer, T. He, K. Chan, and K. K. Leung,
+“Dynamic Service Migration in Mobile Edge Computing Based on
+Markov Decision Process,” IEEE/ACM Trans. Netw., vol. 27, no. 3, pp.
+1272–1288, 2019.
+[32] M. Ayyat, T. Nadeem, and B. Krawczyk, “ClassyNet: Class-Aware
+Early-Exit Neural Networks for Edge Devices,” IEEE Internet Things
+J., vol. 11, no. 9, pp. 15 113–15 127, 2024.
+[33] R. G. Pacheco, D. J. Bajpai, M. Shifrin, R. S. Couto, D. S. Menasch´e,
+M. K. Hanawal, and M. E. M. Campista, “UCBEE: A Multi Armed
+Bandit Approach for Early-Exit in Neural Networks,” IEEE Trans. Netw.
+Service Manag., vol. 22, no. 1, pp. 107–120, 2025.
+[34] H. Rahmath P, V. Srivastava, K. Chaurasia, R. G. Pacheco, and R. S.
+Couto, “Early-Exit Deep Neural Network: A Comprehensive Survey,”
+ACM Comput. Surv., vol. 57, no. 3, pp. 1–37, 2025.
+[35] A. Amara Korba, A. Boualouache, and Y. Ghamri-Doudane, “Zero-X: A
+Blockchain-Enabled Open-Set Federated Learning Framework for Zero-
+Day Attack Detection in IoV,” IEEE Trans. Veh. Technol., vol. 73, no. 9,
+pp. 12 399–12 414, 2024.
+[36] Q. Lai, X. Chen, J. Chen, W. Wang, J. Chen, T. R. Gadekallu,
+M. Cai, and X. Hu, “Improved Transformer-Based Privacy-Preserving
+Architecture for Intrusion Detection in Secure V2X Communications,”
+IEEE Trans. Consum. Electron., vol. 70, no. 1, pp. 1810–1820, 2024.
+[37] C. Fan, J. Cui, H. Jin, H. Zhong, I. Bolodurina, and D. He, “Auto-
+Updating Intrusion Detection System for Vehicular Network: A Deep
+
+
+--- Page 15 ---
+15
+Learning Approach Based on Cloud-Edge-Vehicle Collaboration,” IEEE
+Trans. Veh. Technol., vol. 73, no. 10, pp. 15 372–15 384, 2024.
+[38] H. Liu, S. Zhang, P. Zhang, X. Zhou, X. Shao, G. Pu, and Y. Zhang,
+“Blockchain and Federated Learning for Collaborative Intrusion Detec-
+tion in Vehicular Edge Computing,” IEEE Trans. Veh. Technol., vol. 70,
+no. 6, pp. 6073–6084, 2021.
+[39] M. Al-Hawawreh and M. S. Hossain, “Federated Learning-Assisted Dis-
+tributed Intrusion Detection Using Mesh Satellite Nets for Autonomous
+Vehicle Protection,” IEEE Trans. Consum. Electron., vol. 70, no. 1, pp.
+854–862, 2024.
+[40] X. Zhang, J. Nie, Y. Huang, G. Xie, Z. Xiong, J. Liu, D. Niyato,
+and X. Shen, “Beyond the Cloud: Edge Inference for Generative
+Large Language Models in Wireless Networks,” IEEE Trans. Wireless
+Commun., vol. 24, no. 1, pp. 643–658, 2025.
+[41] B. Picano, D. T. Hoang, and D. N. Nguyen, “A Matching Game for
+LLM Layer Deployment in Heterogeneous Edge Networks,” IEEE Open
+J. Commun. Soc., vol. 6, pp. 3795–3805, 2025.
+[42] X. Xu, G. Feng, Y. Liu, S. Qin, J. Wang, and Y. Wang, “Joint Inference
+Offloading and Model Caching for Small and Large Language Model
+Collaboration,” IEEE Trans. Mobile Comput., vol. 25, no. 2, pp. 2691–
+2706, 2026.
+[43] Y. He, J. Fang, F. R. Yu, and V. C. M. Leung, “Large Language
+Models (LLMs) Inference Offloading and Resource Allocation in Cloud-
+Edge Computing: An Active Inference Approach,” IEEE Trans. Mobile
+Comput., vol. 23, no. 12, pp. 11 253–11 264, 2024.
+[44] Y. Hu, D. Ye, J. Kang, M. Wu, and R. Yu, “A Cloud-Edge Collaborative
+Architecture for Multimodal LLM-Based Advanced Driver Assistance
+Systems in IoT Networks,” IEEE Internet Things J., vol. 12, no. 10, pp.
+13 208–13 221, 2025.
+[45] A. Dimitriou, L. Xun, J. Hare, and G. V. Merrett, “Realization of Early-
+Exit Dynamic Neural Networks on Reconfigurable Hardware,” IEEE
+Trans. Comput.-Aided Des. Integr. Circuits Syst., vol. 44, no. 6, pp.
+2195–2203, 2025.
+[46] G. Prince and P. N. Renjith, “AI-Driven Analysis and Mitigation of
+Control-Plane Signaling Anomalies in Next-Generation Mobile Net-
+works,” IEEE Access, vol. 14, pp. 11 129–11 148, 2026.
+[47] S. Sharma, P. Verma, and T. P. Sharma, “An Adaptive Wi-Fi Intrusion
+Prevention System with Zero-Day Resilience and Context-Aware Miti-
+gation,” Wireless Pers. Commun., vol. 146, no. 5, pp. 2561–2597, 2026.
+[48] E. C. P. Neto, S. Dadkhah, R. Ferreira, A. Zohourian, R. Lu, and
+A. A. Ghorbani, “CICIoT2023: A Real-Time Dataset and Benchmark
+for Large-Scale Attacks in IoT Environment,” Sensors, vol. 23, no. 13,
+p. 5941, 2023.
+[49] M. A. Ferrag, O. Friha, D. Hamouda, L. Maglaras, and H. Janicke,
+“Edge-IIoTset: A New Comprehensive Realistic Cyber Security Dataset
+of IoT and IIoT Applications for Centralized and Federated Learning,”
+IEEE Access, vol. 10, pp. 40 281–40 306, 2022.
+[50] Z. Fang, Y. Zhang, Z. Shao, M. Li, Z. Lin, L. Chen, Z. Yu,
+Z. Chen, Z. Chen, Z. Wang et al., “Sibyl: An efficient small-large
+model collaboration framework for long-horizon tasks,” arXiv preprint
+arXiv:2610.05383, 2026.
+[51] Z. Lin, G. Qu, X. Chen, and K. Huang, “Split Learning in 6G Edge
+Networks,” IEEE Wirel. Commun., 2024.
+[52] Z. Fang, Z. Lin, Z. Chen, X. Chen, Y. Gao, and Y. Fang, “Automated
+Federated Pipeline for Parameter-Efficient Fine-Tuning of Large Lan-
+guage Models,” IEEE Trans. Mobile Comput., 2025.
+[53] J. Zhan, H. Shen, Z. Lin, and T. He, “Prism: Privacy-aware routing for
+adaptive cloud-edge llm inference via semantic sketch collaboration,”
+arXiv preprint arXiv:2511.22788, 2025.
+[54] Z. Lin, Z. Chen, X. Chen, W. Ni, and Y. Gao, “Hasfl: Heterogeneity-
+aware split federated learning over edge computing systems,” IEEE
+Transactions on Mobile Computing, 2026.
+[55] S. Lyu, Z. Lin, G. Qu, X. Chen, X. Huang, and P. Li, “Optimal resource
+allocation for u-shaped parallel split learning,” in 2023 IEEE Globecom
+Workshops (GC Wkshps), 2023, pp. 197–202.
+[56] Z. Fang, M. Yang, Z. Lin, Z. Lin, Z. Fang, Z. Zhang, T. Duan,
+D. Huang, and S. Zhu, “Nsc-sl: A bandwidth-aware neural subspace
+compression for communication-efficient split learning,” arXiv preprint
+arXiv:2602.02696, 2026.

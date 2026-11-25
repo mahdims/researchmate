@@ -1,0 +1,1881 @@
+--- Page 1 ---
+Scalable Placement for Disaggregated LLM Serving
+on Heterogeneous Edge Fleets
+Truong-Thanh Le†, Hoang-Loc La§, Amir Taherkordi†, Frank Eliassen† and Phuong Hoai Ha§
+† Department of Informatics
+University of Oslo
+Oslo, Norway
+{truongl,amirhost,frank}@ifi.uio.no
+§ Department of Computer Science
+UiT The Arctic University of Norway
+Tromsø, Norway
+{hoang.l.la,phuong.hoai.ha}@uit.no
+Abstract—Serving large language models (LLMs) at the edge is
+increasingly desirable for privacy-sensitive applications and sce-
+narios that require data to remain on local devices. However, edge
+environments are constrained by limited computational resources
+and exhibit substantial device heterogeneity, making efficient
+LLM serving challenging. These limitations become particularly
+pronounced under bursty demand, where congestion and queue
+buildup can significantly increase response latency. Replicating
+the model into multiple pipeline instances can improve serving
+capacity and reduce congestion. Yet, deciding how devices should
+be grouped into replicas, assigning replicas to prefill or decode
+functions, and partitioning model layers across heterogeneous de-
+vices jointly creates a large combinatorial optimization problem.
+We present SPADE, a scalable and runtime-efficient placement
+planner for disaggregated LLM serving with pipeline replica-
+tion across heterogeneous edge clusters. SPADE introduces a
+dominance-based pruning technique that discards inferior replica
+candidates and recursively eliminates larger candidates that
+contain them, dramatically shrinking the search space. It further
+combines a water-filling approach for layer partitioning with a
+bounded multidimensional knapsack formulation that optimizes
+placement under a congestion-aware objective. On a synthetic
+fleet of 30 devices spanning five hardware classes, SPADE finds
+the optimal placement in 441 ms. In contrast, a genetic-search
+baseline augmented with dynamic-programming partitioning re-
+quires approximately two hours and still produces solutions with
+a 19.7% worse congestion objective. When evaluated on fleets
+containing ten device types, SPADE’s pruning strategy eliminates
+99.6% of candidate placements while yielding the same surviving
+candidate set as exhaustive enumeration.
+Index Terms—Scalable placement planner, search space prun-
+ing, disaggregated LLM serving, queueing system
+I. INTRODUCTION
+Large language models (LLMs) are increasingly moving
+from centralized datacenters to edge deployments [1], driven
+by privacy requirements that prevent organizations and indi-
+vidual users from sending sensitive data to third-party APIs
+[2]. Instead of running on homogeneous clusters, these de-
+ployments must operate on the available hardware [3, 4, 5]
+connected through commodity local-area networks rather than
+high-speed interconnects such as NVLink. Hence, the execu-
+tion environment is inherently heterogeneous in architecture,
+memory capacity, and communication bandwidth [6, 7, 8].
+Deploying modern LLMs on such fleets is challenging
+because model sizes, activations and KV cache usage often
+exceed the memory capacity of any single device [3, 5]. Mem-
+ory therefore is one of the main factors that determines both
+where the model can be placed and how many requests can
+be served concurrently [9]. Consequently, pipeline parallelism
+is the fundamental mechanism that enables LLM serving in
+the first place [10, 11, 12]. Moreover, LLM serving is itself
+heterogeneous. Prefill is compute-intensive and processes an
+entire prompt at once, whereas Decode is memory-intensive
+and generates tokens iteratively. This heterogeneity motivates
+LLM disaggregation in datacenter systems [13, 14]. At the
+edge, disaggregation becomes even more challenging because
+the available devices differ substantially.
+An edge fleet must also serve many concurrent requests
+with limited compute and memory capacity, so requests can
+readily arrive faster than it can process them; time-to-first-
+token (TTFT) then becomes dominated by congestion, the time
+requests spend waiting in queues [15]. Deploying multiple
+pipeline replicas, each a complete copy of the LLM deployed
+across a subset of devices, alleviates congestion but turns de-
+ployment into a placement problem: devices must be allocated
+across model replicas, each model replica assigned to Prefill or
+Decode, and layers partitioned across each replica’s devices.
+Existing solutions address only parts of this problem. Halda [3]
+and LOIP [5] optimize single-pipeline deployments for single-
+request latency, while Helix [6] and Parallax [4] maximize
+aggregate throughput without Prefill–Decode role assignment.
+E2LLM [9] is closest to our work, targeting congestion with
+Prefill and Decode replicas; however, its objective combines
+Prefill service time with congestion, which can favor Prefill
+capacity even when it does not shorten queues, and its ge-
+netic search provides no optimality guarantee. What remains
+missing is an objective that isolates congestion, together with
+a search that finds the optimal placement at fleet scale.
+Finding this optimum is hard because placement nests two
+problems. The outer problem allocates devices to replicas and
+assigns each replica a phase; it is NP-hard [16, 17], with up
+to 2N candidate replicas for N devices. The inner problem
+partitions the model’s layers across a candidate’s devices to
+maximize throughput under memory constraints; existing so-
+lutions solve it by dynamic programming (DP) over an ordered
+device sequence [9, 10, 11] in O(KL2) time for K devices
+arXiv:2611.32881v1  [cs.DC]  24 Nov 2026
+
+
+--- Page 2 ---
+and L layers. Because a candidate’s throughput is unknown
+until its inner problem is solved, the exact optimum requires an
+inner solver for exponentially many candidates: on a 30-device
+fleet with ten device types, exhaustive evaluation takes over
+nine hours even with a fast inner solver, and this cost grows
+exponentially as fleets grow. Planning time is thus the obstacle
+to optimality, and existing planners address it through heuristic
+search with no optimality guarantee, namely tabu search [17],
+evolutionary search [18], simulated annealing [19], and genetic
+algorithms (GA) [9], or by restricting the problem: Parallax [4]
+decomposes placement into sequential stages, while the exact
+formulations of Helix [6] and Halda [3] solve layer placement
+(i.e., the inner problem) rather than replica formation. Using
+these inner solvers would also not reduce planning time either,
+since each requires solving an integer program for every
+candidate, which is still more costly than DP.
+Our new solution presented in this paper, SPADE, avoids
+both compromises. It solves the outer problem exactly in time
+exponential only in the number of device types, which is
+typically small in heterogeneous edge fleets, rather than in
+the number of devices. Exploiting the interchangeability of
+devices of the same type, Spade represents a candidate replica
+by its per-type device counts and formulates allocation over the
+generated candidates as a bounded multidimensional knapsack,
+solved exactly by DP or, when memory is limited, by a
+mixed-integer program. SPADE also reduces planning time
+by introducing a dominance rule that discards any candidate
+whose devices can be decomposed into smaller candidates with
+equal or greater aggregate throughput, and skips generating
+larger candidates that contain it. Since splitting duplicates
+model weights, a decomposition can outperform its parent
+only when throughput is latency-bound rather than memory-
+bound. We assume that larger candidates containing the parent
+inherit this limitation and can therefore be skipped. Across
+all instances that we could enumerate exhaustively (Table III),
+this assumption eliminated no optimal candidate. Additionally,
+because only the head and tail of a replica’s pipeline are
+distinct [9], the inner problem admits a closed-form water-
+filling solution that reduces complexity from O(KL2) to
+O(K). In summary, our contributions are:
+• A congestion-aware objective for disaggregated LLM
+serving that models the system as a fluid tandem queue
+and isolates congestion from Prefill service time (Sec-
+tion III-A). On an eight-device CUDA–Metal testbed,
+placements selected by this objective reduce worst-case
+waiting time by up to 2.44× compared with the state-of-
+the-art objectives (Section IV-E).
+• A scalable placement solution that combines a type-count
+knapsack formulation, dominance pruning, and closed-
+form water-filling partitioning (Sections III-B–III-E). On
+a synthetic 30-device fleet, dominance pruning evaluates
+up to 99.6% fewer candidates than exhaustive enumera-
+tion, and Spade reaches the verified optimum in 441 ms,
+whereas the state-of-the-art method requires 6855 s and
+yields 19.7% higher congestion (Section IV-D).
+• An open-source peer-to-peer serving framework built
+on llama.cpp. Unlike the star topology used by
+llama.cpp and E2LLM, which routes all activations
+through a single node, the framework enables fully de-
+centralized communication (Section IV-F).
+II. RELATED WORK
+A. Distributed LLM inference on heterogeneous devices
+Partitioning a model across multiple devices is well estab-
+lished. PipeEdge and EdgeShard partition transformer layers
+under memory constraints [10, 11]; LOIP, Parallax, and Helix
+extend placement to heterogeneous deployments with commu-
+nication, scheduling, and optimization constraints [5, 4, 6]; and
+prima.cpp (Halda) targets consumer hardware through integer-
+programming placement and disk offloading [3]. LOIP and
+prima.cpp optimize single-pipeline deployments for single-
+request metrics such as TPOT and latency, whereas Parallax
+and Helix maximize aggregate throughput. However, none of
+these systems models congestion explicitly as a placement
+objective or assigns distinct Prefill and Decode roles to dif-
+ferent replicas. While E2LLM instantiates multiple Prefill and
+Decode replicas on heterogeneous edge fleets [9], its objective
+couples congestion with Prefill service time. We additionally
+find that prima.cpp’s multi-round SSD–CPU–GPU pipeline is
+effective only in its CPU execution; GPU execution falls back
+to a single round with one microbatch, eliminating the pipeline
+and overlap that motivate the design (Section IV).
+B. Prefill–decode disaggregation
+Prefill–decode disaggregation is now a common practice
+in LLM serving. Splitwise separates the two phases onto
+dedicated machine pools [13], DistServe jointly optimizes their
+placement and parallelism [14], and HexGen-2 extends the
+approach to heterogeneous GPU clusters [16]. More recent
+work refines resource allocation through workload-aware rout-
+ing and analytical provisioning [15, 20]. Hence, we adopt
+disaggregation rather than introducing it. The key difference
+is that existing systems treat role assignment largely as a pro-
+visioning decision, whereas heterogeneous edge fleets contain
+devices that differ substantially in compute performance and
+memory capacity, precisely the resources stressed by Prefill
+and Decode, respectively. Consequently, assigning a device to
+a phase becomes part of the placement problem itself.
+C. Queueing and contention in LLM serving
+As LLM serving systems matured, attention shifted from
+execution latency to the congestion that emerges under load.
+Analytical models provision Prefill and Decode capacity under
+TTFT targets [20], while measurement studies show that
+queueing delay and KV-cache transfer dominate tail TTFT
+in loaded clusters [15]. Subsequent work addresses conges-
+tion through scheduling, including Peace [21] and APEX
+[22], but treats device heterogeneity as largely orthogonal to
+the optimization. E2LLM extends placement optimization to
+heterogeneous edge fleets and allows multiple replicas [9],
+yet estimates latency by combining Prefill service time with
+
+
+--- Page 3 ---
+bottleneck-phase congestion. As discussed in Section I, this
+couples service costs with queueing effects and can reward
+additional Prefill capacity without reducing congestion. Our
+work starts from the same edge-serving setting but models
+Prefill and Decode as a fluid tandem queue, isolating con-
+gestion from service costs and optimizing placement directly
+around the resulting queueing behavior.
+D. Multi-cluster placement problem
+Once multiple LLM replicas can be deployed simultane-
+ously, placement becomes a combinatorial problem because
+devices must be allocated across replicas. Selecting which
+devices form a replica is a clustering problem with an ex-
+ponential search space, and ThunderServe explicitly identifies
+the problem as NP-hard [17]. Existing systems therefore rely
+on heuristic search to navigate that complexity. HexGen forms
+asymmetric groups through evolutionary search [18]; HexGen-
+2 [16] replaces evolutionary search with spectral partitioning
+refined by Kernighan–Lin, evaluates each candidate through a
+max-flow formulation that selects per-group parallel strategies
+and KV-cache communication paths, and further improves
+solutions through max-flow-guided edge swaps. HexGen-3
+employs simulated annealing, a metaheuristic optimization
+algorithm, to search for a deployment plan [19]. ThunderServe
+adopts tabu search [17], while E2LLM uses a GA [9]. These
+methods substantially reduce search cost and scale to larger
+deployments, but they offer no optimality guarantee.
+Exact optimization has also been explored. Helix formulates
+placement as a max-flow mixed-integer linear program [6],
+while Halda decomposes an integer program over layer assign-
+ments [3]. However, these methods optimize layer placement
+within a pipeline rather than the higher-level problem of
+selecting and composing multiple replicas from a hetero-
+geneous fleet. Additionally, the challenge is not expressing
+the optimization problem, but evaluating the vast number
+of candidate replicas it generates. Before a replica can be
+compared with another, its throughput must first be estimated
+by solving an inner layer-partitioning problem. Consequently,
+the cost of replica evaluation quickly dominates planning time
+(see Section IV-D). Reducing this cost is therefore key to
+the feasibility and scalability of the planner. Existing work
+therefore tends to treat exactness and tractability as competing
+objectives. Our approach reconciles the two for the outer prob-
+lem. The dominance rule introduced in Section III eliminates
+the need to evaluate the overwhelming majority of candidates,
+removing the principal computational bottleneck and making
+placement optimization tractable at fleet scale.
+III. PROPOSED METHOD
+Figure 1 provides an overview of SPADE. First, SPADE
+constructs list of candidates for the outer problem and solves
+inner problem with water-filling formulation (Section III-B).
+Additionally, SPADE applies the dominance rule while con-
+structing the list to eliminate unpromising candidates and thus
+reducing the search space (Section III-D). Finally, it solves the
+outer problem (Section III-E) based on the congestion model
+of disaggregated Prefill/Decode to determine the placement
+that minimizes the modelled congestion (Section III-A).
+A. Congestion model for prefill/decode placement
+We model a disaggregated deployment consisting of at least
+one Prefill replica and one Decoder replica. Every request must
+first traverse a Prefill before being forwarded to a Decoder,
+making the deployment a two-stage tandem queue rather
+than two independent services. Let PS and DS denote the
+aggregate Prefill and Decoder throughput of the deployment
+in tokens per second, NP the average number of input tokens
+per request, ND the average number of generated tokens,
+and Ta the average inter-arrival period between requests. The
+aggregate throughputs follow directly from the partition plan
+described in Section III-B, summed over all replicas assigned
+to each phase. We define
+tP = NP /PS,
+tD = ND/DS
+(1)
+as the service times of the Prefill and Decoder stages, respec-
+tively. Congestion appears in the Prefill stage (CP ) only when
+requests arrive faster than the stage can serve them, i.e., when
+the prefill time tP exceed the average inter-arrival period.
+CP = max(0, tP −Ta) .
+(2)
+The Decoder stage experiences a different arrival process.
+Once Prefill becomes saturated, requests can leave the first
+stage no faster than the Prefill service rate. Consequently,
+the Decoder does not observe the external arrival period Ta
+directly. Instead, requests arrive at intervals
+TD = max(Ta, tP ) ,
+(3)
+which reflects either the original request stream or the throt-
+tled output of a saturated Prefill stage. Measuring Decoder
+congestion against Ta would therefore count the delay twice.
+Decoder congestion CD is instead determined by the excess of
+its service time over the period at which work actually arrives:
+CD = max(0, tD −TD) .
+(4)
+Once a queue forms, the delay experienced by later requests
+accumulates. Each arriving request inherits the backlog gen-
+erated by earlier requests, causing congestion to grow linearly
+over the burst. SPADE selects the placement that minimizes
+W = CP + CD. The congestion can happen in either a single
+phase or both phases. For the former scenarios, allocating
+more resources on the congested phase would help. For the
+latter scenarios, from Eqs. 2–4, the congestion happens on
+both phases when tD > tP > Ta. In this regime, Decoder
+is the dominant bottleneck: increasing Decoder throughput
+reduces both Decoder congestion and total waiting time,
+regardless of congestion in the Prefill stage. Hence, allocating
+more resources to Decoder is generally more beneficial than
+increasing Prefill capacity.
+
+
+--- Page 4 ---
+Device Pool
+Type 1
+Type 2
+Type 3
+Type 4
+Type 5
+Type 6
+Type 7
+Type 8
+Type 9
+1 System inputs
+Model
+Dataset
+IN/OUT estimate
+Arrival rate, Tₐ
+2 Target requirements
+Derive Desired PS/DS
+from the IN/OUT estimate and Tₐ
+PS = prefill speed · DS = decode speed
+r* = (PS*, DS*)
+3 Device Clustering
+Water Filling (γ)
+Layer Partitioning and Allocation
+γ
+Type 1
+Type 2
+Type 3
+Type1 + Type2
+Type3 + Type4 + Type5
+γ(1,2) + γ(3,4,5) ≥ γ(1,2,3,4,5)
+Type1 + Type2 + Type3 + Type4 + Type5 + …
+Exclude the trivial all-type group
+4 Candidate type groups
+Type 1 + Type 2
+γ(1,2)
+Type 1 + Type 3
+γ(1,3)
+Type 1 + Type 3 + Type 4
+γ(1,3,4)
+⋮
+Each candidate defines a
+dynamic-programming transition
+6
+Disaggregated Prefill/Decode LLM Serving
+Type 1
+Type 4
+Type 5
+Decoder
+Type 2
+Type 9
+Decoder
+Type 3
+Type 6
+Prefill
+Type 7
+Type 8
+Decoder
+5
+Multidimensional knapsack
+DP recurrence for candidate group {1,2}
+Δ
+δ₁
+δ₂
+δ₃
+⋮
+δₙ
+= max
+Δ
+δ₁
+δ₂
+δ₃
+⋮
+δₙ
+, Δ
+δ₁−1
+δ₂−1
+δ₃
+⋮
+δₙ
++ γ(1,2)
+subject to multidimensional resource constraints
+target vector r*
+Fig. 1: SPADE system overview. γ: overall throughput after using layer partitioning. δi: number of devices in type i
+B. Model partitioning with water-filling
+Before a placement can be evaluated, we must determine
+how the transformer’s layers are distributed across each replica
+and estimate the throughput that replica can sustain. A pipeline
+replica is a complete copy of the LLM deployed across a
+subset of devices. The assigned devices collectively host all
+L transformer layers and execute them as a pipeline-parallel
+ring. Device i stores a contiguous block of ℓi layers:
+X
+i
+ℓi = L,
+ℓi ≥ℓmin,
+(5)
+which limits devices assigned to a replica to at most
+Kmax =
+ L
+ℓmin
+
+(6)
+Unlike a centralized deployment, positions within a pipeline
+sequence are not interchangeable. The head device hosts the
+embedding table and the tail device the final normalization and
+output projection, making both the fixed memory overhead
+ci(r) and fixed stage latency cost αi(r) depend on the role
+r ∈{head, mid, tail}. A replica of K devices therefore admits
+K(K −1) distinct head–tail assignments [9], each inducing
+a different optimal partition. We enumerate these assignments
+while treating the intermediate devices as interchangeable.
+a) Memory limit: The first constraint on replica through-
+put is memory. Every device must store both the weights of
+its assigned layers and the key–value cache associated with
+all active requests. If a replica serves s concurrent requests,
+device i in role r must satisfy
+ℓiw + s ℓiκ + ci(r) ≤Mi,
+(7)
+where w denotes the per-layer weight footprint, κ the per-layer
+key–value footprint per request, and Mi the usable memory
+capacity of the device. Eq. (7) reveals an immediate tradeoff.
+Assigning more layers to a device increases both its weight
+footprint and its share of the key–value cache, reducing the
+number of concurrent requests that the device can support.
+Rearranging the constraint gives
+s ≤(Mi −ci(r))/ℓi −w
+κ
+,
+which is the maximum requests device i can accommodate.
+Because this quantity decreases as ℓi grows, the replica’s
+capacity is ultimately determined by the most memory-
+constrained device. Any imbalance in layer assignment there-
+fore leaves memory unused on some devices while constrain-
+ing concurrency on others.
+The optimal partition avoids this imbalance by equalizing
+the memory-limited slot count (smem) across devices. This
+yields a water-filling solution in which ℓi ∝Mi −ci(r),
+so devices with larger effective memory budgets receive pro-
+portionally more layers. Combining this relationship with the
+constraint P
+i ℓi = L gives
+smem(S) =
+f
+M(S) −wL
+κL
+,
+f
+M(S) =
+X
+i∈S
+ Mi −ci(ri)
+
+(8)
+where f
+M(S) denotes the aggregate memory available to the
+replica after accounting for role-specific overheads. Eq. 8
+characterizes a memory-capacity bound rather than the par-
+tition ultimately selected by the planner. It answers a simpler
+question: how many requests could the replica support if
+memory were the only limiting resource? Section III-D uses
+this bound to compare replicas and identify candidates that
+can be safely discarded.
+b) Concurrency limit: Memory determines how many
+requests a replica could accommodate, but the maximum
+concurrency is ultimately set by throughput. As concurrency
+increases, the throughput available to each request falls be-
+cause the available resources are shared among more in-
+flight requests. We therefore admit requests only while per-
+request throughput remains above the deployment target τ
+(i.e., minimum tokens per second). Let ρ(S, s) denote the per-
+request throughput achieved by candidate S when serving s
+requests. Hence the largest admissible concurrency is
+scon = max{s : ρ(S, s) ≥τ},
+(9)
+Finally, the achievable serving request is therefore governed
+by whichever constraint becomes active first. A replica may
+exhaust its memory before throughput falls below τ, or reach
+the throughput limit while memory remains available. In either
+
+
+--- Page 5 ---
+case, the active constraint determines the concurrency level
+used when evaluating the replica. The overall throughput of a
+candidate S is
+γ(S) = ρ
+ S, s
+
+s,
+s = min{smem, scon}
+(10)
+c) The partition: Existing planners [10, 11] obtain a
+layer assignment by DP over an ordered device sequence. We
+observe that the assignment admits a much simpler structure.
+Throughput is determined by the slowest pipeline stage, so
+any assignment that leaves one device slower than the others
+can be improved by shifting layers away from that device. At
+the optimum, therefore, all stages progress at the same rate.
+We model the execution time of device i as an affine
+function of the number of layers assigned to it
+ti(ℓ) = αi(ri) + βiℓi,
+(11)
+where αi(r) captures the fixed per-token latency cost asso-
+ciated with role ri and βi is the measured per-layer latency
+cost of the device. Because ti increases monotonically with
+ℓi, maximizing throughput is equivalent to minimizing the
+slowest stage, which occurs when all devices attain a com-
+mon stage time t⋆. The layer assignments therefore satisfy
+ℓi = (t⋆−αi(r))/(βi). Combining this condition with the
+conservation constraint P
+i ℓi = L yields
+L =
+X
+i
+ t⋆−αi(ri)
+βi
+
+⇒t⋆= L + P
+i αi(ri)/βi
+P
+i 1/βi
+(12)
+The partition therefore follows in closed form. Once t⋆is
+known, the layer counts are computed directly, after which
+they are rounded and repaired to satisfy both ℓmin and the
+memory constraint of Eq. 7. Because the head and tail devices
+incur different fixed costs, both αi(r) and ci(r) depend on the
+selected role assignment. Eq. 12 is therefore solved once for
+each of the K(K −1) admissible head–tail assignments, and
+the assignment achieving the highest throughput is retained.
+d) Complexity: Water filling evaluates Eq. 12 in O(K)
+time for a replica of K devices. DP instead requires O(KL2)
+time by considering every layer boundary at every device.
+Enumerating the K(K −1) head–tail assignments yields
+O(K3) under water filling versus O(K3L2) under DP, an L2
+advantage that is significant in practice because L ≫K.
+C. A type-count representation for replicas
+The observation that makes the outer search space manage-
+able is that devices of the same hardware type are interchange-
+able. Devices sharing a type have the same memory budget and
+the same measured performance profile, so any two replicas
+that draw the same number of devices from each type receive
+identical throughput estimates and therefore identical scores.
+The planner need not distinguish individual devices.
+Since a replica is fully characterized by the devices assigned
+to it, we represent a candidate device allocation for a replica
+using a type-count vector c = (c1, . . . , ct) where ct denotes
+the number of devices drawn from type t and 0 ≤ct ≤mt,
+with mt the number of available devices of that type. The
+search therefore moves from individual device subsets to
+configurations of device types. This representation reduces the
+number of candidates from the 2N −1 non-empty subsets of
+an N-device fleet to
+T
+Y
+t=1
+(mt + 1) −1,
+(13)
+which counts the non-empty type-count vectors. Candidates
+containing more than Kmax devices are infeasible by con-
+struction and are discarded without evaluation.
+D. Search space pruning
+Even after the reduction of Eq. 13, the search space remains
+large. We therefore identify dominated candidates. A candidate
+is dominated if it can be decomposed into valid sub-candidates
+whose combined throughput is no smaller than its own. Such
+a candidate can be discarded. Dominance is evaluated recur-
+sively from previously generated candidates, avoiding explicit
+enumeration of all decompositions.
+a) Discarding a dominated candidate is lossless.: Re-
+placing a dominated candidate with the feasible replicas of its
+best decomposition preserves feasibility because both consume
+the same fleet resources. Since the decomposition provides
+at least as much aggregate throughput in the candidate’s
+role, and the objective depends only on those aggregates, the
+replacement cannot increase congestion. An optimal placement
+therefore exists that excludes the dominated candidate, allow-
+ing it to be removed without loss of optimality. This argument
+does not extend to per-request metrics such as TPOT.
+b) A dominated candidate is limited by latency, not by
+memory: Dominance alone saves search rather than evalua-
+tion, since a candidate’s throughput must already be known
+before domination can be tested. The key observation is a
+memory ledger. Every replica stores a complete copy of the
+model weights, so decomposing a device set a into b+c pays
+the weight cost twice. From Eq. 8,
+smem(b) + smem(c) = smem(a) −w/κ.
+(14)
+A decomposition therefore begins with fewer slots than
+the candidate it replaces. If it nevertheless achieves higher
+throughput, the gain must come from a higher service rate
+rather than additional memory. Dominance thus identifies can-
+didates whose throughput is limited by latency, not memory.
+c) Extending the rule to larger candidates.: Discarding
+a dominated candidate saves search but not evaluation, since
+its value must already be known to test the domination. The
+real benefit arises if dominance also propagates to larger
+candidates. Let a set of device d be added to a, and suppose
+the same device is instead placed within one part of its
+dominating decomposition. A dominated candidate has already
+grown beyond the point where additional memory translates
+into useful concurrency. Adding another device therefore con-
+tributes mainly an extra stage, whereas a smaller replica can
+still convert the added memory into throughput. The additional
+device is consequently worth more in the decomposition than
+in the already dominated candidate.
+
+
+--- Page 6 ---
+A general proof is significantly complicated by role-
+dependent costs, heterogeneous devices, and the fact that a
+decomposition and its parent candidate need not operate in
+the same regime. We therefore adopt this extension as an
+assumption used during candidate generation rather than as
+a theorem. While violating the assumption may invalidate
+the optimality guarantee, our experimental results suggest
+that the resulting planner still produces high-quality solutions
+while significantly reducing solving time compared to exist-
+ing methods. The assumption affects only which candidates
+are generated. The outer solver remains exact over those
+candidates, and removing a dominated candidate is itself
+lossless (see Section III-D.a). The extension simply avoids
+generating descendants of candidates that have already been
+shown uncompetitive. In Section IV, we show that exhaus-
+tive enumeration and dominance pruning produce identical
+survivor sets, Pareto frontiers, and final placements whenever
+exhaustive comparison is affordable.
+E. Placement method
+The surviving candidates form a bounded multidimen-
+sional knapsack: choose how many replicas of each surviving
+type-count vector to instantiate, and in which role, subject
+to the available devices of each type. Since the objective W
+depends on a placement only through (PS, DS), the prob-
+lem reduces to enumerating the Pareto frontier of achievable
+throughput pairs and evaluating W on that frontier.
+We consider two exact formulations. The first is a multi-
+dimension knapsack DP [23] whose states are device-
+consumption vectors u ≤(m1, . . . , mT ). Each transition adds
+one surviving candidate in one of the two roles and updates
+the reachable (PS, DS) frontier. This DP is different from
+layer-partitioning DP. The second is a mixed-integer program
+over replica counts xr
+c:
+min
+W(PS, DS)
+s.t.
+X
+r
+X
+c
+xr
+c ct ≤mt
+∀t,
+(15)
+PS =
+X
+c
+xP
+c γP (c),
+DS =
+X
+c
+xD
+c γD(c). (16)
+The two formulations trade time for memory. The DP is
+faster because it constructs the entire Pareto frontier in a single
+forward pass and remains exact by construction. However, its
+speed comes at the cost of working memory: the state table
+spans Q
+t(mt + 1) entries and therefore grows exponentially
+with the number of device types. This is often acceptable for
+heterogeneous edge fleets, where the number of types is small
+even when the number of devices is large, but it eventually
+becomes the limiting resource.
+The mixed-integer program makes the opposite tradeoff.
+By avoiding the state table altogether, its memory footprint
+remains modest as the type count grows. However, the cost
+is runtime: the Pareto frontier must be recovered through
+repeated solves, each corresponding to a different scalarization
+of (PS, DS). We therefore use the DP whenever its state space
+fits comfortably in memory and fall back to the mixed-integer
+TABLE I: Device information. (U.M: Unified Memory)
+Device Name
+VRAM
+RAM
+U.M
+Type.ID
+N.Dev
+RTX5070
+12GB
+64GB
+No
+Type.1
+1
+Ryzen 7 9700X
+RTX3060M
+6GB
+64GB
+No
+Type.2
+1
+Ryzen 5 5800H
+Apple M2 Max
+22GB
+32GB
+Yes
+Type.3
+2
+Apple M1
+12GB
+16GB
+Yes
+Type.4
+2
+DGX Spark*
+12GB
+128GB
+Yes
+Type.5
+2
+TABLE II: Average number of input and generated tokens.
+Model
+Dataset
+NP
+ND
+ratio
+DeepseekR1
+LZByteDance
+576
+579
+0.99
+IELTS
+2282
+1173
+1.94
+Qwen3Moe
+LZByteDance
+576
+746
+0.77
+Q4 K M
+IELTS
+2291
+1957
+1.17
+program once memory becomes the bottleneck. Section IV-D
+reports the memory crossover on our deployments.
+IV. EVALUATION AND DISCUSSION
+Our evaluation proceeds in four steps. We first investigate
+which existing solutions can serve as meaningful baselines
+in our deployment regime and explain why others cannot
+be compared directly (Section IV-B). We then validate the
+per-replica cost model on which dominance pruning depends
+(Section IV-C). Next, we compare SPADE with placement
+planners of the selected baselines in both solution quality and
+planning time, isolating the contribution of the dominance
+rule (Section IV-D). Finally, we study how the queueing-
+aware objective affects the resulting deployment as the model,
+workload, arrival rate, and fleet size vary (Section IV-E).
+A. Experiment setup
+Our testbed consists of eight devices spanning five hard-
+ware types and connected through a local-area network
+(Table I). To emulate a resource-constrained edge device,
+we limit the DGX Spark to 12 GB of VRAM. Following
+E2LLM [9], we deploy our testbed on a Local Area Net-
+work (about 900Mbps) to reduce the affect of transmit-
+ting time on pipeline paralellism. We evaluate two con-
+trasting models: DeepSeek R1 Distill Qwen 14B Q6 K and
+Qwen3-30B-A3B-Q4 K M, referred to as DeepSeekR1 and
+Qwen3MoE. DeepSeekR1 stores 11.3 GB of weights but ac-
+tivates all 14B parameters through dense FFNs [24], whereas
+Qwen3MoE stores 17.3 GB of weights but activates only about
+3B parameters through a Mixture-of-Experts architecture [25].
+The two models therefore represent latency- and memory-
+constrained deployment regimes, respectively. Workloads are
+drawn from the LZByteDance [26] and IELTS [27] datasets
+which together represent different NP /ND ratios as in Table
+II. Moreover, the service target is set to τ = 15 tokens/s
+per request, doubling the average human reading speed [28].
+Request inter-arrival times follow a normal distribution with
+mean Ta and standard deviation σ = 0.1Ta, truncated at zero.
+B. Baselines chosen
+Systems that cannot execute in this regime. Several
+published systems cannot be evaluated directly on our testbed.
+
+
+--- Page 7 ---
+PipeEdge targets encoder models without a key–value cache,
+and its partitioning cost model does not extend to autoregres-
+sive decoding. In addition, HexGen, HexGen-2, HexGen-3,
+ThunderServe and Splitwise depend on CUDA and NCCL,
+which are unavailable on Mac devices and edge fleet on LAN.
+We therefore cannot compare against their full implementa-
+tions. Instead, we compare with their planners and objectives,
+as mentioned below.
+Objectives evaluated inside our planner. Placement ob-
+jectives and placement searches solve different problems, and
+evaluating them together confounds the effect of one with
+the other. Therefore, within our own planner, we evaluate the
+following placement objectives: finishing time (from HexGen
+[18] - FT), role-pinned disaggregation (from Splitwise [13],
+called adapted Splitwise - SPW), and the congestion objec-
+tive in E2LLM. For SPW, we derive a role-pinned policy
+from the deployment choices reported in Splitwise, where the
+higher-throughput resources are consistently assigned to Prefill
+and lower-throughput to Decode. Differences in the resulting
+placements can then be attributed to the objective alone rather
+than to differences in the implementation. These experiments
+should therefore be understood as objective-level ablations.
+Search methods compared directly. To isolate the effect of
+the search algorithm, we compare three alternatives: a genetic
+algorithm (GA) combined with our water-filling partitioner,
+a GA paired with the layer-partitioning DP used in E2LLM
+[9], and the tabu search employed by ThunderServe [17]. All
+methods are run with the parameters reported by their authors;
+no search-specific tuning was performed for our fleet.
+Moreover, prima.cpp [3] is the closest published system
+that executes on our hardware. Halda as its planner relies
+on pipeline-ring parallelism (PRP), in which weight transfers
+overlap computation through multiple execution rounds (k >
+1). Rebuilding prima.cpp with a GPU backend and reproducing
+Halda’s parameter selection on our devices showed that this
+mechanism never activates in our setting. For PRP to hide
+storage latency, the device compute rate must satisfy
+rate ≤(N −1) I disk bw
+(17)
+where I is the model arithmetic intensity and disk bw the
+storage bandwidth. For the Llama-3-70B Q4 K M model
+used in their original evaluation, the bound is approxi-
+mately 60 GFLOPS per device on a four-device deployment
+(I = 3.32, SSD disk bw = 6GB/s), whereas the slow-
+est CPU in our fleet reaches 66.4 GFLOPS and the fastest
+GPU 87,207 GFLOPS, measured by their tool. The overlap
+condition is therefore violated throughout our fleet, causing
+prima.cpp to fall back to a single-round pipeline with only
+one microbatch in flight. While still pipeline-parallel, this
+execution regime no longer benefits from pipeline filling
+or weight-fetch overlap, both of which are fundamental to
+efficient pipeline parallelism [11, 10, 12]. Since prima.cpp
+operates in a substantially inefficient regime from the studies in
+this work, we do not include it in the end-to-end comparison.
+C. Pipeline parallelism performance prediction
+The dominance rule prunes candidates without evaluating
+them, and the outer solver ranks placements that it never needs
+to execute. Both therefore depend on the accuracy of the per-
+replica cost model. Following E2LLM [9] and EdgeShard [11],
+we model a fully populated pipeline by its bottleneck stage:
+TPOT = Tslowest × Nstage.
+(18)
+To validate Eq. 18, we sampled deployments from our fleet,
+including non-optimal placements.When evaluated on mea-
+sured stage times and performance, Eq. 18 predicts throughput
+with less than 0.5% error across all deployments, confirming
+that throughput is well explained by the bottleneck-stage
+model. We next combine the stage-time predictor (Eq. 11)
+with the bottleneck-stage model of Eq. 18 to estimate replica
+throughput. The predictions achieve an average error of 5.22%
+across all deployments. Figure 2 shows the error distribution.
+D. Planner comparison
+Table III evaluates the effect of dominance pruning on
+synthetic 30 devices derived from our 8-device testbed by
+replicating the observed hardware types with varying memory
+capacities and compute throughput. The evaluations are based
+on the water-filling method. Without pruning, every candidate
+must be generated and priced before the outer solver runs.
+With pruning, only candidates that survive the dominance test
+are evaluated. The savings are substantial. At T = 5 device
+types, exhaustive generation evaluates 16554 candidates and
+requires 153 s for the whole process, whereas the pruned gen-
+erator evaluates only 238 candidates and completes everything
+in 0.44 s, a 347× reduction in runtime. At T = 10, the gap
+widens from 35 252 s (more than nine hours) to 11.24 s, a
+3 136× reduction, with only 3 710 of 1 045 682 candidates
+ever evaluated. The advantage grows with the number of
+device types, which is precisely the dimension along which the
+search space grows exponentially. These savings come with no
+observable loss in solution quality because at both scales, ex-
+haustive and pruned generation produce identical survivor sets,
+identical Pareto frontiers, and the same final placement. This is
+the empirical validation referred to in Section III-D: although
+the extension rule is not proven lossless in general, exhaustive
+enumeration confirms that it preserves all candidates required
+to recover the optimum.
+a) Search methods: Table IV compares the placement
+searches on two rosters: the physical fleet and a 30-device
+roster constructed by replicating the measured device types.
+0
+5
+10
+15
+20
+25
+30
+35
+40
+absolute relative error (%)
+0
+50
+100
+150
+share of runs (%)
+Prefill
+Decode
+Fig. 2: Error distribution of pipeline parallelism performance
+prediction. Each stage’s distribution sums to 100%.
+
+
+--- Page 8 ---
+On the physical fleet, all methods reach the same optimum
+and differ only in planning cost. Our planner completes in
+109.4 ms, compared with 384.4 ms for tabu search, 548.0 ms
+for the genetic algorithm with water-filling partitioning, and
+8 257 ms for the genetic algorithm paired with the layer-
+partitioning DP. At eight devices the search space is suffi-
+ciently small that solution quality is no longer discriminative,
+and we report this rather than selecting only the larger instance.
+The picture changes at 30 devices. Our planner reaches the
+verified optimum in 441.3 ms. The mixed-integer formulation
+also recovers the optimum when the weight grid is sufficiently
+fine, requiring 31 ms per Pareto point (PS, DS). Recovering
+the full frontier therefore takes 11.3 s, roughly 25.6× longer
+than the DP. This asymmetry is structural rather than an
+implementation artifact: the DP recovers the entire frontier in a
+single backward pass, whereas the MILP must be solved sep-
+arately for each Pareto point. The heuristic methods separate
+both in runtime and solution quality. The GA yields 18.8%
+higher congestion after 230.7 s; replacing water filling with
+the layer-partitioning DP increases runtime to 6 855 s while
+still yielding 19.7% higher congestion. Tabu search completes
+in 13.4 s but yields 20.4% higher congestion. Interestingly,
+varying the parameters of tabu search does not materially
+reduce the gap, and likewise for GA, a typical behavior
+of heuristic searches that provide no optimality guarantees.
+Optimal planning is hence tractable at this scale: SPADE
+reaches the optimum in milliseconds, while the heuristic ones
+are either slower, less accurate, or both.
+b) Memory: The two exact formulations exhibit the
+tradeoff predicted in Section III-E. The multidimensional-
+knapsack DP is the faster solver, but its dense state table
+grows exponentially with the number of device types. On
+our largest roster, it requires 4.75 GB of memory. The mixed-
+integer program makes the opposite tradeoff, reproducing the
+same frontier using only 122 MB while requiring longer solve
+times. With larger device types, for example 50 devices in 20
+types, the DP no longer fits in memory, leaving the mixed-
+integer formulation as the only practical exact solver.
+E. Placement objective comparison
+We now hold the planner fixed and vary only the objective,
+so any differences in the resulting deployments are attributable
+to the objective itself. Following E2LLM, we evaluate them
+across four dimensions: model architecture, arrival rate, work-
+load, and fleet scale. Table V summarizes results of the four
+objectives across all evaluation dimensions. In Tables VI, VII,
+and VIII, R denotes the replica role (P = Prefill, D = Decode),
+Sl. the total slot count, and G-C the numbers of GPU and
+TABLE III: Performance comparison between exhaustive and
+pruned generations (N = 30, planner DP). Total time also
+includes time for other operations, e.g, file writing, comparing
+T
+Generator
+candidates
+survivors
+generation
+Planner
+total
+5
+exhaustive
+16 554
+79
+152.0 s
+389.3 ms
+152.9 s
+pruned
+238
+79
+338.3 ms
+3.2 ms
+0.44 s
+10
+exhaustive
+1 045 682
+750
+25 949 s
+8 896 s
+35 252 s
+pruned
+3 710
+750
+8.8 s
+2.2 s
+11.2 s
+TABLE IV: Performance of planners. Lower is better
+Search
+N=8, T=5
+N=30, T=5
+time
+gap (%)
+time
+gap (%)
+SPADE (knapsack DP)
+109.4 ms
+best
+441.3 ms
+best
+SPADE (MILP, full Pareto points)
+223.0 ms
+best
+11.3s
+best
+tabu search (ThunderServe)
+384.4 ms
+best
+13.4 s
++20.4
+GA + water filling
+548.0 ms
+best
+231 s
++18.8
+GA + replica DP (E2LLM)
+8.26 s
+best
+6855 s
++19.7
+CPU layers assigned to the replica. The first device is always
+the head and the last device is always the tail. For role-
+pinned placement (SPW), we do not apply dominance pruning
+because the two techniques interact poorly. It should be noted
+that in Table V, PS and DS are measured on average. Hence,
+even with the same deployment plan, the average performance
+may be different depending on the system saturation level.
+a) Model change: We first vary the model while hold-
+ing the fleet (eight devices), workload (LZByteDance), and
+arrival period (100 ms) fixed. Our congestion objective out-
+performs all baselines on both models, but the magnitude
+of the improvement depends strongly on the model architec-
+ture. On Qwen3MoE, the maximum waiting times produced
+by FT, E2LLM, and Splitwise are only 4.7%, 4.7%, and
+14.2% higher than SPADE, respectively (Table V). Although
+these differences appear modest, waiting time accumulates
+quadratically with the request count, causing small per-request
+discrepancies to translate into substantially different backlog
+growth under sustained load. The gap becomes much larger
+on DeepSeekR1, where FT, E2LLM, and Splitwise incur
+maximum waiting times that are 2.44×, 2.44×, and 3.13× as
+long as SPADE, respectively. The contrast reflects the different
+operating regimes of the two models. Qwen3MoE activates
+only a small fraction of its parameters per token, allowing
+it to sustain a relatively high service rate. As concurrency
+increases, the deployment continues admitting requests until
+memory capacity becomes the limiting factor, as shown in
+column DS of Table V. DeepSeekR1, in contrast, activates all
+model parameters through dense feed-forward networks, re-
+sulting in a substantially lower service rate. Consequently, the
+throughput target is reached before memory is exhausted (Eq.
+8, 9 and 10), making the deployment limited by latency, rather
+than memory. Objectives that ignore phase-specific congestion
+are therefore penalized more severely on DeepSeekR1.
+b) Workload change: Holding the model at Qwen3MoE,
+the fleet at eight devices, and the arrival period at 100 ms
+fixed, we switch the workload from IELTS to LZByteDance
+(see Table VII). This changes the Prefill-to-Decode token
+ratio from 1.17 to 0.77, crossing the point at which Decode
+becomes more demanding than Prefill. A placement strategy
+that fixes the phase split cannot naturally adapt to this shift;
+our congestion objective does. On IELTS, SPADE uses a single
+Apple M2 Max for Prefill and dedicates 25 slots to Decode. On
+LZByteDance, it reconfigures the deployment by increasing
+the Decode pool to 27 slots. Hence, SPADE trades excess
+Prefill capacity for greater Decode concurrency. Although the
+per-request decode rate is lower than under FT (28.9 vs 31.3
+tokens/s), the larger pool raises aggregate decode throughput
+
+
+--- Page 9 ---
+TABLE V: Measured metrics of the placement each objective selects. PS/DS are per-request prefill/decode throughput
+(tokens/s); Wmax is worst waiting time (s). Higher PS/DS and lower Wmax are better; the best in each row is bold.
+SPADE
+FT
+E2LLM
+SPW
+Configuration
+PS
+DS Wmax
+PS
+DS Wmax
+PS
+DS Wmax
+PS
+DS Wmax
+Model — 8 dev., LZByteDance, 100 ms
+Qwen3-MoE
+183.2 28.9
+148
+366.3 31.3
+155
+366.3 31.3
+155
+1315.1 25.4
+169
+DeepSeekR1
+198.6 16.2
+324
+761.1 15.2
+791
+761.1 15.2
+791
+752.9
+19.5
+1014
+Workload — 8 dev., Qwen3-MoE, 100 ms
+IELTS
+694.8 23.4
+372
+394.7 25.6
+400
+394.7 25.6
+400
+1510.9 21.5
+458
+LZByteDance 183.2 28.9
+148
+366.3 31.3
+155
+366.3 31.3
+155
+1315.1 25.4
+169
+Arrival interval — 8 dev., Qwen3-MoE, LZByteDance
+100 ms
+183.2 28.9
+148
+366.3 31.3
+155
+366.3 31.3
+155
+1315.1 25.4
+169
+1000 ms
+183.8 28.9
+59
+518.7 31.2
+72
+518.7 31.2
+72
+1210.0 25.4
+69
+3000 ms
+213.2 59.0
+7
+508.7 46.8
+1
+213.2 59.0
+7
+1210.1 33.1
+2
+Cluster size — Qwen3-MoE, IELTS, 100 ms
+4 dev.
+264.1 21.5
+1477
+235.1 18.7
+1729
+235.1 18.7
+1729
+1475.6 25.0
+3838
+6 dev.
+235.5 31.5
+598
+315.6 32.7
+666
+315.6 32.7
+666
+1476.6 17.2
+804
+8 dev.
+694.8 23.4
+372
+394.7 25.6
+400
+394.7 25.6
+400
+1510.9 21.5
+458
+TABLE VI: Deployment plans when varying the model
+(a)
+Qwen3MoE
+/
+SPADE.
+R
+Type
+Sl. G–C
+P Type.2 2 8–20
+Type.4
+20–0
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D
+Type.3
+12
+22–0
+Type.4
+7–0
+Type.3
+19–0
+(b) Qwen3MoE /
+FT ≡E2LLM.
+R
+Type
+Sl. G–C
+P Type.4 2
+9–0
+Type.3
+39–0
+P Type.3 1 48–0
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D Type.4 4 19–0
+Type.2
+5–24
+(c)
+Qwen3MoE
+/
+Splitwise.
+R
+Type
+Sl.
+G–C
+P Type.1 1 25–23
+D
+Type.2
+18
+3–3
+Type.4
+3–0
+Type.4
+3–0
+Type.3
+10–0
+Type.5
+13–0
+Type.5
+13–0
+D Type.3 2
+48–0
+(d)
+DeepSeekR1
+/
+SPADE.
+R
+Type
+Sl. G–C
+P Type.3 1 48–0
+D
+Type.5
+9
+15–0
+Type.5
+15–0
+Type.1
+18–0
+D
+Type.2
+2
+15–0
+Type.4
+6–0
+Type.4
+6–0
+Type.3
+21–0
+(e) DeepSeekR1 /
+FT ≡E2LLM.
+R
+Type
+Sl. G–C
+P Type.2 2 13–0
+Type.5
+35–0
+D Type.5 6 24–0
+Type.1
+24–0
+D
+Type.4
+2
+5–0
+Type.3
+20–0
+Type.3
+20–0
+Type.4
+3–0
+(f)
+DeepSeekR1
+/
+Splitwise.
+R
+Type
+Sl. G–C
+P Type.5 2 13–0
+Type.5
+35–0
+D Type.3 1 48–0
+D
+Type.4
+2
+2–0
+Type.2
+15–0
+Type.4
+2–0
+Type.1
+29–0
+D Type.3 1 48–0
+by about 31% (27 vs 19 slots), thus reducing congestion.
+In contrast, FT and E2LLM objectives retain the same three
+Prefill devices across both workloads and adjust only the
+layer partition boundaries, by a single layer. E2LLM behaves
+similarly because its objective still includes the Prefill service-
+time term. Although the workload changes substantially, the
+reduction in Prefill service time remains large enough to
+outweigh the benefit of reallocating devices across phases,
+so the optimizer never leaves the original placement. The
+workload change nevertheless affects the underlying execution
+characteristics. Interestingly, PS reduces whereas DS increases
+when changing from IELTS to LZByteDance dataset. Because
+Transformer inference relies on self-attention, the cost of a
+layer grows with the number of positions already stored in
+the KV cache. IELTS and LZByteDance therefore induce
+different execution depths, reflected in their different input and
+output token counts, and consequently different stage time.
+The optimal balance between Prefill and Decode is therefore
+not the same across the two workloads.
+Interestingly, FT and E2LLM still converge to the same
+TABLE VII: Deployment plans when varying the workload
+(a) IELTS / SPADE.
+R
+Type
+Sl. G–C
+P Type.3 1 48–0
+D
+Type.5
+15
+15–0
+Type.5
+15–0
+Type.1
+14–4
+D Type.4 6 12–0
+Type.3
+36–0
+D Type.4 4 18–0
+Type.2
+5–25
+(b) IELTS /
+FT ≡E2LLM.
+R
+Type
+Sl. G–C
+P Type.4 2 10–0
+Type.3
+38–0
+P Type.3 1 48–0
+D
+Type.5
+15
+15–0
+Type.5
+15–0
+Type.1
+14–4
+D Type.4 4 18–0
+Type.2
+5–25
+(c) IELTS / Splitwise.
+R
+Type
+Sl.
+G–C
+P Type.1 1 25–23
+D Type.3 2
+48–0
+D
+Type.2
+18
+3–3
+Type.4
+3–0
+Type.4
+3–0
+Type.3
+10–0
+Type.5
+13–0
+Type.5
+13–0
+(d)
+LZByteDance
+/
+SPADE.
+R
+Type
+Sl. G–C
+P Type.2 2 8–20
+Type.4
+20–0
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D
+Type.3
+12
+22–0
+Type.4
+7–0
+Type.3
+19–0
+(e) LZByteDance /
+FT ≡E2LLM.
+R
+Type
+Sl. G–C
+P Type.4 2
+9–0
+Type.3
+39–0
+P Type.3 1 48–0
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D Type.4 4 19–0
+Type.2
+5–24
+(f)
+LZByteDance
+/
+Splitwise.
+R
+Type
+Sl.
+G–C
+P Type.1 1 25–23
+D Type.3 2
+48–0
+D
+Type.2
+18
+3–3
+Type.4
+3–0
+Type.4
+3–0
+Type.3
+10–0
+Type.5
+13–0
+Type.5
+13–0
+deployment. Because the search space is discrete, changing
+a placement requires replacing an entire replica composition
+rather than making an incremental adjustment. The workload
+shift is sufficient to alter the objective values, but not sufficient
+to move the solution into a different basin of the search space.
+Consequently, FT and E2LLM select the same plan and differ
+only in the value they assign to it. Adapted Splitwise is even
+more rigid, keeping the RTX5070 in Prefill for both workloads
+because its rule always assigns the highest-throughput replica
+to Prefill regardless of workload characteristics.
+c) Arrival rate change: Holding the model, workload,
+and fleet fixed at Qwen3MoE, LZByteDance, and eight de-
+vices, respectively, we vary the arrival period from 100 ms
+to 3000 ms (Table VIII). This is the only configuration that
+transitions from overload to under-load, with the crossover
+occurring between 1 s and 2 s. Within the overloaded regime,
+placements remain unchanged: SPADE and E2LLM retain their
+deployments up to 1000 ms and converge to the same place-
+ment at 3000 ms, whereas finishing time and adapted Splitwise
+keep the same deployment throughout. The throughput gains
+remain visible after the transition. At 3000 ms, the per-request
+
+
+--- Page 10 ---
+decode rate reaches 59.0 tokens/s under SPADE and E2LLM,
+compared with 46.8 tokens/s under finishing time and 33.1
+tokens/s under adapted Splitwise. Once excess Prefill capacity
+no longer reduces congestion, SPADE reallocates resources
+toward Decode. Combined with its higher decode throughput
+and larger decode pool at saturation, this allows idle capacity
+to be converted into higher per-request throughput even after
+waiting time reaches zero. The most interesting observation
+is that SPADE and E2LLM eventually converge to the same
+deployment. Once the offered load falls sufficiently below ca-
+pacity, additional Prefill resources no longer reduce queueing
+delay, and both objectives therefore shift resources toward
+Decode despite being derived from different formulations.
+One exception appears at an arrival period of 3000 ms,
+where SPADE still exhibits approximately 7 s of maximum
+waiting time (Table V). The log from experiments showed
+that measured Prefill throughput was up to 30% lower than
+predicted, causing residual congestion. The discrepancy arises
+because the planner represents a workload using a representa-
+tive sequence length rather than the full request-length distri-
+bution. Since latency scales nonlinearly with sequence length,
+the throughput evaluated at the representative length generally
+differs from the average throughput over the workload. This
+approximation substantially reduces planning complexity and
+is consistent with the workload abstractions commonly used in
+prior deployment planners [13, 17, 19]. Importantly, this effect
+is confined to Prefill. Decode throughput remains accurately
+predicted. The same over-prediction exists in the overloaded
+configurations, but there the predicted bottleneck matches the
+measured one, so it changes only the magnitude of congestion.
+At 3000 ms the model predicts W = 0, yet measurements
+show residual Prefill congestion. We also observe small dif-
+ferences in Prefill throughput for SPW despite the same
+Prefill. These differences are likely caused by device power
+management under varying idle times. We do not analyze this
+further, as it concerns runtime behavior rather than placement.
+d) Scalability: We evaluate nested rosters of four, six,
+and eight devices so that fleet size is never confounded
+with fleet composition. The four-device fleet consists of one
+Type.1, one Type.2, and two Type.4 devices; the 6-device fleet
+additionally includes one Type.3 and one Type.5 device; and
+the 8-device fleet uses all devices. Across all fleet sizes, SPADE
+consistently achieves the lowest maximum waiting time. The
+advantage is most pronounced on the smallest fleet, where
+the finishing-time and E2LLM objectives incur 17% longer
+maximum waiting times and adapted Splitwise incurs 160%
+longer maximum waiting times relative to SPADE.
+F. Framework comparison
+SPADE is built on llama.cpp but replaces the original
+star-topology communication with a peer-to-peer pipeline. We
+therefore compare against both the original llama.cpp im-
+plementation and E2LLM, which also adopts a star topology.
+With three devices and nine slots (Type.1, Type.5, Type.2),
+SPADE achieves 37.13 tokens/s, compared with 25.23 tokens/s
+for E2LLM and 12.69 tokens/s for llama.cpp. At this
+TABLE VIII: Deployment plans when varying the arrival rate.
+(a) SPADE, 100 and 1000 ms.
+R
+Type
+Sl. G–C
+P Type.2 2 8–20
+Type.4
+20–0
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D
+Type.3
+12
+22–0
+Type.4
+7–0
+Type.3
+19–0
+(b) SPADE ≡E2LLM, 3000 ms.
+R
+Type
+Sl. G–C
+P Type.2 1 8–40
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D Type.4 6 12–0
+Type.3
+36–0
+D Type.4 6 12–0
+Type.3
+36–0
+(c) FT, all intervals (≡E2LLM
+at 100 and 1000 ms).
+R
+Type
+Sl. G–C
+P Type.4 2
+9–0
+Type.3
+39–0
+P Type.3 1 48–0
+D
+Type.5
+15
+16–0
+Type.5
+16–0
+Type.1
+15–1
+D Type.4 4 19–0
+Type.2
+5–24
+(d) Splitwise, all intervals.
+R
+Type
+Sl.
+G–C
+P Type.1 1 25–23
+D
+Type.2
+18
+3–3
+Type.4
+3–0
+Type.4
+3–0
+Type.3
+10–0
+Type.5
+13–0
+Type.5
+13–0
+D Type.3 2
+48–0
+scale, E2LLM benefits from distributed pipeline execution,
+whereas the original llama.cpp cannot perform networked
+pipeline parallelism. The picture changes as the pipeline
+grows. With six devices and 18 slots (first decoder replica,
+Table VIII.d), SPADE sustains 23.92 tokens/s, whereas E2LLM
+and llama.cpp achieve only 5.02 and 6.29 tokens/s, respec-
+tively. The reason is communication contention. In E2LLM,
+every stage exchanges activations through a central node,
+forcing multiple pipeline stages to compete for the same
+uplink and downlink bandwidth. As additional stages are
+added, communication becomes the dominant bottleneck and
+eventually outweighs the benefit of pipeline parallelism itself,
+causing E2LLM to perform even worse than the original
+llama.cpp. In contrast, the P2P ring distributes traffic across
+devices and avoids concentrating on a single node, allowing
+throughput to scale more gracefully with pipeline depth.
+G. Limitations of SPADE
+As mentioned, SPADE predicts Prefill throughput accurately
+for individual operating points, but the throughput of an aver-
+age request is not necessarily equal to the average throughput
+across requests. Consequently, workloads represented only by
+average input lengths can introduce high prediction error when
+request lengths exhibit high variance. In addition, SPADE
+targets static deployment planning. The optimizer assumes a
+fixed workload characterization, arrival rate, and fleet compo-
+sition during planning. Dynamic adaptations such as online
+role reassignment, replica migration, or re-optimization under
+changing arrival rates and request sizes are complementary to
+our work and remain future directions. Finally, the extension
+of dominance to descendant replicas is supported empirically
+rather than proven lossless in general. Exhaustive ones produce
+identical survivor sets, Pareto frontiers, and final placements
+wherever verification remains computationally affordable, but
+a general proof remains open.
+
+
+--- Page 11 ---
+V. CONCLUSION
+We presented SPADE, a tractable and scalable placement
+planner for heterogeneous edge fleets. SPADE models disag-
+gregated Prefill/Decode serving as a queueing system and opti-
+mizes congestion directly. To make the optimization tractable,
+it combines pruning with a water-filling formulation for layer
+partitioning, pruning up to 99.6% of candidates while pre-
+serving the same survivor set as exhaustive ones. Combined
+with water filling, SPADE reaches the verified optimum in
+hundreds of milliseconds on a 30-device fleet, whereas heuris-
+tic searches remain substantially below optimum even after
+seconds to hours of execution. These results suggest that
+optimal queueing-aware placement for heterogeneous edge
+serving is tractable at fleet scale.
+ACKNOWLEDGMENT
+This work was supported in part by the Norwegian Research
+Council under Grant 322473 (AirQMan project) and the Eu-
+ropean Commission under Grant 101086541 (MISO project).
+REFERENCES
+[1]
+Zhixiong Chen et al. “Network edge inference for large
+language models: Principles, techniques, and oppor-
+tunities”. In: ACM Computing Surveys 58.12 (2026),
+pp. 1–35. DOI: 10.1145/3809166.
+[2]
+Biwei Yan et al. “On protecting the data privacy of
+Large Language Models (LLMs) and LLM agents: A
+literature review”. In: High-Confidence Computing 5.2
+(2025), p. 100300. DOI: 10.1016/j.hcc.2025.100300.
+[3]
+Zonghang Li et al. “Prima. cpp: Fast 30-70b LLM
+inference on heterogeneous and low-resource home
+clusters”. In: International Conference on Learning
+Representations. Vol. 2026. 2026, pp. 144376–144413.
+[4]
+Chris Tong et al. “Parallax: Efficient llm inference ser-
+vice over decentralized environment”. In: arXiv preprint
+arXiv:2509.26182 (2025). DOI: 10.48550/arXiv.2509.
+26182.
+[5]
+Mingyu Sun et al. “Collaborative Lossless LLM
+Inference
+Serving
+with
+Offloading-based
+Pipeline
+Parallelism on Edge Devices”. In: arXiv preprint
+arXiv:2512.21835 (2025). DOI: 10.48550/arXiv.2512.
+21835.
+[6]
+Yixuan Mei et al. “Helix: Serving large language mod-
+els over heterogeneous gpus and network via max-
+flow”. In: Proceedings of the 30th ACM International
+Conference on Architectural Support for Programming
+Languages and Operating Systems, Volume 1. 2025,
+pp. 586–602. DOI: 10.1145/3669940.3707215.
+[7]
+Juntao Zhao et al. “POSTER: LLM-PQ: Serving LLM
+on heterogeneous clusters with phase-aware partition
+and adaptive quantization”. In: Proceedings of the 29th
+ACM SIGPLAN Annual Symposium on Principles and
+Practice of Parallel Programming. 2024, pp. 460–462.
+DOI: 10.1145/3627535.3638480.
+[8]
+Yixuan Mei et al. “Coral: Cost-Efficient Multi-LLM
+Serving over Heterogeneous Cloud GPUs”. In: arXiv
+preprint arXiv:2605.04357 (2026). DOI: 10 . 48550 /
+arXiv.2605.04357.
+[9]
+Truong-Thanh Le et al. “E2LLM: Towards Efficient
+LLM Serving in Heterogeneous Edge/Fog Environ-
+ments”. In: arXiv preprint arXiv:2606.03770 (2026).
+DOI: 10.48550/arXiv.2606.03770.
+[10]
+Yang Hu et al. “Pipeedge: Pipeline parallelism for large-
+scale model inference on heterogeneous edge devices”.
+In: 2022 25th Euromicro Conference on Digital System
+Design (DSD). IEEE. 2022, pp. 298–307. DOI: 10.1109/
+DSD57027.2022.00048.
+[11]
+Mingjin Zhang et al. “Edgeshard: Efficient llm inference
+via collaborative edge computing”. In: IEEE Internet of
+Things Journal 12.10 (2024), pp. 13119–13131. DOI:
+10.1109/JIOT.2024.3524255.
+[12]
+Truong Thanh Le et al. “Optimal Distribution of ML
+Models Over Edge for Applications with High Input
+Frequency”. In: 2024 IEEE International Conference
+on Cloud Computing Technology and Science (Cloud-
+Com). IEEE. 2024, pp. 143–150.
+DOI: 10 . 1109 /
+CloudCom62794.2024.00033.
+[13]
+Pratyush Patel et al. “Splitwise: Efficient generative llm
+inference using phase splitting”. In: 2024 ACM/IEEE
+51st Annual International Symposium on Computer
+Architecture (ISCA). IEEE. 2024, pp. 118–132. DOI:
+10.1109/ISCA59077.2024.00019.
+[14]
+Yinmin Zhong et al. “{DistServe}: Disaggregating pre-
+fill and decoding for goodput-optimized large language
+model serving”. In: 18th USENIX symposium on op-
+erating systems design and implementation (OSDI 24).
+2024, pp. 193–210.
+[15]
+Shrikara Arun et al. “Towards Load-Aware Prefill De-
+flection for Disaggregated LLM Serving”. In: arXiv
+preprint arXiv:2607.02043 (2026). DOI: 10 . 48550 /
+arXiv.2607.02043.
+[16]
+Youhe Jiang, Ran Yan, and Binhang Yuan. “Hexgen-2:
+Disaggregated generative inference of llms in hetero-
+geneous environment”. In: International Conference on
+Learning Representations. Vol. 2025. 2025, pp. 3985–
+4002.
+[17]
+Youhe Jiang et al. “Thunderserve: High-performance
+and cost-efficient llm serving in cloud environments”.
+In: Proceedings of Machine Learning and Systems 7
+(2025).
+[18]
+Youhe Jiang et al. “HEXGEN: generative inference
+of large language model over heterogeneous environ-
+ment”. In: Proceedings of the 41st International Confer-
+ence on Machine Learning. ICML’24. Vienna, Austria:
+JMLR.org, 2024.
+[19]
+Youhe Jiang et al. “HexGen-3: A Fully Disaggregated
+LLM Serving Framework with Fine-Grained Heteroge-
+neous Resource Autoscaling”. In: Forty-third Interna-
+tional Conference on Machine Learning.
+
+
+--- Page 12 ---
+[20]
+Luchang Li et al. “SLO-Aware Compute Resource
+Allocation for Prefill-Decode Disaggregated LLM In-
+ference”. In: arXiv preprint arXiv:2603.04716 (2026).
+DOI: 10.48550/arXiv.2603.04716.
+[21]
+Zeyu Zhang and Haiying Shen. “PEACE: Preemp-
+tive and Efficient Cluster Scheduling for LLM Infer-
+ence with Mixed Prompts”. In: 2026 IEEE Interna-
+tional Parallel and Distributed Processing Symposium
+(IPDPS). IEEE. 2026, pp. 1272–1286. DOI: 10.1109/
+IPDPS65963.2026.00105.
+[22]
+Jiakun Fan et al. “APEX: Asynchronous Parallel CPU-
+GPU Execution for Online LLM Inference on Con-
+strained GPUs”. In: 2026 IEEE International Parallel
+and Distributed Processing Symposium (IPDPS). IEEE.
+2026, pp. 1190–1203. DOI: 10.1109/IPDPS65963.2026.
+00099.
+[23]
+Hans Kellerer, Ulrich Pferschy, and David Pisinger.
+“Multidimensional knapsack problems”. In: Knapsack
+problems. Springer, 2004, pp. 235–283.
+[24]
+DeepSeek-AI. DeepSeek-R1: Incentivizing Reasoning
+Capability in LLMs via Reinforcement Learning. 2025.
+arXiv: 2501.12948 [cs.CL]. URL: https://arxiv.org/
+abs/2501.12948.
+[25]
+Qwen Team. Qwen3 Technical Report. 2025. arXiv:
+2505 . 09388 [cs.CL]. URL: https: //arxiv. org/abs /
+2505.09388.
+[26]
+Ling Zhan et al. “LongReason: A Synthetic Long-
+Context Reasoning Benchmark via Context Expansion”.
+In: arXiv preprint arXiv:2501.15089 (2024).
+[27]
+chillies. DPO ielts writing. Hugging Face. 2024. URL:
+https : / / huggingface . co / datasets / chillies / DPO ielts
+writing (visited on 07/08/2026).
+[28]
+Marc Brysbaert. “How many words do we read per
+minute? A review and meta-analysis of reading rate”.
+In: Journal of memory and language (2019).

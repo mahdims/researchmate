@@ -1,0 +1,908 @@
+--- Page 1 ---
+1
+Beyond LLM-GA: Secure Fluid Antenna Systems with
+ReEvo-Designed Memetic Algorithm
+Hanyong Xu, Zhaolai Dang, and Tong Zhang
+Abstract—Fluid antenna systems (FASs) offer significant spa-
+tial flexibility, yet securing them against eavesdropping is critical
+for practical FAS deployment in military, satellite, and internet-
+of-things networks. Although large language model (LLM)-
+assisted genetic algorithms (LLM-GAs) can address this secure
+FAS port selection problem, whether further algorithmic im-
+provement is possible warrants deeper investigation. To this end,
+we propose a memetic algorithm based on reflective evolution
+(ReEvo). Unlike the state-of-the-art LLM-GAs, which design only
+crossover or mutation operators with an LLM, our algorithm
+leverages an LLM to evolve dedicated crossover, mutation,
+and local search operators offline. These operators are then
+embedded into a memetic search framework, thereby obviating
+any online LLM queries during execution. Simulation results at
+equal generation counts demonstrate that our proposed algorithm
+achieves a higher secure sum-rate than the conventional GA and
+the state-of-the-art LLM-GAs.
+Index Terms—Fluid antenna system, large language model,
+memetic algorithm, physical-layer security.
+I. INTRODUCTION
+The ever-increasing demand for high data rates and massive
+connectivity in next-generation wireless networks calls for new
+degrees of freedom to enhance spectral efficiency and link
+reliability. To this end, fluid antenna systems (FASs) enable
+antenna port selection over a dense aperture, improving signal
+strength, interference suppression, and spatial diversity without
+extra radio frequency (RF) chains [1]–[3]. Unfortunately, joint
+port selection and beamforming, if optimally designed, holds
+the key to fully unlocking the potential of FAS, yet it poses
+a mixed-integer nonconvex problem that is computationally
+challenging [4]–[6].
+Securing FAS wireless communications against passive
+eavesdropping poses a distinct and formidable challenge. This,
+combined with the need to jointly optimize discrete port
+selections and continuous beamforming vectors, significantly
+complicates the design, as the secrecy objective is nonconvex
+and intricately coupled with multiuser interference and power
+limitations. Analytical studies characterize secrecy capacity,
+outage probability, and the impact of spatial channel asymme-
+try between legitimate users and eavesdroppers [7] and [8].
+Recent works jointly optimize beamforming and antenna po-
+sitions in FAS-aided non-orthogonal multiple access (NOMA)
+This work was supported in part by the National Natural Science Foundation
+of China under Grant 62401229.
+H. Xu and Z. Dang are with the School of Information, Harbin Institute
+of Technology, Shenzhen, Shenzhen 518055, China (e-mail: {2025311252,
+2025310700}@stu.hit.edu.cn).
+T. Zhang is with Guangdong Provincial Key Laboratory of Aerospace
+Communication and Networking Technology, Harbin Institute of Technology,
+Shenzhen, 518055, China (e-mail: tongzhang@hit.edu.cn).
+Code is available at https://github.com/Xuhanyong/secure-fas-llmga.
+TABLE I
+COMPARISON OF THE LLM-DESIGNED OPERATORS IN [13], [14], AND
+THE PROPOSED ALGORITHM.
+Operator class
+Ref. [13]
+Ref. [14]
+Proposed
+(crossover only)
+(mutation only)
+(memetic)
+LLM-Designed
+Mutation
+No
+Yes
+Yes
+LLM-Designed
+Crossover
+Yes
+No
+Yes
+LLM-Designed
+Local Search
+No
+No
+Yes
+systems [9], or use penalty and majorization–minimization
+procedures for secure and covert links [10]. However, none of
+the above works has fully addressed the secure port selection
+problem.
+Large language models (LLMs) have recently been used to
+address the port selection/antenna position selection problem
+[11]–[14]. In particular, Wang et al. [13] applied reflective
+evolution (ReEvo) [15] to a binary-genetic algorithm (GA)
+crossover for power minimization. Their crossover uses popu-
+lation fitness, elite-port frequencies, and port co-occurrences,
+with conventional selection, mutation, elitism, and repair. The
+learned crossover is generated offline, has no explicit local
+search stage, and is not evaluated with a secrecy objective.
+In addition, Zheng et al. [14] proposed an efficient LLM-GA
+algorithm, which combines a frequency-based crossover with
+an LLM-designed one-port mutation. Its exchange probability
+and displacement range are prescribed, after which standard
+GA selection, elitism, and repair are applied, and the target is
+nonsecure multiuser performance such as max-min signal-to-
+interference-plus-noise ratio (SINR). Note that [13] learns only
+the crossover operator, whereas [14] learns only the mutation
+operator. Port prediction has also been investigated in [16].
+In this paper, we propose a ReEvo-designed memetic algo-
+rithm for secure port selection in multiuser downlink FASs that
+outperforms state-of-the-art LLM-GAs in terms of secure sum-
+rate, building on the celebrated memetic algorithm [17], which
+outperforms the conventional GA by adding a local search
+operator. Each candidate port subset is scored by its achievable
+secure sum-rate, computed via a secure weighted minimum
+mean-square error (WMMSE) beamforming procedure. Under
+this secrecy-driven fitness, ReEvo successively evolves three
+complementary operators offline, namely crossover, mutation,
+and local search. The learned crossover exploits elite-port
+statistics and grid topology, the learned mutation performs
+feasible one-in-one-out swaps at both local and global scales,
+and the learned local search operator generates four comple-
+mentary one-swap neighbors per offspring. All three operators
+are frozen after offline evolution and embedded into a memetic
+arXiv:2610.10235v3  [cs.IT]  14 Nov 2026
+
+
+--- Page 2 ---
+2
+search framework, requiring no LLM queries during online
+execution. Table I contrasts the LLM-designed operators of
+[13] and [14] with those of the proposed algorithm, whereas
+unlike prior LLM-GAs that design only crossover or mutation
+operators without security consideration, our algorithm ac-
+counts for eavesdropper leakage and performs local refinement
+under a secrecy-aware fitness. Simulation results demonstrate
+that our proposed algorithm achieves a higher secure sum-rate
+than the conventional GA and the state-of-the-art LLM-GAs.
+II. SYSTEM MODEL AND PROBLEM FORMULATION
+A. System Model
+We consider a multiuser downlink FAS in which a base
+station (BS) serves K single-antenna users in the presence of
+a passive single-antenna eavesdropper. Let K ≜{1, . . . , K}
+denote the user index set. The BS has a rectangular FAS
+aperture of dimensions λWx × λWy, where λ = c/fc and
+Wx, Wy are normalized by the carrier wavelength. A uniform
+Nx ×Ny grid provides Ns = NxNy candidate ports, of which
+exactly ns are active.
+Let (nx,i, ny,i) denote the two-dimensional grid index of
+port i, where 1 ≤nx,i ≤Nx, 1 ≤ny,i ≤Ny, and i = ny,i +
+(nx,i −1)Ny. The physical distance between ports i and j is
+di,j =
+r
+nx,i−nx,j
+Nx−1
+λWx
+2
++
+
+ny,i−ny,j
+Ny−1
+λWy
+2
+. Consistent
+with the channel generator, define Ji,j = j0(2πdi,j/λ), where
+j0(x) = sin(x)/x and j0(0) = 1. The spatial correlation
+matrix is given by
+J =
+
+
+J1,1
+J1,2
+· · ·
+J1,Ns
+J2,1
+J2,2
+· · ·
+J2,Ns
+...
+...
+...
+...
+JNs,1
+JNs,2
+· · ·
+JNs,Ns
+
+∈RNs×Ns.
+(1)
+Because J is real and symmetric, write its eigendecompo-
+sition as J = UΛU T, where U is real and orthogonal.
+Let rk and re denote the BS-to-user and BS-to-eavesdropper
+distances, respectively. We model the large-scale fading by
+βk = β0(rk/r0)−α for k ∈K and βe = β0(re/r0)−α, where
+β0 is the reference gain at distance r0 and α is the path-loss
+exponent. The channel vector of user k ∈K is given by
+hH
+k =
+p
+βk gH
+k Λ1/2U T,
+k ∈K,
+(2)
+where gk ∼CN(0, INs) for k ∈K. The eavesdropper channel
+is given by
+hH
+e =
+p
+βe gH
+e Λ1/2U T
+(3)
+where ge ∼CN(0, INs). Independent Gaussian vectors are
+drawn for the users and the eavesdropper, and are mapped
+through the same correlation matrix. Hence, the links share
+spatial correlation but have independent small-scale fading.
+Shadowing is omitted. As an upper-bound benchmark, we
+assume that the BS has perfect instantaneous channel state
+information (CSI) for every link. Eavesdropper CSI may have
+been acquired while that terminal was previously active.
+Let ei denote the ith column of INs. When ns distinct ports
+with indices m1, . . . , mns are activated, their port selection
+matrix is defined as Ens ≜[em1, . . . , emns ] ∈RNs×ns. Each
+column of Ens selects one physical port, so feasibility requires
+Ens(:, ℓ) ∈{e1, . . . , eNs},
+ℓ= 1, . . . , ns.
+(4)
+and the selected ports must be distinct:
+Ens(:, ℓ)̸ = Ens(:, q),
+ℓ̸ = q.
+(5)
+Together, these constraints activate exactly ns distinct ports.
+Define the effective channel vectors ¯hk
+=
+EH
+nshk and
+¯he
+=
+EH
+nshe. Stacking the user channels gives
+¯
+H
+=
+[¯h1, . . . , ¯hK]H ∈CK×ns. The BS jointly designs the port
+selection matrix Ens and the beamforming matrix W
+=
+[w1, . . . , wK], where wk ∈Cns×1 is the beamformer for
+legitimate user k ∈K. Let xd = [x1, . . . , xK]T collect the
+unit-power data symbols, i.e., E[|xk|2] = 1. The transmitted
+signal is expressed as
+x = EnsW xd =
+X
+k∈K
+Enswkxk.
+(6)
+Because the columns of Ens are orthonormal, the transmit-
+power constraint becomes
+∥EnsW ∥2
+F = ∥W ∥2
+F =
+X
+k∈K
+∥wk∥2
+2 ≤Pmax.
+(7)
+The receiver noises satisfy nk
+∼CN(0, σ2
+k) and ne
+∼
+CN(0, σ2
+e). The input-output relationship is given by
+yk = hH
+k Enswkxk +
+X
+j̸=k
+hH
+k Enswjxj + nk,
+(8a)
+ye =
+X
+k∈K
+hH
+e Enswkxk + ne.
+(8b)
+Under single-user decoding, the eavesdropper treats all other
+streams as interference. The SINRs for user k and eavesdrop-
+per are given by
+γk =
+|hH
+k Enswk|2
+P
+j∈K\{k} |hH
+k Enswj|2 + σ2
+k
+,
+k ∈K,
+(9a)
+γe,k =
+|hH
+e Enswk|2
+P
+j∈K\{k} |hH
+e Enswj|2 + σ2e
+,
+k ∈K.
+(9b)
+Accordingly, the achievable secure rate of user k is
+Rs
+k = [log2(1 + γk) −log2(1 + γe,k)]+ ,
+k ∈K,
+(10)
+following the standard wiretap-rate construction [18].
+B. Joint Secure Port Selection and Beamforming Problem
+Mathematically, the joint secure port selection and beam-
+forming problem for the multiuser downlink FAS is formulated
+as follows:
+P1 :
+max
+Ens, W
+X
+k∈K
+Rs
+k(Ens, W )
+s.t.
+(4), (5), and (7).
+Physically, selecting a port changes the sampled channels of
+every user and of the eavesdropper at the same time. Therefore,
+our aim is to select the ports that strengthen the desired links
+while suppressing multiuser interference and information leak-
+age, subject to the total transmit power. Because port selection
+
+
+--- Page 3 ---
+3
+LLM-Memetic (Proposed)
+Initialize
+Population
+Fitness
+Computation
+Terminate?
+Best
+Solution
+Yes
+No
+Selection
+LLM-Designed
+Crossover
+Evaluate
+Elitist Update
+LLM-Designed
+Local Search
+Evaluate
+Candidates
+Elitist Update
+Best
+Solution
+Yes
+No
+LLM-Designed
+Crossover
+Mutation
+Initialize
+Population
+Fitness
+Computation
+Terminate?
+LLM-Designed
+Mutation
+LLM-Designed
+Mutation
+[13]
+[14]
+LLM-Designed
+Local Search
+Evaluate
+Selection
+LLM-Designed
+Mutation
+Crossesover
+Fig. 1. Flowchart comparison of [13] and [14] with the proposed algorithm.
+creates a combinatorial discrete space and the secrecy sum-rate
+is nonlinear in the selection and beamforming variables, P1 is
+a nonlinear mixed-integer nonconvex program.
+III. REEVO-DESIGNED MEMETIC ALGORITHM
+To solve P1, we develop a ReEvo-designed memetic algo-
+rithm comprising an offline LLM-driven operator design stage
+and an online memetic search stage that requires no LLM
+application programming interface (API) calls. In the offline
+stage, ReEvo evolves three complementary discrete operators,
+i.e., crossover, mutation, and local search, under a secrecy-
+driven fitness evaluated via secure WMMSE beamforming. In
+the online stage, each candidate port subset generated by the
+frozen operators is scored via secure WMMSE beamforming,
+and the memetic search then evolves toward higher secure
+sum-rates without any LLM queries. Fig. 1 illustrates the
+overall architecture and highlights the distinction between our
+algorithm and prior LLM-GAs that design only a crossover
+operator [13] or only a mutation operator [14].
+A. Secure WMMSE Beamforming
+For a fixed Ens, we use a safeguarded WMMSE-based
+procedure [19]. Initialize V
+=
+¯
+HH( ¯
+H ¯
+HH + 10−6I)−1
+and W (0) = √PmaxV /∥V ∥F . With the scalar estimate
+ˆxk = u∗
+kyk at the current beamformer W (t), the user’s
+minimum mean-square error (MMSE) receiver, mean-square
+error (MSE), and weight are
+Tk =
+X
+j∈K
+|¯hH
+k wj|2 + σ2
+k,
+(11a)
+uk =
+¯hH
+k wk
+Tk
+,
+εk = 1 −|¯hH
+k wk|2
+Tk
+,
+(11b)
+qk = ε−1
+k .
+(11c)
+When the eavesdropper decodes stream k and treats the
+remaining streams as interference, its corresponding variables
+at the same W (t) are given by
+Te =
+X
+j∈K
+|¯hH
+e wj|2 + σ2
+e,
+(12a)
+ue,k =
+¯hH
+e wk
+Te
+,
+εe,k = 1 −|¯hH
+e wk|2
+Te
+,
+(12b)
+qe,k = ε−1
+e,k.
+(12c)
+For an arbitrary receiver u, the MSE is ek(u, W ) = |u|2Tk
+−2 Re{u∗¯hH
+k wk} + 1, so ln(1 + γk) = maxu∈C,q>0{ln q −
+qek + 1} and −ln(1 + γe,k) = minu∈C,q>0{qee,k −ln q −1},
+attained at (11b)–(11c) and (12b)–(12c), respectively. The
+frozen auxiliary variables lower-bound the legitimate rate and
+upper-bound the negative eavesdropper rate. The two bounds
+do not combine, so the model below is only tangent to the
+unclipped rate difference at W (t) and its step need not improve
+the clipped objective. Monotonicity follows from the line
+search below. Omitting the common 1/ ln 2 factor and the W -
+independent constants gives
+f
+W = arg
+max
+∥W ∥2
+F ≤Pmax
+−tr(W HAW ) + 2 Re{tr(BHW )},
+(13)
+where
+A =
+X
+k∈K
+qk|uk|2¯hk¯hH
+k ,
+(14a)
+bk = qkuk¯hk + ce¯he¯hH
+e w(t)
+k
+−qe,kue,k¯he,
+(14b)
+ce =
+X
+j∈K
+qe,j|ue,j|2,
+B = [b1, . . . , bK].
+(14c)
+The term ce¯he¯hH
+e w(t)
+k
+in (14b) linearizes the leakage term
+tr(W HCeW ) of the surrogate, with Ce = ce¯he¯hH
+e ⪰0 con-
+vex in W : by convexity, wH
+k Cewk ≥2 Re{(w(t)
+k )HCewk}−
+(w(t)
+k )HCew(t)
+k , so replacing this term by its tangent at W (t)
+keeps (13) concave. Its Lagrangian stationarity condition is
+(A + µI)f
+W = B, and hence
+f
+W = (A + µI)−1B.
+(15)
+Because A ⪰0, the surrogate in (13) is concave, so the
+KKT conditions are sufficient: µ = 0 if the unconstrained max-
+imizer exists and is feasible. Otherwise the power constraint
+is active with the unique µ > 0 satisfying ∥f
+W ∥2
+F = Pmax.
+A singular A may prevent the first case, in which the second
+case applies.
+A backtracking line search on the segment W (η)
+=
+(1 −η)W (t) + η f
+W , η ∈(0, 1], evaluates P
+k∈K Rs
+k via
+(10). A negative per-user difference is clipped to zero while
+still causing interference, and all streams are retained in the
+unclipped model. The search accepts the largest nondecreasing
+step and keeps the incumbent otherwise. In exact arithmetic,
+monotone acceptance preserves feasibility and gives
+0 ≤
+X
+k∈K
+Rs
+k ≤
+X
+k
+log2
+
+1 + Pmax∥¯hk∥2
+2
+σ2
+k
+
+.
+
+
+--- Page 4 ---
+4
+Algorithm 1 Offline LLM operator design and API-free secure
+FAS optimization
+1: for q ∈{c, m, l} in order do
+2:
+Initialize program population Φq from seed and LLM
+code.
+3:
+while fewer than Neval programs have been evaluated
+do
+4:
+Evaluate training fitness Fq by secure WMMSE.
+5:
+Reflect on higher/lower-fitness code, generate pro-
+grams, and update Φq.
+6:
+end while
+7:
+Freeze the best program χ∗
+q by training fitness.
+8: end for
+9: Initialize P feasible chromosomes, then evaluate and
+cache their fitness and beamformers.
+10: for g = 1, . . . , G do
+11:
+Preserve E elites and select parents for P −E children.
+12:
+Apply χ∗
+c and χ∗
+m, then repair cardinality.
+13:
+Apply χ∗
+l to create four neighbors per child.
+14:
+Score uncached candidates by secure WMMSE.
+15:
+Retain the best P −E candidates with the E elites.
+16: end for
+17: return Best chromosome and its cached beamformer.
+Thus exact monotone objective values converge if continued
+indefinitely, but this is not a beamformer or stationary-point
+convergence guarantee.
+B. ReEvo-Designed Memetic Port Search
+We encode a port subset as a binary chromosome s ∈
+{0, 1}Ns satisfying 1Ts = ns. Following [15], the LLM acts
+as a hyper-heuristic. Let Q = {c, m, l} denote the crossover,
+mutation, and local search operator classes, respectively. The
+DeepSeek reasoning model evolves each class separately. For
+class q, each program χq is an individual in population Φq.
+Let Sq(χq) be the chromosomes visited by the inner memetic
+search that applies χq for class q with the other operators fixed,
+on the training channels. The meta-fitness of χq is then
+Fq(χq) =
+max
+s∈Sq(χq)
+X
+k∈K
+Rs
+k(s).
+(16)
+Since (16) includes secure WMMSE optimization, programs
+are selected by the target secrecy objective rather than a
+surrogate port score.
+Crossover combines two parents using population fitness
+and ranks, mutation performs a one-in–one-out swap, and
+local search generates four neighbors: nearby, long-distance,
+same-row/column, and crowded-to-sparse relocation. Returned
+chromosomes are repaired to contain exactly ns active ports,
+and invalid programs are discarded. All evaluations share
+the same training channels, beamformer initialization, and
+stopping rule.
+Algorithm 1 summarizes the procedure, in which crossover
+is trained with conventional mutation and no local search,
+mutation with the crossover fixed, and local search with both
+fixed. For each class, the program with the best training
+fitness is then checked on separate validation channels, and
+the three chosen programs are frozen. In the online stage, the
+1
+2
+3
+4
+5
+Total transmit power, Pmax (W)
+10
+12
+14
+16
+18
+20
+22
+24
+Secure sum-rate (bit/s/Hz)
+GA
+LLM-GA-Crossover [13]
+LLM-GA-Mutation [14]
+Proposed
+Fig. 2. Mean secure sum-rate versus total transmit power when testing.
+TABLE II
+SIMULATION PARAMETERS.
+Parameter
+Setting
+Grid / aperture
+20 × 20 / 0.5 × 0.5 m2
+Carrier frequency
+3.4 GHz
+Users / eavesdropper
+K = 10 / 1
+Active ports
+ns = 10
+Distances / path loss
+rk = re = r0, βk = βe = 1
+Noise variance
+σ2
+k = σ2
+e = 1 (normalized)
+Transmit power
+Pmax ∈{1, 2, 3, 4, 5} W
+Population / elites
+P = 20 / E = 4
+Offspring / generations
+16 / 100
+Mutation probability
+0.2
+Operator train / validation
+10 / 20 disjoint channels
+Test channels / random seeds
+20 paired / 20 seeds
+LLM / programs
+DeepSeek / 10-program population
+frozen operators generate offspring and local search neighbors,
+repeated chromosomes are scored once by secure WMMSE
+beamforming, and elitist replacement keeps the E elites and
+the best P −E candidates.
+IV. SIMULATIONS
+Table II summarizes the simulation parameters. The power
+sweep uses normalized gains βk = βe = 1 and noise variances
+σ2
+k = σ2
+e = 1, i.e., rk = re = r0, β0 = 1, and the path-loss
+exponent cancels. Each realization includes all K = 10 user
+channels and one eavesdropper channel. All methods share
+test channels, initial populations, and random seeds at each
+power. Offline ReEvo uses the DeepSeek reasoning model with
+a 10-program population. Fitness uses 10 training channels,
+and selected programs are checked on 20 disjoint validation
+channels. Operator design uses 20 training and 50 validation
+generations at Pmax = 2.5 W. Once three operators are
+designed, testing uses 20 separate channels and 20 random
+seeds. The online algorithm uses frozen code, with no neural-
+network training and no LLM calls.
+Throughout, the total secure rate is summed over users and
+averaged over test channels, never divided by K. The same
+test channels are reused across all total transmit power levels.
+The error bars show how much the secure sum-rate varies
+across the 20 test channels, i.e., one standard deviation of the
+20 per-channel values.
+Fig. 2 shows that the secure sum-rate of all four algorithms
+increases as Pmax grows from 1 to 5 W when testing, with
+the proposed algorithm remaining the highest at every point.
+
+
+--- Page 5 ---
+5
+0
+20
+40
+60
+80
+100
+Iteration
+8.5
+9.0
+9.5
+10.0
+10.5
+11.0
+11.5
+Secure sum-rate (bit/s/Hz)
+GA
+LLM-GA-Crossover [13]
+LLM-GA-Mutation [14]
+Proposed
+(a) 1.0 W
+0
+20
+40
+60
+80
+100
+Iteration
+12
+13
+14
+15
+16
+Secure sum-rate (bit/s/Hz)
+GA
+LLM-GA-Crossover [13]
+LLM-GA-Mutation [14]
+Proposed
+(b) 2.0 W
+0
+20
+40
+60
+80
+100
+Iteration
+14
+15
+16
+17
+18
+19
+Secure sum-rate (bit/s/Hz)
+GA
+LLM-GA-Crossover [13]
+LLM-GA-Mutation [14]
+Proposed
+(c) 3.0 W
+0
+20
+40
+60
+80
+100
+Iteration
+16
+17
+18
+19
+20
+21
+22
+Secure sum-rate (bit/s/Hz)
+GA
+LLM-GA-Crossover [13]
+LLM-GA-Mutation [14]
+Proposed
+(d) 4.0 W
+0
+20
+40
+60
+80
+100
+Iteration
+18
+19
+20
+21
+22
+23
+24
+Secure sum-rate (bit/s/Hz)
+GA
+LLM-GA-Crossover [13]
+LLM-GA-Mutation [14]
+Proposed
+(e) 5.0 W
+Fig. 3. Secure sum-rate convergence for five total transmit power levels when testing.
+At 1 W, it achieves 11.423 bit/s/Hz, corresponding to gains
+of 7.6%, approximately 6%, and approximately 4% over
+GA, LLM-GA-crossover [13], and LLM-GA-mutation [14],
+respectively. At 5 W, it achieves 23.611 bit/s/Hz, yielding gains
+of 8.2%, approximately 5%, and approximately 4% over the
+same three baselines. The two LLM-GA baselines consistently
+lie between GA and the proposed algorithm, with visibly
+overlapping error bars at some operating points. A possible
+explanation is that elite-aware recombination preserves useful
+spatial patterns, while local and global exchanges explore the
+tradeoffs among signal strength, interference, and leakage.
+This ordering holds at equal generation counts, though the ad-
+ditional local search evaluations may particularly account for
+the gains obtained by the proposed algorithm. Each operating
+point in Fig. 2 is the generation-100 value of the corresponding
+curve in Fig. 3.
+Fig. 3 shows secure sum-rate convergence over 100 gen-
+erations (iterations) when testing. The proposed algorithm
+separates from the baselines early and stays ahead in all
+five power panels, while all curves gradually flatten as the
+populations approach stable incumbents. The terminal values
+at generation 100 correspond to the respective operating-point
+results summarized in Fig. 2, linking the convergence endpoint
+to the power-sweep comparison. Local search evaluates addi-
+tional one-swap neighbors, so these curves do not establish
+faster convergence in runtime or evaluation count.
+V. CONCLUSION
+This paper presented a ReEvo-designed memetic algorithm
+for joint port selection and secure beamforming in multiuser
+fluid antenna systems. An LLM evolves dedicated crossover,
+mutation, and local search operators offline under a secrecy-
+driven fitness, and the frozen programs incur no online LLM-
+query overhead. For each candidate port configuration, the
+beamformer is optimized by secure WMMSE.
+Across the tested total transmit power levels, the proposed
+method consistently obtains the highest mean secure sum-rate
+among the conventional GA and both LLM-GA baselines, with
+gains that remain visible from low to high transmit power.
+These results indicate that evolving all three discrete search
+operators offline can outperform LLM-GAs that design only
+a single operator. Extending the framework to imperfect or
+delayed CSI and to more general multiuser and multi-antenna
+scenarios is left as future work.
+REFERENCES
+[1] W. K. New et al., “A tutorial on fluid antenna system for 6G networks:
+Encompassing communication theory, optimization methods and hard-
+ware designs,” IEEE Commun. Surveys Tuts., vol. 27, no. 4, pp. 2325–
+2377, Aug. 2025.
+[2] J. Peng, Y. Wan, T. Zhang, and S. Wang, “Fluid antenna-assisted
+edge Gaussian splatting using grey wolf algorithm,” in Proc. 2nd Asia
+Conf. Commun. 6G (ACC6G), Shenzhen, China, 2026, pp. 45–50,
+doi: 10.1109/ACC6G70208.2026.11605699.
+[3] J. Peng, T. Zhang, S. Wang, M. Shao, H. Xu, and R. Wang, “Group
+relative policy optimization for robust blind interference alignment with
+fluid antennas,” in Proc. IEEE Int. Conf. Commun. (ICC), Glasgow,
+U.K., May 2026, pp. 1–6.
+[4] Q. Zhang, M. Shao, T. Zhang et al., “An efficient sum-rate maximization
+algorithm for fluid antenna-assisted ISAC system,” IEEE Commun. Lett.,
+vol. 29, no. 1, pp. 200–204, 2025.
+[5] T. Zhang et al., “Indoor fluid antenna systems enabled by layout-specific
+modeling and group relative policy optimization,” IEEE Trans. Wireless
+Commun., vol. 25, pp. 9313–9329, 2026.
+[6] W. Wang, T. Zhang, H. Xu, S. Wang, R. Wang, and K.-K. Wong, “MA-
+GRPO: Accelerated MARL training for fluid antenna-assisted wireless
+network optimization,” arXiv:2604.17379, 2026.
+[7] Y. Zou, J. Zhu, X. Wang, and L. Hanzo, “A survey on wireless security:
+Technical challenges, recent advances, and future trends,” Proc. IEEE,
+vol. 104, no. 9, pp. 1727–1765, Sep. 2016.
+[8] F. R. Ghadi, K.-K. Wong, F. J. Lopez-Martinez, W. K. New, H. Xu, and
+C.-B. Chae, “Physical layer security over fluid antenna systems: Secrecy
+performance analysis,” IEEE Trans. Wireless Commun., vol. 23, no. 12,
+pp. 18201–18213, Dec. 2024.
+[9] L. Mai, J. Yao, J. Tang, T. Wu, K.-K. Wong, H. Shin, and F. Adachi,
+“A secure beamforming design: When fluid antenna meets NOMA,”
+arXiv:2411.08386, 2024.
+[10] J. Yao, L. Xin, T. Wu, M. Jin, K.-K. Wong, C. Yuen, and H. Shin, “FAS
+for secure and covert communications,” IEEE Internet Things J., vol. 12,
+no. 11, pp. 18414–18418, Jun. 2025.
+[11] C. Wang, K.-K. Wong, Z. Li, L. Jin, and C.-B. Chae, “Large language
+model empowered design of fluid antenna systems: Challenges, frame-
+works, and case studies for 6G,” IEEE Wireless Commun., vol. 33, no. 2,
+pp. 117–125, Apr. 2026.
+[12] T. Deng, Y. Gao, T. Zhang, M. Shao, W. Ni, and H. Xu, “Integrating
+large language models into fluid antenna systems: A survey,” Sensors,
+vol. 25, no. 16, Art. no. 5177, Aug. 2025.
+[13] C. Wang, B. Zhang, Z. Li, K.-K. Wong, H. Xu, G. Zheng, and C.-
+B. Chae, “LLM-driven design for fluid antenna systems,” IEEE Wireless
+Commun. Lett., vol. 15, pp. 1065–1069, 2026.
+[14] G. Zheng, F. Liu, and Q. Zhang, “LLM-enabled automated algorithm de-
+sign for multiuser fluid antenna communications,” IEEE Trans. Wireless
+Commun., vol. 25, pp. 18811–18823, 2026.
+[15] H. Ye et al., “ReEvo: Large language models as hyper-heuristics with
+reflective evolution,” in Proc. Adv. Neural Inf. Process. Syst., 2024,
+pp. 1–14.
+[16] Y. Zhang, H. Yin, W. Li, E. Bjornson, and M. Debbah, “Port-LLM:
+A port prediction method for fluid antenna based on large language
+models,” IEEE Trans. Commun., vol. 73, no. 12, pp. 14534–14547,
+Dec. 2025.
+[17] P. Moscato, “Memetic algorithms: A short introduction,” in New Ideas
+in Optimization, D. Corne, M. Dorigo, and F. Glover, Eds. New York:
+McGraw-Hill, 1999, pp. 219–234.
+[18] A. D. Wyner, “The wire-tap channel,” Bell Syst. Tech. J., vol. 54, no. 8,
+pp. 1355–1387, Oct. 1975.
+[19] Q. Shi, E. Razaviyayn, Z.-Q. Luo, and C. He, “An iteratively weighted
+MMSE approach to distributed sum-utility maximization for a MIMO
+interfering channel,” IEEE Trans. Signal Process., vol. 59, no. 9,
+pp. 4331–4340, Sep. 2011.

@@ -1,0 +1,1989 @@
+--- Page 1 ---
+eFAIR: Fair LLM Serving under Hourly Electricity
+Commitments
+You Peng1∗, Youhe Jiang1∗, Chen Wang1, Binhang Yuan1
+1HKUST
+∗Equal contribution
+Abstract
+Datacenters can procure electricity in day-ahead markets by committing to energy purchases for
+individual hours. For LLM services operating within these hourly budgets, maximizing aggregate
+throughput alone may still leave individual requests waiting or receiving much slower service than
+desired. Fair serving therefore requires improving service for poorly served requests while reserving
+electricity for later arrivals whose timing and demand are unknown. To compare service across
+requests, we define normalized throughput as each request’s actual output rate divided by the
+product of its standalone throughput and its service entitlement, a positive weight representing its
+desired service level. Using this measure, we formulate fair serving as leximin optimization under
+an hourly electricity constraint, prioritizing requests with the lowest normalized throughput. To
+address this problem, we present eFAIR, an online scheduler that coordinates request dispatching,
+electricity budget allocation, and GPU frequency selection through a common normalized-throughput
+target. Specifically, request dispatching prioritizes requests by desired service level and progress;
+electricity budget allocation reserves electricity for current and expected future work; and fre-
+quency selection uses electricity savings to raise GPU frequencies for requests with higher desired
+service levels. Evaluations on H20 and H200 configurations, each with 32 replicas, show that
+eFAIR improves the tenth percentile of normalized throughput by 28.0%–31.0% over the best budget-
+feasible baseline, while keeping absolute deviations from the hourly electricity commitment below
+0.26%. eFAIR also improves throughput balance among concurrent requests and aligns electric-
+ity allocation more closely with service demand over time. Together, these results demonstrate
+how eFAIR improves request-level fairness within an hourly commitment.
+1
+Introduction
+Large language model (LLM) serving must distribute computing capacity among competing requests while
+controlling electricity consumption [30, 31]. In this paper, we ask: how can online LLM serving provide fair
+request throughput under hourly electricity commitments? This requires deciding both which requests to serve
+and when to spend the available electricity. This question involves three key aspects. (i) Online decisions:
+The scheduler learns about individual requests only when they arrive and must make service decisions without
+knowing future arrivals. (ii) Hourly electricity constraint: An hourly electricity commitment is an amount
+of electrical energy fixed before the hour; we treat this amount as an upper bound on the serving pool’s
+total consumption during that hour. Hourly procurement in day-ahead markets motivates this accounting
+period [4, 9, 27]. (iii) Fair request throughput: Fairness must account for differences in processing cost and
+desired service level. We measure a request’s throughput as the number of output tokens generated divided by
+the elapsed time from arrival, including waiting and execution. Its standalone throughput, i.e., the average
+1
+arXiv:2611.24119v1  [cs.DC]  18 Nov 2026
+
+
+--- Page 2 ---
+output rate when served alone under a fixed reference configuration, provides a baseline for comparison. In
+this paper, we define service entitlement as a positive weight that scales the desired throughput relative to this
+baseline. For requests with the same standalone throughput, an entitlement of 1.5 specifies a desired rate 1.5
+times that specified by an entitlement of 1; it does not guarantee that rate. We divide actual throughput by the
+product of standalone throughput and entitlement to obtain a normalized throughput score, making service
+comparable across requests with different baselines and weights. Subject to the hourly energy budget, our
+objective follows leximin fairness [17]: first maximize the lowest score, then the next lowest without reducing
+any previously maximized score, and continue in ascending order.
+Prioritizing the lowest normalized-throughput scores under an hourly electricity budget is essential because
+a system can satisfy its electricity constraint and achieve high aggregate throughput while still providing
+poor service to individual requests. A scheduler may process many tokens while leaving some requests
+waiting or serving them at rates far below those implied by their entitlements. With a fixed hourly budget,
+energy spent on requests already receiving ample service reduces the amount available to improve those
+with lower scores. Growing electricity demand from AI services strengthens the need to use available
+energy effectively [8, 29]. A request-level fairness objective makes the distribution of that service explicit,
+alongside total throughput and consumption.
+Two coupled difficulties prevent a straightforward allocation in our scenario. First, requests have different
+processing costs and entitlements, so equal compute or energy shares need not produce equal normalized
+throughput. Worker assignment, batch composition, and GPU frequency jointly determine both request
+progress and energy cost [7, 22]. Prioritizing a request therefore requires execution choices that can translate
+priority into a higher service rate. Second, the scheduler must allocate energy across arrival times without
+knowing when future requests will arrive. Spending uniformly can restrict service during bursts, whereas
+spending only on visible work can exhaust the budget before later arrivals. The scheduler must reserve energy
+for running iterations and expected future work, then release savings while they can still improve service.
+Existing serving systems are insufficient to address the coupled difficulties of fair service allocation among
+concurrent requests and electricity allocation under uncertain future arrivals. For example, vLLM improves
+serving throughput through efficient memory management and continuous batching [18]. Virtual Token
+Counter (VTC) balances cumulative client service using a configurable cost for processed tokens [30]. EcoInfer
+selects GPU frequencies to reduce energy consumption subject to latency objectives [7]. These mechanisms
+do not coordinate execution decisions based on individual requests’ normalized throughput with electricity
+reservations for later arrivals, leaving fair allocation across requests and time unresolved.
+We present eFAIR, an online scheduling heuristic that connects request priorities and electricity reservations
+through a common normalized-throughput target.
+For concurrent requests, eFAIR coordinates worker
+assignment, batching, and GPU frequency according to entitlement and service progress, translating service
+priorities into shorter waiting times and faster execution. Across arrival times, eFAIR adapts electricity
+allocation to observed demand and consumption, using electricity savings to improve current service while
+reserving electricity for expected later work. Our contributions are summarized as follows:
+Contribution 1: We formulate fair LLM serving as leximin optimization of normalized throughput under
+an hourly electricity constraint (§ 3). We identify three properties of fair serving: effective electricity use,
+balanced throughput among concurrent requests, and demand-aware electricity allocation. Together, the
+objective and properties connect request fairness to the use of committed electricity.
+Contribution 2: We develop eFAIR to coordinate service and electricity allocation (§ 4). REQUEST DISPATCHER
+prioritizes requests by entitlement and progress (§ 4.1); ELECTRICITY BUDGET ALLOCATOR maintains shared
+reservations (§ 4.2); FREQUENCY SELECTOR uses projected throughput to select execution configurations
+(§ 4.3). Together, these components direct the budget toward requests with weaker normalized service.
+Contribution 3: We evaluate constrained fairness and all three properties on H20 and H200 configurations
+with 32 replicas each (§ 5). eFAIR improves the tenth percentile of normalized throughput by 28.0%–31.0%
+over the best budget-feasible baseline, with absolute consumption deviations below 0.26%. eFAIR also im-
+proves concurrent throughput balance and reduces the mismatch between demand and electricity consumption.
+2
+
+
+--- Page 3 ---
+2
+Background and Related Work
+We review three areas, starting with LLM systems that schedule requests and control inference costs (§ 2.1).
+We then discuss fairness based on resource shares and application performance in networks and training
+clusters (§ 2.2). Finally, we review electricity procurement and workload scheduling over time (§ 2.3). This
+progression connects request processing, capacity sharing, and electricity consumption.
+2.1
+LLM Serving Systems
+Continuous batching and KV-cache management. LLM serving systems improve GPU utilization by process-
+ing multiple requests together. Prefill processes the prompt, while decoding generates output tokens using
+the key and value (KV) cache. Orca schedules requests at iteration boundaries, allowing completed requests
+to leave and new requests to enter a running batch [36]. vLLM reduces KV-cache fragmentation through
+PagedAttention, and Sarathi-Serve uses chunked prefill to limit interference with decoding [1, 18]. These
+mechanisms improve serving capacity while controlling batching latency.
+Request placement and preemption. Request placement and preemption determine how that capac-
+ity translates into response times. DistServe and Splitwise separate prefill and decoding across resources
+to accommodate the different requirements of the two phases [23, 37]. Llumnix migrates requests for
+load balancing and differentiated service, while FastServe uses iteration-level preemption to reduce re-
+quest completion time [32, 35]. These systems manage where and when requests run to improve latency
+under shared capacity [11, 13, 14, 24, 25, 33].
+Token-based client service accounting. Client service counters guide admission when multiple clients com-
+pete for batch capacity. Virtual Token Counter (VTC) measures cumulative client service using a configurable
+cost for processed input and output tokens [30]. VTC uses these counters to select requests for admission
+to continuous batches and bounds service differences between backlogged clients. The weighted extension
+accounts for client entitlements by normalizing each client’s accumulated service by its assigned weight.
+GPU provisioning and frequency scaling. Inference systems adjust GPU capacity and operating frequency
+to satisfy power and performance requirements. POLCA exploits measured inference power patterns to
+support power oversubscription [22]. DynamoLLM adjusts instance count, model parallelism, and GPU
+frequency to reduce energy and cost subject to latency objectives [31]. EcoInfer predicts iteration latency
+and selects energy-efficient GPU frequencies under latency constraints [7]. These approaches connect serving
+configurations to power capacity and energy consumption [26].
+2.2
+Fair Resource Allocation
+Network bandwidth sharing. Network bandwidth is divided among competing flows according to their
+service shares. Classical fair queueing and Start-Time Fair Queueing regulate service to backlogged flows, with
+weights specifying relative shares [3, 6]. Max-min fairness increases the smallest allocation first, subject to
+capacity constraints [10]. Under weighted allocation, service is compared after division by the assigned weight.
+The choice of service quantity and weights therefore determines which recipients are considered underserved.
+Resource shares and job performance. Cluster allocation extends weighted sharing to multiple resource
+types and application-dependent performance. Dominant Resource Fairness compares users by their largest
+share of any resource type [5]. For GPU training jobs, Themis introduces finish-time fairness, while Gavel ex-
+presses scheduling policies through effective throughput on heterogeneous accelerators [19, 21]. These
+approaches distinguish resource shares from application performance, since equal resource shares can
+produce different progress rates.
+2.3
+Datacenter Electricity Management
+Hourly electricity procurement. Electricity markets organize purchases and scheduled consumption over
+specified periods. PJM’s day-ahead market uses hourly prices, while hourly clean electricity matching aligns
+procurement with consumption in corresponding periods [27, 34]. Electrical energy, measured in joules or
+kilowatt-hours, is the integral of power over time; a power limit constrains instantaneous power draw in watts.
+3
+
+
+--- Page 4 ---
+The distinction determines whether management must limit instantaneous demand or allocate consumption
+across a settlement period.
+Energy-proportional computing and workload shifting. Datacenter electricity demand depends on hardware
+utilization and when flexible workloads execute. Energy-proportional computing seeks to reduce power as
+utilization falls, addressing substantial consumption at low load [2]. Carbon-aware computing shifts flexible
+workloads using hourly capacity limits while preserving daily processing capacity [28]. Hardware efficiency
+determines consumption during and between tasks, while workload scheduling determines when these costs
+occur. Both affect the electricity required for a given workload.
+3
+Problem Formulation
+We formulate fair LLM serving as leximin optimization of normalized throughput under a fixed hourly elec-
+tricity commitment. § 3.1 first states the constrained scheduling problem and the information available during
+online serving. § 3.2 defines normalized throughput, its service target, and the measurement at the hour
+endpoint. § 3.3 then uses that target to set the commitment and combines the electricity constraint with the
+complete fairness objective. Finally, § 3.4 proposes three properties of desirable solutions.
+3.1
+Problem Overview
+Problem inputs. Online scheduling allocates service under a predetermined hourly electricity commitment as
+requests arrive. The problem inputs include the commitment Ch > 0 for hour h, a normalized-throughput
+target, and the associated demand estimate; § 3.3 explains how the target and demand estimate determine
+the commitment. Resource limits R specify the replica count, memory capacity, and batch limits, while F
+denotes the set of available GPU frequencies. Each request reveals a prompt and entitlement at arrival, while
+output progress and completion are observed during service. Scheduling decisions therefore use these inputs
+and the observed serving history without knowing future arrivals.
+Scheduling decisions and objective. The objective is to improve the weakest request service within the
+hourly electricity commitment. A scheduling policy π assigns arriving requests to workers and batches and
+selects a GPU frequency for each batch. Let Π denote the set of online policies that obey the serving pool’s
+resource limits, and Eh(π) the hourly electricity consumption under policy π. We next define request fairness
+(§ 3.2), then specify the electricity budget and complete objective (§ 3.3). At a high level, the commitment
+constrains feasible allocations, while fairness determines the preferred allocation:
+maximize
+π∈Π
+Fairness(π)
+subject to
+Eh(π) ≤Ch.
+(1)
+3.2
+Fair LLM Serving
+Fair LLM serving normalizes each request’s throughput by the product of its standalone throughput and
+entitlement, then prioritizes requests with the lowest normalized throughput. We first define this measure
+and its service target, then specify how to compare all requests at the hour endpoint.
+Normalized throughput. Normalized throughput accounts for both the effect of contention and the request’s
+service entitlement. Let Bi > 0 denote request i’s standalone throughput, the average output rate when
+request i is served alone under a fixed reference configuration. Let wi > 0 be the request’s entitlement, Ni the
+output token count, and ai, ci the arrival and completion times. For completed requests, actual and normalized
+throughput are
+Ti =
+Ni
+ci −ai
+,
+qi =
+Ti
+wiBi
+.
+(2)
+4
+
+
+--- Page 5 ---
+A
+w=1
+B
+w=1
+C
+w=1.5
+Standalone serving
+Bi (token/s)
+100
+50
+50
+Shared serving
+Ti (token/s)
+20
+20
+20
+Relative throughput
+Ti/Bi
+0.20
+0.40
+0.40
+With entitlement
+qi = Ti/(wiBi)
+0.20
+0.40
+0.27
+Figure 1 Normalization for three requests. Equal actual
+throughput of 20 tokens per second yields relative
+throughputs of 0.20, 0.40, and 0.40; dividing by
+entitlement gives normalized throughputs
+of 0.20, 0.40, and 0.27.
+Queueing, prefill, and decoding all count toward du-
+ration, so comparable qi values represent comparable
+service relative to standalone throughput and entitle-
+ment. Figure 1 shows why equal actual throughput can
+yield different normalized throughput. A common tar-
+get z > 0 specifies the desired normalized-throughput
+floor: qi ≥z means Ti ≥zwiBi, or at least zwi times
+the request’s standalone throughput. This interpretation
+connects protection of weak requests to the service de-
+mand used in commitment planning (§ 3.3) and guides
+online allocation.
+Hour-end normalized throughput. We assess all re-
+quests arriving in the hour at the common endpoint H.
+Let Ih be this request set, ni(H) the output produced
+by H, and τ H
+i
+the time from arrival to completion, or
+to H for an unfinished request. Observed normalized
+throughput is qH
+i
+=
+ni(H)
+wiBiτ H
+i , with zero output giving
+qH
+i = 0. The standalone throughput Bi remains fixed for each request across scheduling policies; the appendix
+specifies the endpoint rules. This measurement includes waiting and unfinished requests when comparing
+service within the hour. With request service defined, we next specify the electricity constraint and the resulting
+fairness objective.
+3.3
+Fair Serving under Electricity Commitments
+The hourly commitment bounds the electricity available for fair serving. We use the service target from § 3.2 to
+plan the budget, define consumption and commitment deviation, and combine these quantities with hour-end
+normalized throughput in the complete optimization problem.
+Setting the hourly commitment. The operator sets Ch from the expected workload, entitlement mix, and
+normalized-throughput target z from § 3.2. Historical workloads provide an estimate of the requests to
+be served; the electricity required to support their target rates zwiBi gives the aggregate service-electricity
+estimate bDh. Let ∆h be the hour duration and Pfloor the declared fixed operating power. The commitment
+is Ch = Pfloor∆h + bDh. The scheduler receives bDh with Ch to reserve electricity for later arrivals while serving
+current work; the appendix specifies the common demand-estimation rule. The commitment fixes the hourly
+electricity budget, while scheduling determines when electricity is spent and which requests receive service.
+Measuring commitment deviation. Commitment deviation compares total hourly consumption with the
+planned budget. Consumption Eh accounts for active execution, idle GPUs, and fixed operating costs. The
+signed deviation is δh = Eh−Ch
+Ch
+and the absolute deviation is dh = |δh|. Positive δh denotes overuse and
+negative δh denotes underuse; a policy is feasible in Equation 1 when Eh ≤Ch. This accounting determines
+budget feasibility and quantifies how closely consumption matches the commitment.
+Leximin objective. Within this budget, leximin fairness improves the weakest observed service first. Given the
+hourly electricity commitment Ch, normalized-throughput target z, associated demand estimate bDh, resource
+limits R, and frequency set F, let q↑
+h(π) contain the normalized throughputs qH
+i (π) for requests in Ih, sorted
+in nondecreasing order. With qH
+i defined in § 3.2 and Eh accounted for above, the complete problem is
+lexmax
+π∈Π(R,F)
+q↑
+h(π)
+subject to
+Eh(π) ≤Ch,
+qH
+i (π) =
+ni(H; π)
+wiBiτ H
+i (π),
+i ∈Ih.
+(3)
+Here Π(R, F) is the online policy set from § 3.1, restricted to the stated resource limits and frequencies.
+The leximin objective first maximizes Qmin = mini qH
+i , then the next lowest normalized throughput without
+5
+
+
+--- Page 6 ---
+reducing any previously maximized value, and continues through the sorted vector. Policies with the same
+minimum can therefore differ in the service received by the remaining weak requests. This objective defines
+the fairness goal; the following properties characterize desirable solutions under the commitment.
+3.4
+Properties of Fair Serving
+We propose three properties for assessing solutions to Equation 3. Effective electricity use concerns the
+service obtained from the budget, balanced throughput concerns sharing among concurrent requests, and
+demand-aware allocation concerns when electricity is spent. Together, these properties connect the hourly
+fairness objective to the allocation decisions made during service.
+Property 1: Effective electricity use.
+Effective electricity use means improving weak requests’ service
+through better scheduling and spending useful remaining budget on further service improvements. The
+commitment limits total consumption, so electricity saved by efficient execution creates opportunities to
+improve service for requests with low normalized throughput elsewhere in the hour. We assess this property
+using the observed frontier between the tenth percentile (P10) of qH
+i
+and absolute commitment deviation
+dh, and report Eh
+Ch to distinguish underuse from overuse. A higher P10 at no greater deviation, or a smaller
+deviation at no lower P10, represents more effective electricity use among the compared operating points.
+Property 2: Balanced throughput among concurrent requests. Balanced throughput means that competing
+requests receive comparable service after accounting for standalone throughput and entitlement. Concurrent
+requests share serving resources and electricity, so the throughput loss from contention should be shared
+according to entitlement. We identify competition by positive overlap of arrival-to-completion or arrival-
+to-cutoff intervals, including queueing, and measure rij =
+min(qH
+i ,qH
+j )
+max(qH
+i ,qH
+j ). Larger rij means closer normalized
+throughputs: the ratio equals one for equal positive values and zero when only one request produces
+output; pairs with two zero values are counted separately. These ratios quantify normalized-throughput
+balance among concurrent requests.
+Same hourly electricity Ch
+Fixed floor omitted
+Service demand: work and entitlement
+Uniform
+spending
+Interval share
+Demand
+spending
+0
+20
+40
+60
+Time within hour (minutes)
+Figure 2 Equal hourly electricity with uniform or
+demand-aware spending. Demand-aware expenditure
+assigns larger shares to intervals with more work or
+higher entitlements. The fixed operating floor is excluded
+from both profiles.
+Property 3: Demand-aware electricity allocation.
+Demand-aware allocation assigns more adjustable elec-
+tricity to periods with greater service needs, including
+more work or higher entitlements. Uniform allocation
+can leave busy periods with insufficient electricity while
+reserving more electricity than quiet periods need; en-
+titlements also affect the electricity required to reach
+z. For evaluation, all methods use the same reference
+demand profile, determined by request arrivals, work-
+loads, and entitlements at the common target z. Let
+Dk denote this reference service-electricity demand
+in interval k, and Ak the actual electricity consump-
+tion in that interval after subtracting fixed operating
+costs. We compare the hourly shares of demand and
+expenditure using the total variation metric:
+TV = 1
+2
+X
+k
+
+Dk
+P
+j Dj
+−
+Ak
+P
+j Aj
+ .
+(4)
+Lower TV indicates closer alignment: a TV of 0.02 means that 2% of adjustable electricity would need to be
+reallocated across intervals to match the demand shares. Figure 2 illustrates this timing choice; the appendix
+specifies the common reference-demand calculation. Together with backlog and throughput by arrival time,
+TV shows whether expenditure follows service needs across the hour. § 4 develops the online scheduler for
+this objective and these properties.
+6
+
+
+--- Page 7 ---
+4
+Scheduling Framework
+eFAIR implements an online scheduling heuristic for the constrained fairness problem in Equation 3. On each
+arrival or iteration completion, REQUEST DISPATCHER forms worker–batch assignments (§ 4.1); ELECTRICITY
+BUDGET ALLOCATOR determines the electricity available to those batches (§ 4.2); and FREQUENCY SELECTOR
+chooses each batch’s GPU frequency (§ 4.3). § 4.4 closes this decision loop with asynchronous execution
+and feedback. Figure 3 and Algorithm 1 summarize how the three components turn the hourly budget into
+successive service opportunities.
+Commitment planning:
+Ch • estimated service electricity • target z
+Electricity Budget Allocator
+(shared account)
+Ch
+Spent
+Fixed ahead
+Running
+reservations
+Future reserve
+Shared budget
+Acceleration surplus
+Uncommitted
+Target costs
+Surplus
+Live requests
+ID
+w
+Wait
+q
+R1
+1.0
+0.68
+R2
+1.5
+0.39
+R3
+1.0
+0.71
+R4
+1.5
+0.45
+Predicted length N
+Output n • elapsed time
+Remaining
+demand
+Request Dispatcher
+(worker + batch)
+Higher entitlement
+Idle worker first
+Ordinary requests:
+Compatible batches
+R2
+W1
+R4
+W2
+R1
+R3
+W3
+Batch priority
+Ordinary
+min. q
+≥
+Required
+q
+Yes Next batch
+Otherwise: shared batch
+Batch
+Frequency Selector
+(per batch)
+Profiled execution model
+Batch + frequency
+fL
+fM
+fH
+Time
+Energy
+Min. q
+Energy ≤ budget
+Any
+meets z?
+No
+Yes
+Fastest
+Least E
+f0
+wi >1
+f0
+f
+∆E≤ surplus
+∆E=E(f)
+E(f0)
+f
+Launch
+Replica execution (GPUs)
+Up to 32 replicas
+W1
+R2
+fH
+W2
+R4
+fH
+W3
+R1
+R3 fL
+Asynchronous decisions
+Electricity feedback
+Progress feedback
+Figure 3 eFAIR dispatches requests, allocates a shared electricity budget and surplus, and selects batch frequencies.
+Required q denotes the priority threshold (§ 4.1); bars compare iteration time, electricity, and minimum predicted
+normalized throughput. The surplus covers acceleration after target demand is reserved. Launches reserve electricity;
+execution feedback updates request progress and consumption.
+Algorithm 1 Online scheduling with a shared budget
+Require: Hourly commitment Ch and associated demand estimate; normalized-throughput target z; frequencies F.
+1: On arrival or iteration completion:
+2: Update request progress and electricity account
+▷Assign workers and form batches (§ 4.1).
+▷P: ready (worker j, batch B) pairs.
+3: P ←REQUEST DISPATCHER()
+4: for each (j, B) ∈P do
+▷Budget current work and reserve for later (§ 4.2).
+▷budget: shared electricity available for new iterations;
+▷surplus: shared electricity beyond target demand.
+5:
+(budget, surplus) ←
+ELECTRICITY BUDGET ALLOCATOR()
+▷Choose batch frequency f; use surplus to accelerate higher entitlement work (§ 4.3).
+6:
+f ←FREQUENCY SELECTOR(
+j, B, budget, surplus)
+▷b
+E(B, f): predicted incremental electricity for the next iteration.
+7:
+Reserve bE(B, f) in the shared account
+8:
+Launch batch B on worker j at frequency f
+9: end for
+4.1
+REQUEST DISPATCHER
+REQUEST DISPATCHER controls worker assignment and batch participation to reduce waiting for higher en-
+titlement requests while protecting ordinary service and preserving batching efficiency. A batch contains the
+prefill and decoding work issued in one serving iteration; unfinished requests continue in later iterations as
+arrivals join available capacity.
+7
+
+
+--- Page 8 ---
+Prediction and runtime state. Beyond the problem inputs in § 3.1, eFAIR uses output-length estimates
+and a profiled execution model to compare candidate actions. The profiled execution model uses offline
+GPU measurements to predict iteration duration and power from batch composition, context lengths, and
+frequency. For each request that has arrived, a predicted output length b
+Ni can be supplied by a prompt-based
+predictor [16]. The profiled execution model then estimates standalone throughput bBi for that length;
+Appendix C describes the profiles and calibration checks. eFAIR maintains observed output ni(t), elapsed
+waiting time, queue assignments, worker availability, and electricity reservations. These estimates support
+comparisons of normalized throughput and electricity cost.
+Normalized throughput during serving. REQUEST DISPATCHER tracks normalized throughput to compare
+service progress while requests remain active. At t > ai, the online estimate is bqi(t) =
+ni(t)
+wi b
+Bi(t−ai), whose
+denominator includes queueing, prefill, and decoding. After output begins, waiting without output lowers
+normalized throughput, while execution advances the numerator. Before output begins, observed throughput
+is zero, so eFAIR predicts completion throughput from elapsed waiting, predicted length, and estimated
+standalone throughput. Both cases include time already spent waiting when determining request priority.
+Worker assignment. REQUEST DISPATCHER consolidates ordinary requests (wi = 1) and gives admission
+preference to higher entitlement requests (wi > 1). For higher entitlement arrivals, eFAIR prefers idle workers,
+then favors workers whose residents have the same entitlement, considering capacity and congestion. A worker
+serving only ordinary requests can accept the arriving request when its resident requests can yield the next batch
+under the priority rule below and the new request can be admitted no later than it would be on the preferred
+worker. For ordinary arrivals, eFAIR favors batches of ordinary requests but uses an idle worker when either
+a resident request’s normalized throughput or the arriving request’s predicted normalized throughput after
+waiting for admission falls below the median for active requests with higher entitlements that have produced
+output. These rules combine earlier admission for higher entitlements with efficient batching of ordinary work.
+Batch priority. REQUEST DISPATCHER gives higher entitlement requests priority when ordinary requests’ nor-
+malized throughput is sufficiently high. On a shared worker, every ordinary resident’s normalized throughput
+must reach both z and the median normalized throughput of active higher entitlement requests that have
+produced output. If this median is unavailable, the threshold is z; ordinary requests without output use
+their predicted normalized throughput at completion. When the condition holds, higher entitlement requests
+receive priority for the next batch; otherwise, both classes remain eligible. Batches obey token, sequence,
+and KV-memory limits, yielding ready worker–batch pairs P. These rules give higher entitlement requests
+additional service opportunities while retaining ordinary access to shared capacity; the resulting ready batches
+receive electricity allocations in § 4.2.
+4.2
+ELECTRICITY BUDGET ALLOCATOR
+ELECTRICITY BUDGET ALLOCATOR translates the hourly commitment into a shared budget for current work by
+accounting for past consumption, running iterations’ reserved electricity, and expected later demand.
+Electricity reservations. The account deducts past consumption, future fixed costs, and electricity reserved
+for running work before allocating new service. At time t in hour h, let Eh(t) denote realized consumption,
+Pfloor the declared fixed operating power, H the hour endpoint, and bErun(t) the incremental electricity still
+owed to running work. The electricity remaining for uncommitted service is
+Rh(t) = Ch −Eh(t) −Pfloor(H −t) −bErun(t).
+(5)
+Completion feedback reconciles reservations with consumption, preventing duplicate allocations across
+workers.
+Current and future demand. ELECTRICITY BUDGET ALLOCATOR divides the remaining electricity between
+arrived work and later arrivals. For arrived work, eFAIR estimates remaining demand using z, entitlements, pre-
+dicted lengths, and observed output. For later arrivals, eFAIR uses the aggregate estimate associated with Ch,
+accounting for requests already observed. Reserving a proportional share of Rh(t) for later arrivals leaves the
+8
+
+
+--- Page 9 ---
+current shared budget A(t). All current batches draw from this budget, with reserved work excluded from un-
+committed demand. Each launch reserves electricity before the next allocation, so batches share one account.
+Surplus electricity. The shared surplus S(t) is the nonnegative electricity left after covering current and future
+service demand at target z. At a higher GPU frequency, the predicted incremental electricity consumption
+of the next iteration must not exceed the current budget A(t), and the additional electricity required for
+acceleration must not exceed the shared surplus S(t). These two checks permit acceleration while preserving
+the shared allocation; the appendix gives the budget formulas. § 4.3 uses the shared budget and surplus to
+select GPU frequencies for each ready worker–batch pair.
+4.3
+FREQUENCY SELECTOR
+For each batch, FREQUENCY SELECTOR uses projected service and electricity cost to select a frequency for the
+common target, then considers additional acceleration for work with higher entitlements.
+Throughput and electricity prediction. The profiled execution model introduced in § 4.1 estimates execution
+costs at each candidate frequency. For batch B and f ∈F, the model estimates iteration duration bτ(B, f) and
+incremental electricity bE(B, f). The output-length estimate b
+Ni and observed progress turn these execution
+estimates into average throughput bTi(f) through completion or the hour endpoint, including elapsed waiting
+and output already produced. Predicted normalized throughput is bqi(f) =
+b
+Ti(f)
+wi b
+Bi . Decode-only predictions use
+batch speed and context costs; supported prefill predictions include remaining prefill and decoding, linking
+each candidate frequency to the request’s projected service.
+Meeting the service target. FREQUENCY SELECTOR chooses the least costly affordable frequency predicted
+to meet the target for all batch members. Affordability requires bE(B, f) ≤A(t); target feasibility requires a
+valid completion prediction with mini∈B bqi(f) ≥z. eFAIR compares next-iteration electricity for decode-only
+batches and predicted remaining service electricity for prefill batches of ordinary requests when that estimate
+is available. The chosen frequency minimizes the applicable cost estimate; each launch reserves only the
+electricity needed for the next iteration.
+Fallback frequency selection. FREQUENCY SELECTOR favors fast execution when no frequency can meet the tar-
+get or completion predictions are unavailable. eFAIR selects the frequency with the shortest predicted iteration
+time among those whose electricity fits A(t). If none fits, eFAIR minimizes predicted iteration electricity and
+records the expenditure. One-iteration decisions let subsequent choices use updated progress and consumption.
+Acceleration with surplus electricity. After reserving electricity for current and future service demand at
+target z (§ 4.2), FREQUENCY SELECTOR uses the surplus S(t) to accelerate higher entitlement batches. Relative
+to the selected frequency f0, a faster frequency must keep predicted iteration electricity within A(t) and spend
+at most S(t) more. If f0 meets the target, acceleration must preserve the target for every batch member. If
+no faster frequency qualifies, eFAIR retains f0. Savings from batching and frequency selection thus support
+faster service for higher entitlement requests. Execution feedback then updates the estimates and reservations
+used by the next decision (§ 4.4).
+4.4
+Asynchronous Execution
+Execution feedback keeps service predictions and electricity reservations aligned with current progress. The
+scheduler asynchronously prepares subsequent batches while already launched GPU work continues. Arrivals
+and iteration completions update request progress, worker availability, and electricity reservations before
+triggering the next decision. When an unfinished request reaches its predicted output length, its length estimate
+is extended; when it completes, its electricity-demand estimate is reconciled using the final output-token count.
+§ 5.4 evaluates sensitivity to length errors. At iteration boundaries, workers admit arrivals, continue unfinished
+requests, and remove completed requests within capacity limits. Each launch reserves electricity before another
+allocation, and scheduler response time affects subsequent launches. These updates let subsequent decisions
+incorporate observed progress and consumption while preserving asynchronous execution.
+9
+
+
+--- Page 10 ---
+5
+Evaluation
+We evaluate whether eFAIR improves fair LLM serving under hourly electricity commitments through three
+questions. After describing the experimental setup (§ 5.1), we evaluate the constrained fairness objective
+(§ 5.2), assess the three properties of fair serving (§ 5.3), and examine scheduling efficiency and robustness
+(§ 5.4).
+• RQ1: How does eFAIR improve the fairness objective while satisfying the hourly electricity commitment?
+• RQ2: How well does eFAIR achieve the following properties: effective electricity use, balanced throughput
+among concurrent requests, and demand-aware electricity allocation? (Properties 1–3, § 3.4.)
+• RQ3: How quickly does eFAIR make online scheduling decisions, and how robust is the resulting service
+to output-length prediction errors?
+5.1
+Experimental Setup
+Methods share the same requests and hourly commitments. We measure service using normalized throughput
+qH
+i (§ 3.2): output produced by the hour’s end divided by elapsed request time, standalone throughput (the
+output rate when served alone), and entitlement. Elapsed time runs from arrival to completion, or to the hour
+boundary for unfinished requests; larger qH
+i indicates better normalized service.
+Runtime configuration. We evaluate Qwen3.8-27B-FP8 with tensor parallelism of one (TP=1) in H20 and
+H200 configurations, each with 32 model replicas.
+Workload traces. The H20 configuration replays the Azure inference trace from May 12, 2024, 14:00 to
+15:00 UTC (35,597 requests); H200 uses a heavier trace from May 11, 2024, 00:00 to 01:00 UTC (60,686
+requests) [20]. Both use entitlements wi ∈{1, 1.5}. The main comparison supplies true recorded output
+lengths ( b
+Ni = Ni) and an accurate estimate of the total service-electricity demand used to set Ch. § 5.4
+evaluates errors in the per-request output-length estimates.
+Hourly commitments. All methods use the same electricity budget for each workload. We set the normalized-
+throughput target z = 0.6 before evaluating the policies, estimate the electricity needed for the request mix
+and entitlements, and add the pool’s fixed operating cost. The commitments are 17.68 MJ for H20 and
+19.01 MJ for H200. A configuration satisfies the commitment when its realized consumption obeys Eh ≤Ch.
+Baselines. We compare methods that prioritize aggregate throughput, client fairness, or electricity efficiency.
+• vLLM uses continuous batching and KV-cache management for efficient serving [18].
+• Weighted VTC prioritizes clients according to accumulated service relative to their entitlements [30]. We
+use costs derived from profiling to account for each client’s accumulated service.
+• EcoInfer selects iteration frequencies to reduce electricity use while meeting its latency objective [7]. We
+retain that objective in the comparison.
+vLLM and Weighted VTC do not account for hourly electricity commitments and exceed the budget at their
+default frequencies. For RQ1, we retain their scheduling policies and select frequencies whose consumption
+is closest to the commitment without exceeding the commitment: 1365 MHz on H20 and 1170 MHz on
+H200. The effective-electricity comparison in RQ2 also includes their default frequencies; all other baseline
+comparisons use configurations that satisfy the commitment.
+Evaluation metrics. RQ1 compares the leximin objective and the distribution of normalized throughput.
+Leximin sorts qH
+i
+from lowest to highest and compares methods at the first rank where the values differ
+(Equation 3). We report the minimum Qmin, zero-output counts, P10, and P1, where P10 and P1 are the tenth
+and first percentiles of qH
+i . Each request has equal weight; a higher value at a given percentile indicates better
+normalized service. RQ2 assesses P10 against absolute commitment deviation dh (§ 3.3), concurrent-request
+throughput ratios rij (Property 2 in § 3.4), and temporal demand–electricity mismatch measured by total
+variation (TV; Equation 4). RQ3 measures scheduling response time and changes in request-level P10 under
+output-length errors. Each property result explains the corresponding metric.
+10
+
+
+--- Page 11 ---
+5.2
+Fairness within the Hourly Commitment
+Leximin fairness. eFAIR improves the objective in Equation 3 over all baseline configurations satisfying the
+hourly commitment, answering RQ1 (Table 1). All methods have the same minimum normalized throughput
+of zero because some requests arriving within the final 1.24 s on H20 or 0.96 s on H200 produce no output
+before the hour ends. eFAIR leaves six and four such requests, respectively, versus at least seven and five for
+the baselines. At the first differing rank, 7 on H20 and 5 on H200, eFAIR achieves normalized throughput
+of 0.1544 and 0.0158, while every baseline still has zero. The sorted eFAIR normalized-throughput vector
+therefore ranks above each baseline under the leximin objective.
+Table 1 Normalized throughput under Eh ≤Ch. Qmin is the minimum, and Zero counts requests
+without output at hour end.
+GPU
+Method
+Qmin
+Zero
+P10 ↑
+Eh
+Ch
+H20
+eFAIR
+0
+6
+0.6299
+0.9974
+vLLM
+0
+7
+0.4783
+0.9978
+Weighted VTC
+0
+7
+0.4807
+0.9971
+EcoInfer
+0
+13
+0.3149
+0.9376
+H200
+eFAIR
+0
+4
+0.6000
+0.9998
+vLLM
+0
+5
+0.4640
+0.9700
+Weighted VTC
+0
+5
+0.4686
+0.9684
+EcoInfer
+0
+10
+0.2021
+0.8613
+0.0
+0.5
+1.0
+0
+20
+40
+60
+Requests (%)
+H20
+0.0
+0.5
+1.0
+H200
+Normalized throughput, qH
+i
+eFAIR
+vLLM
+Weighted VTC
+EcoInfer
+Figure 4 Distribution of hour-end normalized throughput
+qH
+i for H20 (left) and H200 (right). Each curve shows the
+percentage of requests in 0.025-wide bins over [0, 1.15],
+with equal weight per request. The distributions show
+higher lower-tail normalized throughput under eFAIR.
+Service improvements for weak requests. eFAIR’s
+leximin advantage is accompanied by higher lower-
+tail throughput and improvements for most of each
+baseline’s weakest requests. P10 improves by up to
+197.0% over the baselines that satisfy the commit-
+ment. On H20, P10 increases by 31.7% over vLLM
+and 31.0% over Weighted VTC, with electricity dif-
+fering by less than 0.04%. On H200, the gains are
+29.3% and 28.0%, using 3.1% to 3.2% more elec-
+tricity within the commitment. The P10 gains over
+EcoInfer are 100.1% and 197.0%, respectively. P1
+also increases to 0.4649 on H20 and 0.4339 on H200,
+compared with baseline ranges of 0.1898–0.3229 and
+0.1143–0.3263. Figure 4 further shows a concen-
+tration of requests at higher normalized throughput
+under eFAIR. To determine whether requests poorly served by the baselines benefit, we select the 10% of
+requests with the lowest qH
+i
+under each baseline and compare those same requests under eFAIR. Across
+these groups, eFAIR improves 3,522–3,549 of 3,560 requests on H20 and 5,989–6,043 of 6,069 on H200;
+detailed counts appear in the supplementary appendix. Together, the percentile gains and comparisons of
+the same requests show that the improvement extends beyond the first differing rank and reaches requests
+with the weakest baseline service.
+Explaining baseline performance. The results are consistent with differences in how the methods allocate
+service and control GPU frequency. vLLM favors efficient batching without explicitly prioritizing requests with
+low normalized throughput. Weighted VTC changes batch-admission order to balance accumulated client
+service relative to entitlement; when client service is already balanced, this ordering offers limited scope to
+improve individual request throughput. The evaluated vLLM and Weighted VTC configurations also use the
+same fixed GPU frequency, consistent with their similar P10. EcoInfer selects energy-saving frequencies to
+meet latency requirements, without explicitly using the remaining hourly budget to improve requests with
+low normalized throughput. eFAIR coordinates batch participation and GPU frequency selection to direct the
+available electricity toward these requests.
+11
+
+
+--- Page 12 ---
+5.3
+Properties of Fair Serving
+RQ2 evaluates the three properties in § 3.4: service obtained from the budget, throughput balance among
+concurrent requests, and electricity allocation across time.
+0.85
+1.00
+1.30
+0.2
+0.4
+0.6
+P10 of qH
+i
+H20
+0.85
+1.00
+1.30
+H200
+Consumption ratio, 
+Eh
+Ch
+eFAIR
+vLLM
+Weighted VTC
+EcoInfer
+Default
+Figure 5 P10 of normalized throughput versus hourly
+consumption relative to commitment for H20 (left) and H200
+(right). Higher P10 indicates better lower-tail service, and the
+vertical line at Eh
+Ch = 1 marks the electricity target. Filled
+markers satisfy the commitment; hollow markers show default
+vLLM and Weighted VTC. eFAIR approaches the defaults’ P10
+while remaining within the commitment.
+Effective electricity use.
+eFAIR achieves high
+lower-tail normalized throughput while keeping
+consumption close to the hourly commitment
+(Figure 5). For Property 1, higher P10 and lower
+absolute deviation dh are preferable; deviation
+decreases as Eh
+Ch approaches one. eFAIR lies on
+the observed Pareto frontier: no evaluated config-
+uration offers higher P10 without greater devia-
+tion, or lower deviation without lower P10. The
+eFAIR deviations are 0.257% on H20 and 0.017%
+on H200.
+Compared with EcoInfer, eFAIR in-
+creases P10 and reduces deviation. On H20, vLLM
+has slightly lower deviation (0.221%) but lower
+P10; on H200, eFAIR improves both metrics over
+all baselines that satisfy the commitment. Default
+vLLM and Weighted VTC attain higher P10 but ex-
+ceed the commitment by 31.4% on H20 and 18.2%
+to 18.4% on H200. Compared with these defaults,
+eFAIR retains 97.6% to 97.7% of P10 using 24.1% less electricity on H20, and 98.2% to 99.0% using 15.4%
+to 15.5% less on H200. These comparisons show that eFAIR approaches the defaults’ lower-tail throughput
+while meeting the hourly commitment.
+0.0
+0.5
+1.0
+1.5
+H20: qH
+i
+eFAIR
+vLLM
+Weighted VTC
+EcoInfer
+0
+30
+60
+0.0
+0.5
+1.0
+1.5
+H200: qH
+i
+0
+30
+60
+0
+30
+60
+0
+30
+60
+Arrival time (min)
+Figure 6 Hour-end normalized throughput qH
+i
+for requests grouped by five-minute arrival intervals. Rows show H20
+(top) and H200 (bottom); columns compare methods on the same arrival groups. Boxes span P25–P75, center lines mark
+medians, and whiskers show the actual minimum and maximum. eFAIR maintains similar group medians across the hour,
+indicating consistent normalized service across arrival periods.
+Balanced throughput among concurrent requests. eFAIR improves normalized-throughput balance among
+requests that compete for service. For Property 2, rij is the smaller of two concurrent requests’ normalized
+throughputs divided by the larger; a ratio closer to one indicates more balanced service. Table 2 reports the
+tenth percentile of these ratios, using the same request pairs with defined ratios under all four methods. eFAIR
+improves P10 of rij by up to 108.7%, with the largest gain over EcoInfer on H200. A separate comparison
+with an earlier eFAIR policy uses identical requests and commitments: request-level P10 increases by 8.86%
+on H20 and 4.89% on H200, while electricity increases by 0.77% and 0.13%. The appendix details how these
+changes redistribute service from ordinary to higher entitlement requests. These comparisons show improved
+concurrent balance and redistribution toward higher entitlements, alongside higher overall P10.
+Demand-aware electricity allocation. eFAIR follows service demand more closely and maintains consistent
+normalized throughput across arrival periods. For Property 3, service-electricity demand is the reference
+12
+
+
+--- Page 13 ---
+Table 2 P10 of the normalized-throughput ratios rij for request pairs concurrent under all four
+methods. Higher values indicate more balanced service.
+GPU
+eFAIR
+vLLM
+W. VTC
+EcoInfer
+H20
+0.7027
+0.5636
+0.5731
+0.4490
+H200
+0.7432
+0.5825
+0.5886
+0.3561
+electricity needed to meet the common service target, and adjustable electricity is actual consumption after
+fixed operating costs are subtracted. TV compares their shares across five-minute intervals. Lower TV indicates
+closer alignment, and zero means identical shares. Table 3 reports TV of 0.001943 on H20 and 0.000472
+on H200 for eFAIR. The largest mismatch reduction is 95.9%, attained against Weighted VTC on H200; the
+supplementary appendix plots the corresponding demand and electricity profiles. The ELECTRICITY BUDGET
+ALLOCATOR updates spending using remaining demand and commitment, whereas the baselines do not coordi-
+nate expenditure with both quantities. Figure 6 complements this temporal comparison by grouping hour-end
+normalized throughput according to request arrival time. The eFAIR group medians span 0.6643–0.6652
+on H20 and 0.6033–0.6178 on H200; boxes and whiskers show within-group variation. The appendix also
+reports backlog and interval electricity measurements. Lower TV and similar group medians together show
+that expenditure follows demand while service remains consistent across arrival periods.
+Table 3 Demand–electricity mismatch (TV; lower is better).
+GPU
+eFAIR
+vLLM
+W. VTC
+EcoInfer
+H20
+0.001943
+0.019165
+0.019344
+0.010561
+H200
+0.000472
+0.010192
+0.011506
+0.006716
+5.4
+Scheduling Efficiency and Robustness
+RQ3 examines whether eFAIR responds promptly during serving and maintains normalized throughput when
+output-length predictions are inaccurate.
+Scheduling response time. eFAIR produces decisions with millisecond-scale average response while GPU
+execution continues. We measure response from the time a scheduling event enters the CPU queue until the
+resulting decision is available, including CPU processing and queueing during workload replay. Table 4 reports
+mean responses of 1.823 ms over 803,000 invocations on H20 and 1.609 ms over 1,264,780 invocations on
+H200. The scheduler supplies each subsequent batch’s configuration and electricity reservation before launch.
+Scheduling updates thus overlap with already launched GPU work.
+Table 4 Scheduler invocations and enqueue-to-result response.
+Metric
+H20
+H200
+Scheduler invocations
+803,000
+1,264,780
+Mean response time (ms)
+1.823
+1.609
+Robustness to output-length prediction errors. eFAIR maintains higher P10 than all three baselines
+within the hourly commitment under the tested output-length errors. Following the prediction-based VTC
+experiment, we compare true-length inputs ( b
+Ni = Ni) with four controlled perturbations: multiplying each
+length by a uniform draw from [0.8, 1.2] or [0.5, 1.5], or by a fixed factor of 0.8 or 1.2, then rounding to
+tokens. These errors affect predicted completion times, per-request service-electricity demand, and online
+standalone-throughput estimates. Actual requests, the fixed standalone throughputs Bi used to calculate
+observed qH
+i , the commitment, and its associated aggregate demand estimate remain unchanged. Relative
+to true-length inputs, P10 decreases by at most 0.81% on H20 and 0.74% on H200; absolute consumption
+deviations remain below 0.261% and 0.018%, respectively (Table 5). The resulting service gains therefore
+persist across both random length errors and systematic overestimation or underestimation.
+13
+
+
+--- Page 14 ---
+Table 5 Length-error sensitivity: P10 and deviation dh.
+H20
+H200
+Prediction
+P10
+dh (%)
+P10
+dh (%)
+True lengths
+0.6302
+0.246
+0.6000
+0.017
+Uniform ±20%
+0.6308
+0.260
+0.5996
+0.017
+Uniform ±50%
+0.6298
+0.253
+0.5973
+0.016
+0.8× length
+0.6404
+0.182
+0.6005
+0.017
+1.2× length
+0.6251
+0.215
+0.5956
+0.018
+6
+Conclusion
+Fair LLM serving under hourly electricity commitments requires allocating both computing capacity among
+concurrent requests and electricity across arrival times. We formulate this problem as leximin optimization of
+throughput normalized by standalone throughput and service entitlement, subject to the hourly electricity
+budget. eFAIR uses a common service target to coordinate request dispatching, electricity reservations, and
+GPU frequency selection, directing available electricity toward requests with lower normalized throughput
+while accounting for future demand. Across H20 and H200 configurations with 32 replicas, eFAIR improves
+the tenth percentile of normalized throughput by 28.0%–31.0% over the best budget-feasible baseline, with
+absolute consumption deviations below 0.26%. Additional results show more balanced normalized through-
+put among concurrent requests, closer alignment between electricity allocation and service demand, and
+robustness to the tested output-length errors.
+References
+[1] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav Gulavani, Alexey Tumanov, and
+Ramachandran Ramjee. Taming throughput-latency tradeoff in LLM inference with Sarathi-Serve. In 18th USENIX
+Symposium on Operating Systems Design and Implementation (OSDI 24), pages 117–134. USENIX Association,
+2024.
+[2] Luiz André Barroso and Urs Hölzle. The case for energy-proportional computing. Computer, 40(12):33–37, 2007.
+doi: 10.1109/MC.2007.443.
+[3] Alan Demers, Srinivasan Keshav, and Scott Shenker. Analysis and simulation of a fair queueing algorithm. In
+Proceedings of the ACM Symposium on Communications Architectures and Protocols (SIGCOMM), pages 1–12.
+ACM, 1989. doi: 10.1145/75246.75248.
+[4] Federal Energy Regulatory Commission. Energy primer: A handbook for energy market basics. Technical report,
+Federal Energy Regulatory Commission, 2024. URL https://www.ferc.gov/sites/default/files/2024-01/24
+_Energy-Markets-Primer_0117_DIGITAL_0.pdf. 2024 edition; Chapter 2, p. 71; accessed October 30, 2026.
+[5] Ali Ghodsi, Matei Zaharia, Benjamin Hindman, Andy Konwinski, Scott Shenker, and Ion Stoica. Dominant resource
+fairness: Fair allocation of multiple resource types. In 8th USENIX Symposium on Networked Systems Design and
+Implementation (NSDI 11). USENIX Association, 2011.
+[6] Pawan Goyal, Harrick M. Vin, and Haichen Cheng. Start-time fair queueing: A scheduling algorithm for inte-
+grated services packet switching networks. IEEE/ACM Transactions on Networking, 5(5):690–704, 1997. doi:
+10.1109/90.649569.
+[7] Qingyuan Hu and Jian Li. EcoInfer: Optimizing energy efficiency with latency guarantees through iteration-level
+GPU frequency control in LLM serving. Electronics, 15(10):2139, 2026. doi: 10.3390/electronics15102139.
+[8] International Energy Agency. Energy and AI. Technical report, International Energy Agency, Paris, April 2025. URL
+https://www.iea.org/reports/energy-and-ai.
+[9] ISO New England. FAQs: Day-ahead energy market—commitment, scheduling, and dispatch, n.d. URL https:
+//www.iso-ne.com/participate/support/faq/da-market-commitment. Accessed October 30, 2026.
+14
+
+
+--- Page 15 ---
+[10] Jeffrey M. Jaffe. Bottleneck flow control. IEEE Transactions on Communications, 29(7):954–962, 1981. doi:
+10.1109/TCOM.1981.1095081.
+[11] Youhe Jiang, Ran Yan, Xiaozhe Yao, Yang Zhou, Beidi Chen, and Binhang Yuan. Hexgen: Generative inference of
+large language model over heterogeneous environment. arXiv preprint arXiv:2311.11514, 2023.
+[12] Youhe Jiang, Fangcheng Fu, Xiaozhe Yao, Guoliang He, Xupeng Miao, Ana Klimovic, Bin Cui, Binhang Yuan, and
+Eiko Yoneki. Demystifying cost-efficiency in llm serving over heterogeneous gpus. arXiv preprint arXiv:2502.00722,
+2025.
+[13] Youhe Jiang, Fangcheng Fu, Xiaozhe Yao, Taiyi Wang, Bin Cui, Ana Klimovic, and Eiko Yoneki. Thunderserve:
+High-performance and cost-efficient llm serving in cloud environments. Proceedings of Machine Learning and
+Systems, 7, 2025.
+[14] Youhe Jiang, Ran Yan, and Binhang Yuan. Hexgen-2: Disaggregated generative inference of llms in heterogeneous
+environment. In International Conference on Learning Representations, volume 2025, pages 3985–4002, 2025.
+[15] Youhe Jiang, Fangcheng Fu, and Eiko Yoneki. Boute: Cost-efficient llm serving with heterogeneous llms and gpus via
+multi-objective bayesian optimization. Proceedings of Machine Learning and Systems, 8:731–747, 2026.
+[16] Yunho Jin, Chun-Feng Wu, David Brooks, and Gu-Yeon Wei. S3: Increasing gpu utilization during generative inference
+for higher throughput. In Advances in Neural Information Processing Systems, volume 36, pages 18015–18027.
+Curran Associates, Inc., 2023. doi: 10.52202/075280-0791. URL https://proceedings.neurips.cc/paper_fil
+es/paper/2023/hash/3a13be0c5dae69e0f08065f113fb10b8-Abstract-Conference.html.
+[17] David Kurokawa, Ariel D Procaccia, and Nisarg Shah. Leximin allocations in the real world. ACM Transactions on
+Economics and Computation (TEAC), 6(3-4):1–24, 2018.
+[18] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph E. Gonzalez, Hao
+Zhang, and Ion Stoica. Efficient memory management for large language model serving with PagedAttention. In
+Proceedings of the 29th Symposium on Operating Systems Principles (SOSP), pages 611–626. ACM, 2023. doi:
+10.1145/3600006.3613165.
+[19] Kshiteej Mahajan, Arjun Balasubramanian, Arjun Singhvi, Shivaram Venkataraman, Aditya Akella, Amar Phanishayee,
+and Shuchi Chawla. Themis: Fair and efficient GPU cluster scheduling. In 17th USENIX Symposium on Networked
+Systems Design and Implementation (NSDI 20), pages 289–304. USENIX Association, 2020.
+[20] Microsoft Azure. Azure LLM inference trace 2024. Azure Public Dataset, 2024. URL https://github.com/Azure/A
+zurePublicDataset/blob/master/AzureLLMInferenceDataset2024.md. Accessed October 20, 2026.
+[21] Deepak Narayanan, Keshav Santhanam, Fiodar Kazhamiaka, Amar Phanishayee, and Matei Zaharia. Heterogeneity-
+aware cluster scheduling policies for deep learning workloads. In 14th USENIX Symposium on Operating Systems
+Design and Implementation (OSDI 20), pages 481–498. USENIX Association, 2020.
+[22] Pratyush Patel, Esha Choukse, Chaojie Zhang, Íñigo Goiri, Brijesh Warrier, Nithish Mahalingam, and Ricardo
+Bianchini. Characterizing power management opportunities for LLMs in the cloud. In Proceedings of the 29th ACM
+International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3
+(ASPLOS), pages 207–222. ACM, 2024. doi: 10.1145/3620666.3651329.
+[23] Pratyush Patel, Esha Choukse, Chaojie Zhang, Aashaka Shah, Íñigo Goiri, Saeed Maleki, and Ricardo Bianchini.
+Splitwise: Efficient generative LLM inference using phase splitting. In 2024 ACM/IEEE 51st Annual International
+Symposium on Computer Architecture (ISCA), pages 118–132. IEEE, 2024. doi: 10.1109/ISCA59077.2024.00019.
+[24] You Peng, Youhe Jiang, Wenqi Jiang, Chen Wang, and Binhang Yuan. Hexgen-flow: Optimizing llm inference request
+scheduling for agentic text-to-sql. In 2026 IEEE 42nd International Conference on Data Engineering (ICDE), pages
+1759–1772. IEEE, 2026.
+[25] You Peng, Youhe Jiang, Wenshuang Li, Xu Xu, Ke Zhou, Jiawei Jiang, Chen Wang, and Binhang Yuan. Hexagent:
+Efficient agentic llm serving via workflow-and heterogeneity-aware scheduling. arXiv preprint arXiv:2605.16637,
+2026.
+[26] You Peng, Youhe Jiang, Chen Wang, and Binhang Yuan. epact: Energy-performance-aware commitment tracking for
+llm serving. arXiv preprint arXiv:2610.01784, 2026.
+[27] PJM Interconnection. Energy markets. PJM Learning Center, n.d. URL https://learn.pjm.com/three-prioritie
+s/buying-and-selling-energy/energy-markets. Accessed October 20, 2026.
+15
+
+
+--- Page 16 ---
+[28] Ana Radovanovi´c, Ross Koningstein, Ian Schneider, Bokan Chen, Alexandre Duarte, Binz Roy, Diyue Xiao, Maya
+Haridasan, Patrick Hung, Nick Care, Saurav Talukdar, Eric Mullen, Kendal Smith, MariEllen Cottman, and Walfredo
+Cirne. Carbon-aware computing for datacenters. IEEE Transactions on Power Systems, 38(2):1270–1280, 2023. doi:
+10.1109/TPWRS.2022.3173250.
+[29] Arman Shehabi, Sarah Josephine Smith, Alex Hubbard, Alexander Newkirk, Nuoa Lei, Md Abu Bakar Siddik, Billie
+Holecek, Jonathan G. Koomey, Eric R. Masanet, and Dale A. Sartor. 2024 united states data center energy usage
+report. Technical Report LBNL-2001637, Lawrence Berkeley National Laboratory, Berkeley, California, December
+2024. URL https://eta.lbl.gov/publications/2024-lbnl-data-center-energy-usage-report.
+[30] Ying Sheng, Shiyi Cao, Dacheng Li, Banghua Zhu, Zhuohan Li, Danyang Zhuo, Joseph E. Gonzalez, and Ion
+Stoica. Fairness in serving large language models. In 18th USENIX Symposium on Operating Systems Design and
+Implementation (OSDI 24), pages 965–988. USENIX Association, 2024.
+[31] Jovan Stojkovic, Chaojie Zhang, Íñigo Goiri, Josep Torrellas, and Esha Choukse. DynamoLLM: Designing LLM infer-
+ence clusters for performance and energy efficiency. In 2025 IEEE International Symposium on High Performance
+Computer Architecture (HPCA), pages 1348–1362. IEEE, 2025. doi: 10.1109/HPCA61900.2025.00102.
+[32] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang, Yong Li, and Wei Lin. Llumnix: Dynamic
+scheduling for large language model serving.
+In 18th USENIX Symposium on Operating Systems Design and
+Implementation (OSDI 24), pages 173–191. USENIX Association, 2024.
+[33] Chris Tong, Youhe Jiang, Gufeng Chen, Tianyi Zhao, Sibian Lu, Wenjie Qu, Eric Yang, Lynn Ai, and Binhang Yuan.
+Parallax: Efficient llm inference service over decentralized environment. arXiv preprint arXiv:2509.26182, 2025.
+[34] U.S. Environmental Protection Agency. 24/7 hourly matching of electricity. Green Power Markets, 2025. URL
+https://www.epa.gov/green-power-markets/247-hourly-matching-electricity. Updated December 12,
+2025; accessed October 20, 2026.
+[35] Bingyang Wu, Yinmin Zhong, Zili Zhang, Shengyu Liu, Fangyue Liu, Yuanhang Sun, Gang Huang, Xuanzhe Liu,
+and Xin Jin. FastServe: Iteration-level preemptive scheduling for large language model inference. In 23rd USENIX
+Symposium on Networked Systems Design and Implementation (NSDI 26), pages 57–74. USENIX Association, 2026.
+[36] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed serving
+system for transformer-based generative models. In 16th USENIX Symposium on Operating Systems Design and
+Implementation (OSDI 22), pages 521–538. USENIX Association, 2022.
+[37] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xuanzhe Liu, Xin Jin, and Hao Zhang. DistServe: Dis-
+aggregating prefill and decoding for goodput-optimized large language model serving. In 18th USENIX Symposium
+on Operating Systems Design and Implementation (OSDI 24), pages 193–210. USENIX Association, 2024.
+16
+
+
+--- Page 17 ---
+A
+Commitment Planning and Electricity Demand
+The common target z connects the request throughput definition to both advance commitment planning
+and retrospective demand evaluation. We first estimate the electricity required per request, then use these
+estimates to construct the hourly commitment and the common demand profile. The final accounting rules
+define the electricity available for online decisions.
+Per-request electricity demand. We estimate the electricity needed to provide each request with normalized
+throughput of at least z. For request i and a fixed candidate configuration c, let bTi(c) be the predicted average
+output throughput and bEi(c) the incremental service electricity above the fixed operating floor. The estimate
+is the minimum service electricity among candidate configurations that meet this target:
+ei(z) =
+min
+c:
+b
+Ti(c)
+wiBi ≥z
+bEi(c).
+(A.1)
+Each estimate assumes that the request is served alone without queueing and includes prefill, decoding,
+and the execution gaps represented in the profile. The target z, standalone throughput Bi, candidate
+configurations, and profiled execution model are fixed before method comparison. If no configuration
+meets the target, the target is recorded as infeasible for that request. Every request in the two evaluated
+workloads has a feasible configuration. Applying the same rule to every method gives a common reference
+demand that accounts for entitlement.
+Hourly commitment planning. The commitment combines total expected service electricity with fixed
+operating electricity. Let bDh denote the estimated sum of ei(z) used in commitment planning for the expected
+hourly request and entitlement mix, and let ∆h be the hour duration. The commitment is
+Ch = Pfloor∆h + bDh.
+(A.2)
+The evaluated conditions use z = 0.6 and an accurate aggregate service-demand estimate constructed from
+the recorded request population. The eFAIR scheduler receives the aggregate estimate; individual requests
+become visible upon arrival. H20 uses 7.468284 MJ of expected service electricity and 10.207262 MJ of fixed
+costs; H200 uses 8.463753 MJ and 10.544268 MJ, respectively. The resulting commitment is fixed before
+evaluating any serving policy.
+Demand over time. The common demand profile distributes each request’s electricity estimate across the
+time required to meet the target. For arrival time ai and total output count Ni, the target throughput zwiBi
+gives the reference interval
+Ji =
+
+ai, ai +
+Ni
+wiBiz
+
+.
+(A.3)
+For five-minute interval Ik, the demand is
+Dk =
+X
+i
+ei(z)|Ik ∩Ji|
+|Ji|
+.
+(A.4)
+Here | · | denotes interval duration, so a request crossing a boundary contributes only its overlapping fraction.
+Recorded arrivals and request attributes instantiate this fixed rule; the target interval Ji is identical across
+methods for each request. All methods use the same Dk; reference demand beyond the hour is recorded
+outside the displayed hourly shares. The calculation uses actual arrivals only after execution, while the online
+scheduler uses the aggregate service-demand estimate associated with Ch.
+Adjustable electricity. Subtracting fixed operating costs from actual consumption isolates electricity consumed
+by serving work above the fixed operating floor. For actual interval electricity Ek and interval duration |Ik|,
+Ak = Ek −Pfloor|Ik|.
+(A.5)
+The fixed operating power is the pool’s minimum GPU idle power plus the assumed scheduler operating power.
+The scheduler power component is 500 W for eFAIR and 400 W for the baselines, while all methods use the
+17
+
+
+--- Page 18 ---
+same absolute Ch. We retain total electricity Ek, demand Dk, and request backlog alongside the normalized
+shares used by TV. This preserves the magnitude, timing, and shape of electricity expenditure.
+Current budget and surplus. The ELECTRICITY BUDGET ALLOCATOR reserves electricity for expected future
+requests before allocating the current budget. Let Dfuture be the estimated service demand of later arrivals
+and Dactive the demand of unfinished work not already reserved for execution. For the unreserved electricity
+Rh(t) defined in the main paper, the current budget is
+A(t) = Rh(t) −max{Rh(t), 0}
+Dfuture
+Dfuture + Dactive
+.
+(A.6)
+The reserved fraction is zero when the denominator is zero. The surplus S(t) is the positive part of Rh(t) −
+Dfuture −Dactive. Running work has already been deducted from Rh(t) and from active uncommitted demand,
+preventing a second reservation for the same running work. The current budget and surplus are shared across
+all workers and updated after each reservation.
+B
+Evaluation Metrics and Aggregation
+All metrics use the recorded request IDs, service entitlements, and standalone throughputs for the evalu-
+ated workload. We define the observation window, identify concurrent requests, and specify how request
+and pair measurements are aggregated.
+Observation window. Every request arriving within the evaluated hour is included at the common endpoint.
+For endpoint H = 3600 seconds and request arrival ai < H, let ni(H) be the produced output and define
+τ H
+i
+=
+(
+ci −ai,
+completed by H,
+H −ai,
+otherwise.
+(B.1)
+The request’s normalized throughput is qH
+i
+=
+ni(H)
+wiBiτ H
+i , using the same full-request standalone throughput
+Bi for all policies. Requests with no output receive zero normalized throughput, and service and electricity
+accounting both end at H. This definition includes all observed output and elapsed waiting and execution
+time.
+Concurrent request pairs. The main comparison uses the same request pairs under all four methods.
+Request i is outstanding on [ai, ai + τ H
+i ). The requests in each pair must overlap for a positive duration
+under every method; their ratios use hour-end normalized throughputs: rij =
+min(qH
+i ,qH
+j )
+max(qH
+i ,qH
+j ). If only one
+request has zero normalized throughput, the ratio is zero; if both values are zero, the ratio is undefined.
+Pairs undefined under any method are excluded from all columns, retaining 922,870 of 922,941 pairs
+on H20 and 1,794,482 of 1,794,525 on H200. Supplementary comparisons use separate eFAIR–baseline
+intersections with explicit undefined counts.
+Pair-level and request-level statistics. Pair statistics give equal weight to concurrent pairs, while request
+statistics give equal weight to requests. The main concurrent table takes the tenth percentile over defined pair
+ratios. For the supplemental request summary, fi is the minimum defined rij among request i’s competitors,
+and percentiles are then taken over requests with at least one defined competitor ratio. The global minimum
+and requests without competitors are retained with the coverage counts. These aggregation rules distinguish
+balance across concurrent pairs from each request’s least balanced comparison.
+Percentiles and matched requests. Throughput percentiles and request-level comparisons give equal weight
+to each request. For an ordered population of size n, quantiles use linear interpolation at zero-based index
+(n −1)p for percentile fraction p. The baseline weak group contains exactly ⌈0.1n⌉requests, ranked by
+baseline normalized throughput and then input order to resolve ties. The same IDs are compared under eFAIR,
+counting higher, lower, and unchanged normalized throughput. Arrival plots use the same five-minute arrival
+groups across methods; boxes report the 25th percentile, median, and 75th percentile, and whiskers retain
+the actual minimum and maximum. These rules make all three types of service comparison reproducible.
+18
+
+
+--- Page 19 ---
+C
+Implementation and Measurement Details
+This appendix describes the scheduler inputs and prediction procedures, the response-time and model
+measurements, and the configurations used for baseline comparisons.
+Scheduler inputs. The eFAIR scheduler receives the hourly commitment and the aggregate service-electricity
+estimate used to set that commitment. Individual requests become visible upon arrival; future request at-
+tributes and arrival times are not exposed. The H20 population contains 12,065 ordinary requests and 23,532
+with entitlement 1.5; H200 contains 20,900 and 39,786, respectively. All methods and runs share these fixed
+input conditions.
+Completion-time prediction. Completion-time predictions combine the profiled execution model’s batch
+estimates with the remaining prefill and decoding work. Predicted output length b
+Ni and observed output
+determine remaining decoding work. The fixed single-request reference profile sums per-output time costs
+through b
+Ni outputs to estimate standalone throughput bBi. Evaluation uses the fixed standalone throughput
+Bi for the full request and the actual output length. For decoding-only batches, the prediction applies the
+current batch’s slowdown to the profiled context-dependent costs and includes recent CPU decision time. For
+supported ordinary-request prefill batches with completion predictions, frequency selection compares the
+electricity required to complete service; for decoding-only batches, selection compares incremental iteration
+electricity among candidates predicted to meet the target. For batches without a completion projection,
+FREQUENCY SELECTOR selects the frequency with the shortest predicted iteration duration among those
+whose predicted electricity fits the current shared budget. If none fits, FREQUENCY SELECTOR selects the
+frequency with minimum predicted iteration electricity. Each decision reserves electricity for the next iteration;
+subsequent decisions incorporate observed progress.
+Output-length prediction errors. The study in Section 5.4 of the paper compares true-length inputs ( b
+Ni = Ni)
+with four controlled error conditions. The random conditions use one fixed seed (20261028), with a separate
+multiplier for each request derived from the request ID. Predictions are rounded to the nearest positive token
+count and bounded by the declared output and context limits; the public output cap is 8,192 for all requests
+and is independent of their realized lengths. When an unfinished request reaches the predicted length, the
+estimate doubles, subject to these same limits. Completion reveals the final output count and settles the
+request’s reference work and arrived electricity demand. The predicted length is used to estimate completion
+time, electricity demand, and standalone throughput. Evaluation always uses the original full-request stan-
+dalone throughput, commitment, arrival sequence, and actual output lengths. The aggregate service-demand
+estimate used to set Ch is held fixed to isolate per-request length uncertainty. Ten full-hour runs cover five
+conditions on each hardware configuration, including matched true-length controls; each run uses a distinct
+physical CPU core. Prediction errors, estimate extensions, and electricity deviations are archived.
+Scheduling response-time measurement. The selected H20 run records 803,000 scheduler invocations and
+790,499 serving iterations; H200 records 1,264,780 invocations and 1,242,954 iterations. Invocation counts
+include calls that return without launching a batch. The scheduling queue records enqueue, processing-start,
+and result-ready times. CPU processing duration is timed around each scheduler callback; queueing and
+result-ready times follow the replay’s event scheduler. Mean response time is the sum of total queue wait and
+total scheduler processing time, divided by the invocation count; both totals use this same population. On
+H20, mean queueing and processing times are 1.132487 ms and 0.690336 ms, giving a mean response time of
+1.822823 ms. On H200, they are 0.714393 ms and 0.895062 ms, giving a mean response time of 1.609455 ms.
+The accumulated scheduler processing times, 554.34 and 1,132.06 seconds, exclude CPU queueing time.
+Maximum recorded queue waits are 842.33 ms and 1,136.84 ms. The replay overlaps serving iterations
+with scheduler processing; subsequent launches wait for the scheduling decision and the host/device launch
+constraints. The reported implementation evaluates five frequency candidates sequentially. The evaluations
+share dispatch, state-update, budget, and selection work. Parallel candidate evaluation retains this shared
+work and adds task coordination.
+Model calibration and validation. Hardware energy measurements use differences in NVML cumulative GPU
+energy counters over each profiling window. The profiled execution model is checked against measurement
+records that were available during model development but excluded from fitting the correction parameters.
+19
+
+
+--- Page 20 ---
+H20 duration correction uses single-request decode at 1980 MHz: 9,254 steps in the first 60 seconds are
+used to fit the correction, and 11,613 steps in the next 60 seconds are used to check it. The reported timing
+error is
+P
+j |btj−tj|
+P
+j tj
+, where tj is measured step duration. The timing error decreases from 2.6976% to 2.1759%;
+signed total-duration bias decreases from −2.1549% to −0.0115%. For effective decode power, batch-size-one
+windows are used to fit the correction and batch-size-two windows are used to check it at 345, 750, 1170,
+1575, and 1980 MHz. Each check contains 128 target calls with contexts from 3,080 to 3,209 tokens; corrected
+errors range from −0.033% to +0.980%. The duration check covers single-request decode at 1980 MHz, while
+the power checks cover the five listed frequencies. The H200 power correction uses two disjoint intervals
+on eight GPUs from one 90-second capture. Three separate saved measurement checks last 93.8, 101.0, and
+305.7 seconds. The first two use two-request, 2,048-token-prompt configurations at 1575 and 750 MHz; the
+third uses a Poisson arrival trace, mostly at 1170 MHz. Their aggregate energy errors are +2.22%, −0.88%,
+and −2.94%. Counter sampling and window interpolation contribute uncertainty to these checks.
+Worker assignment and batch selection. The REQUEST DISPATCHER first uses an idle worker for a higher
+entitlement arrival; otherwise the dispatcher favors residents with the same entitlement, ready workers,
+and smaller groups, followed by earlier completion among busy workers. Ordinary arrivals favor groups of
+ordinary requests below the configured batch-size limit, using ready groups before waiting for a busy one.
+Higher entitlement requests receive batch priority when every ordinary resident reaches both z and the median
+normalized throughput of active higher entitlement requests with output; without that median, the threshold
+is z. Before output begins, the resident request’s prediction uses elapsed time plus remaining service at the
+estimated standalone throughput. The dispatcher uses an available idle worker when a destination resident
+or the incoming request falls below the higher entitlement median; without that median the dispatcher retains
+the preferred destination. The incoming request estimate includes the selected worker’s remaining execution
+before admission. Token, sequence, and memory limits determine whether a batch is feasible.
+Baseline configurations. The principal vLLM and Weighted VTC operating points are 1365 MHz for H20
+and 1170 MHz for H200; their default points use 1980 and 1710 MHz, respectively. The same profiled VTC
+service cost applies at both operating points. The H20 1365 MHz electricity and duration estimates use
+interpolation between the profiled 1170 and 1575 MHz calibration points. Baseline frequencies are chosen
+to make consumption as close as possible to the commitment without exceeding the budget or changing the
+original scheduling policy.
+D
+Supplementary Results
+The supplementary results examine lower throughput percentiles, concurrent-request comparisons, electricity
+allocation over time, and earlier scheduling policies. Tables identify their comparison populations; earlier
+policies are compared at the current commitment unless a different commitment is stated.
+Table D.1 Lower normalized-throughput percentiles and hour-end request counts. Qmin = 0 for all methods because
+some requests have no output.
+GPU
+Method
+P1
+P0.1
+Zero
+Unfinished
+H20
+eFAIR
+0.4649
+0.2775
+6
+30
+H20
+vLLM
+0.3050
+0.1304
+7
+29
+H20
+Weighted VTC
+0.3229
+0.1327
+7
+28
+H20
+EcoInfer
+0.1898
+0.0732
+13
+36
+H200
+eFAIR
+0.4339
+0.1448
+4
+25
+H200
+vLLM
+0.3190
+0.1833
+5
+23
+H200
+Weighted VTC
+0.3263
+0.1511
+5
+23
+H200
+EcoInfer
+0.1143
+0.0587
+10
+33
+Lower throughput percentiles. Deeper percentiles show where the service gains are concentrated. Table D.1
+reports P1, P0.1, zero output, and unfinished counts for all principal methods. eFAIR has 6 requests with zero
+output and 30 unfinished requests on H20, and 4 and 25 on H200. The P1 of eFAIR exceeds the baseline
+20
+
+
+--- Page 21 ---
+0.4
+0.6
+qH
+i
+H20
+5
+10
+20
+30
+Percentile (%)
+0.2
+0.4
+0.6
+qH
+i
+H200
+eFAIR
+vLLM
+Weighted VTC
+EcoInfer
+Figure D.1 Normalized throughput from P5 to P30 for H20 (top) and H200 (bottom). Higher values indicate better
+service at the same percentile. These curves show how the lower-throughput requests compare across methods.
+values in both configurations. On H20, P0.1 also improves; on H200, the value of 0.1448 is below vLLM’s
+0.1833 and Weighted VTC’s 0.1511. The strict minimum remains zero for every method. Figure D.1 shows
+the surrounding distribution so that improvements in the reported P10 summary are read alongside the tail.
+Table D.2 Changes for each baseline’s fixed set of weakest requests (10%). The counts compare normalized throughput
+for the same requests under each baseline and eFAIR. Ties include requests without output under both methods.
+GPU
+Baseline
+Count
+Improved
+Lower
+Tied
+H20
+vLLM
+3,560
+3,522
+32
+6
+H20
+Weighted VTC
+3,560
+3,528
+26
+6
+H20
+EcoInfer
+3,560
+3,549
+5
+6
+H200
+vLLM
+6,069
+5,999
+66
+4
+H200
+Weighted VTC
+6,069
+5,989
+76
+4
+H200
+EcoInfer
+6,069
+6,043
+22
+4
+Leximin comparison. The empirical leximin comparison sorts normalized throughput for all 35,597 H20
+requests or all 60,686 H200 requests, including zeros. The first six H20 values and first four H200 values tie
+at zero across methods. At the next rank, eFAIR is positive while every baseline remains at zero, establishing
+the ordering reported in the main paper. The remaining sorted values describe the breadth of the gains: on
+H20, every sorted position through the lowest 10% is at least as high under eFAIR; on H200, values at ranks
+6–115 are lower than those under vLLM, and values at ranks 48–77 are lower than those under Weighted VTC.
+The P1 and P10 values complement these local differences with stronger lower-tail service at larger ranks.
+21
+
+
+--- Page 22 ---
+Matched-request comparison. Most requests in each baseline’s lowest-throughput decile receive higher
+normalized throughput under eFAIR. Across the three baselines, eFAIR improves 3,522–3,549 of 3,560 H20 re-
+quests and 5,989–6,043 of 6,069 H200 requests. Table D.2 reports improvements, regressions, and ties for each
+baseline’s fixed weakest 10% request set. The gains therefore reach the same weak requests across methods.
+Table D.3 P10 of each request’s worst competitor ratio fi for concurrent pairs shared by eFAIR and
+each baseline. Higher is better.
+GPU
+Baseline
+eFAIR
+Baseline
+H20
+vLLM
+0.5109
+0.3142
+H20
+Weighted VTC
+0.5081
+0.3361
+H20
+EcoInfer
+0.5021
+0.2199
+H200
+vLLM
+0.5589
+0.3587
+H200
+Weighted VTC
+0.5581
+0.3611
+H200
+EcoInfer
+0.5446
+0.1572
+Table D.4 Concurrent-pair counts for supplementary eFAIR–baseline comparisons. Zero/zero columns list undefined pairs
+for eFAIR and the baseline, respectively. The last column counts shared pairs with a defined ratio under both methods.
+GPU
+Baseline
+Shared
+Zero/zero
+Defined
+H20
+vLLM
+932,585
+15
+21
+932,564
+H20
+Weighted VTC
+934,553
+15
+21
+934,532
+H20
+EcoInfer
+949,985
+15
+71
+949,914
+H200
+vLLM
+1,806,205
+6
+10
+1,806,195
+H200
+Weighted VTC
+1,810,378
+6
+10
+1,810,368
+H200
+EcoInfer
+1,928,404
+6
+43
+1,928,361
+Concurrent-request comparisons. The supplementary comparison summarizes each request’s least balanced
+concurrent pair. Table D.3 reports P10 of fi, the minimum defined throughput ratio between request i and
+any concurrent request (Appendix B), supplementing the pair-weighted statistic in the main paper. Table D.4
+lists the number of concurrent pairs shared by each compared method pair and the counts with undefined
+zero/zero ratios. The H20 condition has one request without a competing request; all H200 requests have
+competitors. The counts specify how many concurrent pairs contribute to each comparison.
+Request backlog. Backlog places temporal electricity shares in the context of unfinished work. Figure D.3
+counts arrived requests that have not completed at each boundary. Figure D.2 uses the same time intervals
+for electricity accounting; the main paper’s box plots group requests by their original arrival times. The final
+backlog equals the unfinished counts in Table D.1. Together, these views relate electricity expenditure to
+request arrivals, normalized throughput, and unfinished work.
+Table D.5 The preceding policy and eFAIR at identical current inputs and commitments. Electricity is total consumption.
+The last two columns report P10 of normalized throughput within each entitlement group.
+GPU
+Policy
+Eh (MJ)
+All P10
+w = 1
+w = 1.5
+H20
+Earlier
+17.496149
+0.5786
+0.6777
+0.5522
+H20
+eFAIR
+17.630081
+0.6299
+0.6222
+0.6416
+H200
+Earlier
+18.980518
+0.5721
+0.7558
+0.5552
+H200
+eFAIR
+19.004839
+0.6000
+0.6102
+0.5979
+Comparison with an earlier policy. At the same commitment, eFAIR redistributes service toward higher
+entitlement requests relative to the earlier policy. Table D.5 keeps the earlier policy at the current budget and
+request population. eFAIR raises the aggregate P10 from 0.578642 to 0.629923 on H20 and from 0.572064
+to 0.600043 on H200. For higher entitlement requests (wi = 1.5), P10 rises from 0.5522 to 0.6416 on H20
+and from 0.5552 to 0.5979 on H200; ordinary-request P10 falls by 8.18% and 19.27%, respectively. Total
+22
+
+
+--- Page 23 ---
+0
+30
+60
+6
+8
+10
+Hourly share (%)
+H20
+0
+30
+60
+H200
+Arrival time (min)
+eFAIR
+vLLM
+Weighted VTC
+EcoInfer
+Demand
+Figure D.2 Five-minute shares of reference electricity demand and adjustable electricity for H20 (left) and H200 (right).
+Fixed operating costs are removed from electricity consumption, and each series is normalized by its own hourly total. The
+eFAIR expenditure profile follows the common demand profile most closely, consistent with the TV values reported in the
+main paper.
+0
+20
+40
+Outstanding requests
+H20
+0
+15
+30
+45
+60
+Arrival time (min)
+0
+20
+40
+Outstanding requests
+H200
+eFAIR
+vLLM
+Weighted VTC
+EcoInfer
+Figure D.3 Request backlog at five-minute boundaries, counting arrived requests that have not completed. The final
+point gives the unfinished population at the hour boundary. These curves place the electricity profiles in the context of
+outstanding service demand.
+23
+
+
+--- Page 24 ---
+electricity rises by 0.77% and 0.13%, respectively, alongside these service gains.
+Earlier commitments. Earlier experiments used different hourly commitments, so their P10 values correspond
+to different electricity constraints. The previous H20 operating point used 18.583465 MJ and obtained P10
+of 0.636222; the current point uses a smaller commitment and achieves P10 of 0.629923. The previous
+H200 point used 18.001978 MJ with P10 of 0.523514; the current commitment is 5.59% larger. The original
+conditions scaled from default vLLM consumption and their raw outcomes remain in the supplied archive.
+The current tables use the new commitments consistently.
+Electricity demand and consumption by interval. Absolute interval totals complement the normalized
+demand and electricity shares. Tables D.6 and D.7 report the common demand Dk and actual total electricity
+Ek in each interval. The method columns include the fixed cost; subtracting the fixed operating cost gives the
+adjustable electricity used by TV. The demand totals cover only the reference service intervals that overlap the
+reported hour. These values preserve the absolute expenditure alongside the normalized shares in Figure D.2.
+Table D.6 H20 interval demand and total electricity, in kJ. Intervals are in minutes. Method columns report Ek, including
+fixed costs; VTC denotes Weighted VTC.
+Interval
+Dk
+eFAIR
+vLLM
+VTC
+EcoInfer
+0 to 5
+506.14
+1354.84
+1389.56
+1389.07
+1302.09
+5 to 10
+450.36
+1300.76
+1337.99
+1338.24
+1241.32
+10 to 15
+543.35
+1391.25
+1403.73
+1402.73
+1322.45
+15 to 20
+698.40
+1540.86
+1521.56
+1518.66
+1457.07
+20 to 25
+572.31
+1414.70
+1443.30
+1442.92
+1342.39
+25 to 30
+596.90
+1444.06
+1452.98
+1453.47
+1366.24
+30 to 35
+660.32
+1510.36
+1504.02
+1502.48
+1420.06
+35 to 40
+614.53
+1466.79
+1474.64
+1474.73
+1374.32
+40 to 45
+730.53
+1580.14
+1546.66
+1545.28
+1448.51
+45 to 50
+730.32
+1581.94
+1543.18
+1541.78
+1465.80
+50 to 55
+711.67
+1560.09
+1531.17
+1531.81
+1444.20
+55 to 60
+633.48
+1484.29
+1487.65
+1483.85
+1387.32
+Total
+7448.32
+17630.08
+17636.45
+17625.04
+16571.76
+Table D.7 H200 interval demand and total electricity, in kJ. Intervals are in minutes. Method columns report Ek, including
+fixed costs; VTC denotes Weighted VTC.
+Interval
+Dk
+eFAIR
+vLLM
+VTC
+EcoInfer
+0 to 5
+835.45
+1714.28
+1635.78
+1627.87
+1480.52
+5 to 10
+712.23
+1591.91
+1543.57
+1541.69
+1373.60
+10 to 15
+736.63
+1615.23
+1562.49
+1557.57
+1382.20
+15 to 20
+804.64
+1683.09
+1608.00
+1604.43
+1431.13
+20 to 25
+638.03
+1518.12
+1499.14
+1497.44
+1315.31
+25 to 30
+785.42
+1662.96
+1592.13
+1586.84
+1399.05
+30 to 35
+706.01
+1584.08
+1540.84
+1540.59
+1367.24
+35 to 40
+669.50
+1548.12
+1505.31
+1504.50
+1334.56
+40 to 45
+578.69
+1458.49
+1442.96
+1441.12
+1277.40
+45 to 50
+704.48
+1582.62
+1541.19
+1542.01
+1367.92
+50 to 55
+619.32
+1498.56
+1466.98
+1466.76
+1306.71
+55 to 60
+669.65
+1547.37
+1498.98
+1496.62
+1336.02
+Total
+8460.03
+19004.84
+18437.38
+18407.42
+16371.65
+24
+
+
+--- Page 25 ---
+Table D.8 Service and electricity at the common commitments. vLLM and Weighted VTC use the selected frequencies.
+Higher P10 and lower |δh| and TV are better.
+Method
+P10 ↑
+Eh
+Ch
+δh (%)
+TV ↓
+H20 (Ch = 17.675546 MJ)
+eFAIR
+0.6299
+0.9974
+-0.257
+0.001943
+vLLM
+0.4783
+0.9978
+-0.221
+0.019165
+Weighted VTC
+0.4807
+0.9971
+-0.286
+0.019344
+EcoInfer
+0.3149
+0.9376
+-6.245
+0.010561
+H200 (Ch = 19.008021 MJ)
+eFAIR
+0.6000
+0.9998
+-0.017
+0.000472
+vLLM
+0.4640
+0.9700
+-3.002
+0.010192
+Weighted VTC
+0.4686
+0.9684
+-3.160
+0.011506
+EcoInfer
+0.2021
+0.8613
+-13.870
+0.006716
+25

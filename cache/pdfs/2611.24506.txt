@@ -1,0 +1,2142 @@
+--- Page 1 ---
+Quantifying the hosting capacity value of workload flexibility for AI data centers: A
+two-stage electricity–computation co-optimization framework
+Jiakai Wua, Pengyu Rena, Yifan Wanga, Wei Suna,∗
+aSchool of Engineering, The University of Edinburgh, Edinburgh EH9 3FB, Scotland, United Kingdom
+Abstract
+Grid connection constraints increasingly limit the expansion of AI-era data centers, yet the additional hosting capacity enabled
+by computational workload flexibility remains insufficiently quantified. This paper develops a two-stage electricity–computation
+co-optimization framework to quantify the individual and coordinated hosting capacity values of spatial and temporal workload
+flexibility. Data center capacities are determined endogenously, with computational task arrivals scaling with admitted capacity.
+Spatial routing of eligible interactive requests and temporal deferral of batch workloads are linked to server operation and facility
+power demand, subject to workload completion requirements and transmission constraints. The first stage maximizes aggregate
+hosting capacity; the second fixes the resulting site capacities and optimizes annual workload scheduling and generation dispatch to
+minimize generation and carbon costs. An 8760-hour case study with three data centers on a modified IEEE 118-bus system shows
+that temporal and spatial flexibility individually increase hosting capacity by 21.26% and 5.37%, respectively. Their coordinated
+use raises hosting capacity from 4635.1 MW to 6231.5 MW, a 34.44% increase without network reinforcement. The coordinated
+gain exceeds the sum of the individual gains by 361.9 MW, demonstrating complementarity between spatial migration and temporal
+deferral. By redistributing computational demand across locations and operating hours, these mechanisms enable fuller utilization
+of existing transmission capacity. The findings establish workload flexibility as a quantifiable planning resource for accommodating
+additional data center capacity within existing transmission networks.
+Keywords: AI Data centers, Electricity-computation co-optimization, Hosting capacity, Workload flexibility, Transmission
+congestion
+1. Introduction
+1.1. Background and motivation
+Driven by artificial intelligence (AI) and continued dig-
+itization, data centers (DCs) are emerging as one of the
+fastest-growing and most concentrated sources of electricity
+demand. Global DC electricity consumption reached approx-
+imately 415 TWh in 2024 and is projected to more than dou-
+ble to around 945 TWh by 2030, with AI expected to drive the
+largest share of this increase [1]. In the United States, DCs ac-
+counted for approximately 4.4% of national electricity in 2023,
+and this share is projected to reach 6.7–12% by 2028 [2]. At
+the project level, new hyper-scale facilities are being devel-
+oped with connection capacities of 100-1000 MW, and utili-
+ties are receiving individual connection requests of 1 GW or
+more [3]. NERC further reports that emerging large loads range
+from multi-megawatt facilities to multi-gigawatt complexes re-
+quiring transmission level connections and associated network
+upgrades [4]. These developments concentrate substantial de-
+mand at individual points of interconnection and within a lim-
+ited number of regional clusters. Consequently, the local net-
+work impact of an AI-era DC can be considerably greater than
+∗Corresponding author.
+Email addresses: s2902684@ed.ac.uk (Jiakai Wu),
+s2192464@ed.ac.uk (Pengyu Ren), s2154060@ed.ac.uk (Yifan Wang),
+w.sun@ed.ac.uk (Wei Sun)
+its contribution to national annual electricity consumption. Al-
+though improvements in hardware efficiency and server utiliza-
+tion have moderated historical growth in DC electricity con-
+sumption [5], they do not reduce the need to supply increas-
+ingly large blocks of connection capacity at specific network
+locations.
+The rapid development cycle of DCs further intensifies this
+locational challenge. New hyper-scale capacity can potentially
+be developed within one to two years, while a typical DC can
+become operational within two to three years [3]. By com-
+parison, new transmission infrastructure typically requires four
+to eight years to develop in advanced economies, while lead
+times for critical equipment such as transformers and cables
+have also lengthened [1]. In established European DC hubs,
+grid connection times can extend to ten years because of net-
+work congestion and the need for substantial grid reinforcement
+[6]. This mismatch means that a DC project may be ready for
+operation well before the fundamental electricity infrastructure
+required for its requested connection. Consequently, grid con-
+straints could delay approximately 20% of the global DC capac-
+ity planned for deployment by 2030 [1]. The relevant planning
+question is whether the existing network can accommodate the
+proposed DC capacity at the requested connection point and
+target date. For an existing network, this capacity is further
+constrained by the transmission headroom available across the
+arXiv:2611.24506v1  [eess.SY]  18 Nov 2026
+
+
+--- Page 2 ---
+Nomenclature
+A. Abbreviations and sets
+DC
+Data center.
+ECC
+Electricity–computation co-optimization.
+HC
+Hosting capacity.
+IT
+Information technology.
+PUE
+Power usage effectiveness.
+N, b
+Set and index of transmission-network buses.
+L, ℓ
+Set and index of transmission lines.
+G, g
+Set and index of conventional generators.
+R, r
+Set and index of renewable generators.
+D, n, n′
+Set and indices of data centers.
+T , t, t′
+Set and indices of operating periods.
+C, c
+Set and index of flexibility cases.
+i(n)
+Connection bus of DC n.
+o(ℓ), e(ℓ)
+Sending and receiving buses of line ℓ.
+B. Parameters
+T
+Number of periods in the annual horizon.
+T D
+Maximum batch workload delay.
+µn
+Processing rate of a server at DC n.
+¯U
+Maximum server utilization.
+ρn
+Installed server density (servers/MW).
+pidle
+n
+Idle server power consumption at DC n (kW).
+ppeak
+n
+Peak server power consumption at DC n (kW).
+ηDC
+DC power usage effectiveness (PUE).
+pload
+b,t
+Conventional load at bus b in period t (MW).
+¯pR
+r,t
+Available power from renewable generator r in period t
+(MW).
+pG
+g , ¯pG
+g
+Power output limits of conventional generator (MW).
+c2,g, c1,g, c0,g
+Quadratic generation cost coefficients of generator g.
+γg
+Generator emission factor of generator g (tCO2/MWh).
+cCO2
+Carbon price (£/tCO2).
+xℓ, ¯fℓ
+Line reactance and active-power rating of line ℓ.
+S base
+Network base power (MVA).
+bref
+Reference bus.
+C. Decision variables
+Hn,c
+Hosting capacity at DC n in case c (MW).
+H⋆
+n,c
+Optimized hosting capacity at DC n in case c (MW).
+H⋆
+c
+Aggregate optimized hosting capacity in case c (MW).
+V1
+c, V2
+c
+Decision variable sets for Stages 1 and 2.
+w0
+n,t
+Total workload arrival.
+wI0
+n,t
+Interactive workload arrival at DC n at time t.
+wB0
+n,t
+Batch workload arrival at DC n at time t.
+wInflex0
+n,t
+Inflexible workload arrival at DC n at time t.
+wInflex
+n,t
+Processed inflexible workload at DC n at time t.
+wI
+n,t
+Processed interactive workload at DC n at time t.
+wB
+n,t
+Processed batch workload at DC n at time t.
+wn,t
+Total processed workload at DC n at time t.
+wI
+n,n′,t
+Interactive workload shifted n →n′ at time t.
+wB
+n,t,t′
+Batch workload deferred t →t′ at DC n.
+mn,t
+Active server equivalent.
+un,t
+Average server utilization.
+pIT
+n,t
+IT power consumption at DC n in period t (MW).
+pnonIT
+n,t
+Aggregated non-IT power demand at DC n (MW).
+pDC
+n,t
+Power consumption at DC n at time t (MW).
+pG
+g,t
+Power output of generator g at time t (MW).
+pR
+r,t
+Power output of renewable generator r at time t (MW).
+pcurt
+r,t
+Renewable curtailment of renewable generator r at time t (MW).
+θb,t
+Voltage angle at bus b at time t.
+fℓ,t
+Active power flow on line ℓat time t (MW).
+Coper
+Total system operating cost.
+CG
+Conventional generation cost.
+Ccarbon
+Carbon emission cost.
+Ecarbon
+Generator emissions.
+Ecurt
+Renewable energy curtailment.
+operating hours in which DC demand coincides with other sys-
+tem demand. DC hosting capacity is thus inherently dependent
+on both spatial connection location and temporal operational
+conditions.
+Under a conventional firm connection, the demand profile as-
+sociated with the proposed DC connection capacity must re-
+main feasible with respect to network operating constraints
+across all operating hours. The resulting HC may therefore be
+constrained by a small number of congested node-hour combi-
+nations, even when transmission headroom remains available at
+other locations or times. Workload flexibility provides a means
+of coordinating DC electricity demand with these spatially and
+temporally varying network conditions. Previous research has
+demonstrated that dispatchable computing loads can improve
+grid utilization by relocating computational demand [7]. For
+DCs, this coordination begins with the computational service:
+facility electricity demand is determined by the workloads pro-
+cessed through IT equipment and the power required by cool-
+ing and other supporting systems [8]. Latency-sensitive inter-
+active requests can be routed among geographically distributed
+DCs, whereas delay-tolerant batch workloads can be deferred
+within prescribed completion windows. These scheduling de-
+cisions change server utilization and facility power demand
+while preserving the associated computing service. Fleet-scale
+implementations have further demonstrated the practical feasi-
+bility of temporal workload scheduling across geographically
+distributed computing resources [9]. This coupling motivates
+an electricity-computation co-optimization framework in which
+workload scheduling, DC power consumption, power system
+operation, and transmission feasibility are represented consis-
+tently.
+Within this framework, the value of DC flexibility
+in hosting capacity is quantified as the additional network-
+constrained HC enabled relative to an inflexible DC workload
+configuration.
+1.2. Literature review and research gap
+Research on DC flexibility has evolved along three connected
+directions: modeling the computational sources of DC flexible
+power demand, coordinating that demand with power system
+operation, and assessing DC siting and hosting capacity. Ta-
+ble 1 compares the studies most directly related to network-
+constrained DC hosting capacity assessment.
+The compari-
+son distinguishes the representation of DC power demand, the
+available workload flexibility dimensions, the scale and config-
+uration of the DC portfolio, the modeled network constraints,
+and the treatment of connection capacity. The final column
+identifies whether flexibility is valued through the additional
+HC enabled by DC workload scheduling.
+The first research direction establishes the computational ba-
+sis of flexible DC power demand. Workload-to-power formu-
+lations translate the allocation and execution of computational
+2
+
+
+--- Page 3 ---
+Table 1: Review and comparison of relevant literature.
+Ref.
+DC demand model
+Workload flexibility
+DC scale
+DC configuration
+Network level
+Network constraints
+Capacity formulation
+Flexibility value in
+hosting capacity
+[10]
+Workload to power
+SF&TF
+≤100 MW
+Multiple
+DN
+✓
+–
+–
+[11]
+Trace-derived power
+TF
+≤100 MW
+Single
+–
+–
+–
+–
+[12]
+Virtual-link load
+SF&TF
+≤100 MW
+Multiple
+TN
+✓
+–
+–
+[13]
+Workload-to-power
+SF
+≤100 MW
+Multiple
+DN
+✓
+–
+–
+[14]
+Workload-to-power
+SF&TF
+≤100 MW
+Multiple
+TN
+✓
+EN
+–
+[15]
+Workload-to-power
+SF
+GW-scale
+Multiple
+TN
+✓
+EN
+–
+[16]
+Workload-to-power
+SF&TF
+≤100 MW
+Multiple
+TN
+✓
+–
+–
+[17]
+Flexible-load envelope
+TF
+GW-scale
+Single
+TN
+✓
+EX
+✓
+[18]
+Static power load
+–
+≤100 MW
+Single
+DN
+✓
+EN+EX
+–
+[19]
+Static power load
+–
+GW-scale
+Multiple
+TN
+✓
+EX
+–
+[20]
+GPU power profile
+–
+GW-scale
+Multiple
+TN
+✓
+EN+EX
+–
+This paper
+Workload-to-power
+SF&TF
+GW-scale
+Multiple
+TN
+✓
+EN+EX
+✓
+SF: spatial workload flexibility; TF: temporal workload flexibility; DN: distribution network; TN: transmission network; EN: endogenous DC hosting capacity; EX:
+explicit hosting capacity; EN+EX: endogenous DC capacity within an explicit hosting capacity.
+tasks into server activation, utilization, and facility power con-
+sumption, enabling spatial and temporal scheduling to be rep-
+resented within power system operation [10, 13, 16]. Data-
+driven methods complement these formulations by estimating
+the deferrable power associated with periodic batch workloads
+from operational traces [11].
+The amount of available flex-
+ibility depends on the service characteristics of the underly-
+ing workloads. QoS-aware demand response studies show that
+job scheduling and server level power control can provide grid
+response while maintaining computing service requirements
+[21]. Trace-driven analysis across interactive and batch work-
+loads further demonstrates that the available temporal and spa-
+tial shifting depend on job duration, completion deadlines, ser-
+vice level objectives, and the available destination regions [22].
+Workload flexibility is therefore a service-constrained capabil-
+ity defined by the extent to which computation can be shifted
+across locations and time while satisfying its service require-
+ments.
+The second direction incorporates this capability into power
+system coordination. Virtual-link formulations represent tem-
+poral deferral and spatial migration as non-physical transfer
+pathways in network-constrained market clearing, allowing
+their effects on nodal prices and system operation to be evalu-
+ated [12]. Related incentive mechanisms coordinate the spatial-
+temporal response of DCs with power system requirements
+[23], while detailed electricity-computation models schedule
+heterogeneous workloads under network and uncertainty con-
+straints [16]. These capabilities have been applied to renewable
+energy matching and carbon-aware operation [24, 25], trans-
+mission and server planning [26], balancing and non-wire al-
+ternatives [27], post-fault restoration [28], and distribution net-
+work congestion management [29]. Collectively, these stud-
+ies demonstrate how workload scheduling changes the location
+and time of DC power demand and produces measurable op-
+erational, economic, and environmental outcomes. Their as-
+sessments generally begin from a prescribed DC portfolio or
+determine DC capacity through cost, carbon, or investment ob-
+jectives; the maximum hosting capacity supported by workload
+flexibility is not their principal assessment quantity.
+The third direction moves from system operation to DC
+siting, sizing, and interconnection capacity.
+Joint planning
+models make DC location and capacity endogenous along-
+side electricity-system investment and operation [14, 15].
+Flexibility-aware connection screening evaluates whether GW-
+scale projects can be accommodated at candidate locations un-
+der firm, pause, and shift envelopes [17]. Explicit HC formula-
+tions have also quantified the admissible DC loads supported by
+batteries, dispatchable generation, and reactive power resources
+in distribution networks [18]. At the transmission level, recent
+studies assess feasible allocations of multiple DCs under con-
+tingency requirements [19] and examine how electrolyzers can
+support AI-training DCs subject to voltage and frequency con-
+straints [20]. These studies bring DC power demand directly
+into network-capacity assessment. Flexible demand is typically
+represented through prescribed DC power envelopes or load
+profiles, or provided by additional flexibility resources, rather
+than being endogenously derived from computational work-
+loads whose processing is scheduled across locations and time.
+Taken together, the existing literature leaves the relationship
+between workload flexibility and network hosting capacity in-
+sufficiently resolved. A hosting capacity-centered assessment
+should simultaneously make the capacities of multiple DCs en-
+dogenous and preserve workload completion under spatial and
+temporal scheduling under transmission network constraints. It
+must also evaluate comparable flexibility configurations on the
+same network so that differences in hosting capacity can be
+attributed directly to workload flexibility. Such a formulation
+makes it possible to quantify not only the additional DC ca-
+pacity enabled by flexibility, but also the workload adjustments
+and network operating conditions through which these hosting
+capacity gains are realized.
+1.3. Research questions and contributions
+The literature review identifies two complementary research
+strands. Electricity-computation coordination studies have es-
+tablished how spatial and temporal workload scheduling can
+improve the operation of a DC portfolio, while hosting capac-
+ity studies have quantified the connection capacity of electric-
+ity networks under static or exogenously prescribed DC power
+demand. Connecting these two strands requires a framework
+3
+
+
+--- Page 4 ---
+that makes multiple DC hosting capacities endogenous, derives
+their power demand from computational workloads, and quanti-
+fies workload flexibility through the additional hosting capacity
+it enables. This forms the central focus of the present study. Ac-
+cordingly, this paper addresses three research questions. First,
+how much aggregate DC hosting capacity can a transmission
+network accommodate? Second, how much additional host-
+ing capacity is enabled by spatial and temporal flexibility indi-
+vidually, and how does their coordination change these gains?
+Third, how is the DC flexibility activated across locations and
+time, and how does this activation affect network operation to
+support additional hosting capacity? To answer these questions,
+the main contributions are as follows:
+1. An electricity-computation co-optimization model is de-
+veloped for assessing the hosting capacity of multiple DCs
+connected to a transmission network. The hosting capac-
+ity of each DC determines its computational task arrivals,
+which are mapped through workload scheduling, server
+operation, and DC power demand seen by the network.
+2. A two-stage optimization framework is formulated that
+connects the planning value of workload flexibility with
+network operation. The framework first determines the
+maximum aggregate DC hosting capacity, and subse-
+quently optimizes annual workload scheduling and power
+system operation at the resulting capacity allocation. This
+provides a unified assessment of how much DC hosting
+capacity is enabled by flexibility and how these gains
+are realized through coordinated workload scheduling and
+power system operation.
+3. The mechanism through which DC workload flexibility
+enables additional hosting capacity is characterized. Spa-
+tial migration and temporal deferral align DC power de-
+mand with available network headroom across locations
+and time. By separating the individual contributions of
+spatial and temporal flexibility from the interaction ef-
+fect, the analysis reveals how workload scheduling con-
+verts available network headroom into DC hosting capac-
+ity.
+These contributions extend ECC from the operational use of
+a given DC portfolio to the planning question of how much ca-
+pacity a fixed network can credibly host. They also provide a
+service-preserving basis for valuing computational flexibility in
+flexible or non-firm connection assessments.
+1.4. Paper organization
+The remainder of this paper is organized as follows. Sec-
+tion 2 develops the DC power, IT equipment, and workload
+management models. Section 3 formulates the problem state-
+ment and develops the proposed two-stage hosting capacity as-
+sessment framework. Section 4 defines the hosting capacity
+value metrics and introduces the study system, experimental
+settings, comparative results, flexibility activation mechanisms,
+and system impact analysis. Section 5 summarizes the conclu-
+sions, planning implications, and priorities for future work.
+2. Modeling of data center power and workload manage-
+ment
+This section develops a model of DC power consumption
+and workload scheduling. DC power consumption is jointly
+determined by the computational tasks processed through IT
+equipment and the electricity required by cooling and other
+facility-support systems. Among these components, IT equip-
+ment and cooling systems account for the majority of DC power
+consumption, with IT equipment representing the largest share
+[30]. Therefore, accurately modeling the power-consumption
+characteristics of computation is fundamental to constructing
+a comprehensive DC power model. The formulation connects
+three interdependent layers: workload scheduling, server opera-
+tion, and DC power consumption. Workload arrivals scale with
+the DC hosting capacity and are divided into interactive, batch,
+and inflexible components. The workload processed at different
+locations and times determines active-server requirements and
+utilization, which are mapped to IT power and subsequently to
+total DC power demand. This workload-to-power model pro-
+vides the DC-side foundation for the methodology developed
+in Section 3.
+2.1. Data center power modeling
+The total power demand of a DC comprises IT power and the
+power required by cooling and other facility-support systems.
+These non-IT requirements are represented in aggregate using
+a fixed power usage effectiveness (PUE), denoted by ηDC [2].
+The relationship between IT power and total facility power is
+expressed as:
+pDC
+n,t = pIT
+n,t + pother
+n,t ,
+pother
+n,t
+= (ηDC −1)pIT
+n,t
+(1)
+In Eq. (1), pother
+n,t
+represents the aggregated non-IT power
+demand, including cooling, lighting and other facility-support
+loads. Thus, changes in IT power caused by workload schedul-
+ing are translated into changes in the total DC power demand
+supplied by the network.
+2.2. IT equipment modeling
+IT power consumption is modeled as a function of the num-
+ber of active servers and their utilization [31]. Let mn,t denote
+the continuous equivalent number of active servers at DC n in
+period t, and let un,t denote their average utilization. The power
+consumption of an active server increases linearly from its idle
+power pidle
+n
+to its fully utilized power ppeak
+n
+. The aggregate IT
+power demand is therefore:
+pIT
+n,t = mn,t
+h
+pidle
+n
++ un,t
+
+ppeak
+n
+−pidle
+n
+i
+(2)
+The first term accounts for the idle power of the active servers,
+while the second represents the additional power associated
+with their computational load. IT power therefore depends on
+both the number of servers activated and the workload assigned
+to them.
+4
+
+
+--- Page 5 ---
+Server utilization is determined by the workload processed
+during the period relative to the processing capacity of the ac-
+tive servers. This relationship is:
+un,t =
+wn,t
+µnmn,t
+,
+mn,t > 0,
+(3)
+Here, wn,t is the workload processing rate after spatial routing
+and temporal scheduling, and µn is the processing rate of one
+fully utilized server. Accordingly, wn,t refers to the computation
+executed at DC n in period t, which may differ from the work-
+load originally arriving there. Substituting Eq. (3) into Eq. (2)
+links the scheduled workload and active-server requirement to
+IT power.
+2.3. Workload modeling
+Workload flexibility is represented through three classes with
+different processing requirements. Interactive workloads can be
+routed among eligible DCs for processing within the same pe-
+riod, whereas batch workloads can be deferred within a pre-
+scribed completion window at their original DC. Inflexible
+workloads must be processed at their original location and time.
+In all cases, workload arrivals scale with admitted DC ca-
+pacity, so that additional hosting capacity carries an additional
+computing service obligation.
+The workload arrival is ex-
+pressed as:
+w0
+n,t = Hn,c¯an,t,
+n ∈D, t ∈T
+(4)
+w0
+n,t = wI0
+n,t + wB0
+n,t + wInflex0
+n,t
+(5)
+The following formulations distinguish the workload originally
+arriving at each DC from the workload ultimately processed
+there and constrain how processing can be redistributed across
+locations and time.
+2.3.1. Interactive workloads
+Interactive workloads are subject to strict latency require-
+ments. However, eligible task requests can be routed to other
+eligible DCs for processing, providing spatial flexibility.
+Let wI
+n,n′,t be the request volume shifted from DC n to DC
+n′ , n in period t, and let wI
+n,t denote the interactive workload
+ultimately processed at DC n. The processed interactive work-
+load is given by:
+wI
+n,t = wI0
+n,t +
+X
+n′∈Dn
+wI
+n′,n,t −
+X
+n′∈Dn
+wI
+n,n′,t
+(6)
+X
+n′∈Dn
+wI
+n,n′,t ≤wI0
+n,t
+(7)
+Equation (6) explicitly captures the requests shifted into and
+out of each data center, whereas Eq. (7) ensures that the amount
+of workload shifted from a DC does not exceed the interac-
+tive workload originally arriving at that DC. Summing Eq. (6)
+across all data centers causes all transfers between DCs to can-
+cel, thereby preserving the total volume of arriving requests in
+each hour.
+2.3.2. Batch workloads
+Batch workloads comprise delay-tolerant computational
+tasks, including AI training and data-management tasks, that
+can be completed within prescribed time windows. Deferring
+eligible batch workloads within these windows allows DCs to
+redistribute computing demand across time, providing temporal
+flexibility.
+Let the variable wB
+n,t,t′ denote the batch workload arriving in
+period t and deferred to period t′. For the periods 1 ≤t ≤T D,
+the workload balance and deferral limit are:
+wB
+n,t = wB0
+n,t +
+t−1
+X
+τ=1
+wB
+n,τ,t −
+t+TD
+X
+τ=t+1
+wB
+n,t,τ
+(8)
+t+T D
+X
+τ=t+1
+wB
+n,t,τ ≤wB0
+n,t
+(9)
+For the periods T D + 1 ≤t ≤T −T D, the workload balance
+and deferral limit are:
+wB
+n,t = wB0
+n,t +
+t−1
+X
+τ=t−TD
+wB
+n,τ,t −
+t+TD
+X
+τ=t+1
+wB
+n,t,τ
+(10)
+t+T D
+X
+τ=t+1
+wB
+n,t,τ ≤wB0
+n,t
+(11)
+For the terminal periods T −T D + 1 ≤t ≤T, the scheduling
+window is truncated at the end of the modeled year:
+wB
+n,t = wB0
+n,t +
+t−1
+X
+τ=t−TD
+wB
+n,τ,t −
+T
+X
+τ=t+1
+wB
+n,t,τ
+(12)
+T
+X
+τ=t+1
+wB
+n,t,τ ≤wB0
+n,t
+(13)
+T
+X
+t=1
+wB
+n,t =
+T
+X
+t=1
+wB0
+n,t
+(14)
+Considering the temporal flexibility of workload and its
+scheduling cycle, the three temporal domains are defined to be
+mutually disjoint and collectively span the complete 8760-hour
+horizon.
+2.3.3. Total workloads
+Inflexible workloads are processed at their original DC in
+their arrival period.
+wInflex
+n,t
+= wInflex0
+n,t
+(15)
+After spatial routing of interactive requests and temporal
+rescheduling of batch tasks, the total workload processed at DC
+n in period t is:
+wn,t = wInflex
+n,t
++ wI
+n,t + wB
+n,t
+(16)
+Equation (16) aggregates the three workload classes after
+scheduling. Equations (6) – (14) ensure that workload schedul-
+ing can shift the location and time of power consumption with-
+out discarding the computing service. The processed workload
+5
+
+
+--- Page 6 ---
+wn,t, together with the number of active servers, determines
+server utilization through Eq. (3) and, consequently, the DC
+power demand seen by the power system. This establishes the
+connection between workload scheduling and the DC electric-
+ity demand entering the network model.
+3. Hosting capacity assessment methodology
+3.1. Problem statement
+The mismatch between DC development and grid expan-
+sion timelines means that the network may not expand quickly
+enough to accommodate all proposed DC connections. Har-
+vesting the flexibility within DCs therefore offers a potential
+solution for accommodating additional DC capacity through
+more effective use of the existing network capacity. Against this
+background, the problem considered in this paper is to quantify
+the maximum DC hosting capacity that can be connected to the
+transmission network. Each MW of admitted DC capacity is
+associated with a corresponding volume of computational task
+arrivals. Feasible hosting capacity must therefore support the
+complete computing service obligation over the annual hori-
+zon. The resulting hosting capacity represents the maximum
+compute-backed DC hosting capacity that can be accommo-
+dated by the network [18].
+To achieve electricity-computation co-optimization,
+the
+problem is formulated from a coordinated system planning per-
+spective.
+Fig. 1 illustrates the coupling between DC work-
+load management and power system operation.
+On the DC
+side, interactive workloads may be migrated among geograph-
+ically distributed DCs, providing spatial flexibility, while batch
+workloads may be deferred within service windows, providing
+temporal flexibility. The scheduled workload at each DC de-
+termines IT power consumption and, consequently, total DC
+power demand. On the power system side, DC power demand
+enters the nodal power balance and affects generation, voltage
+angles, and transmission flows.
+3.2. Proposed two-stage framework
+3.2.1. Framework overview
+The proposed framework adopts a sequential lexicographic
+structure that assigns distinct planning functions to hosting ca-
+pacity assessment and system operational optimization. The
+two stages therefore follow the sequence of first determining
+how much DC hosting capacity can be connected and where it
+can be accommodated, and then determining how the resulting
+DC portfolio and power system should be operated.
+As illustrated in Fig. 1, the DC hosting capacity vector
+H⋆
+c provides the coupling between the two stages. This two-
+stage structure provides complementary planning and opera-
+tional outputs. Differences in the Stage 1 frontiers across flex-
+ibility configurations quantify the individual and coordinated
+hosting capacity values of spatial and temporal workload flex-
+ibility. The corresponding Stage 2 solutions reveal how flex-
+ibility is deployed across DCs and operating hours, and how
+the resulting DC power demand redistribution influences gen-
+eration and transmission network conditions. The framework
+therefore connects the hosting capacity value of DC flexibility
+with the operational mechanisms.
+3.2.2. Stage 1: hosting capacity assessment
+Stage 1 determines the DC capacities and workload sched-
+ules and is formulated as follows:
+H⋆
+c = max
+V1c
+X
+n∈D
+Hn,c
+(17)
+The decision set includes the site capacities, workload schedul-
+ing and DC operating variables, and network operating vari-
+ables:
+V1
+c = {Hn,c, wInflex
+n,t
+, wI
+n,t, wB
+n,t, wn,t, wI
+n,n′,t, wB
+n,t,t′,
+mn,t, un,t, pIT
+n,t, pDC
+n,t , pG
+g,t, pR
+r,t, θb,t, fℓ,t}
+(18)
+subject to:
+DC power and IT constraints:
+(1)–(3),
+Workload constraints:
+(6)–(16),
+Each DC n is connected at transmission network bus i(n). Its
+admitted hosting capacity Hn,c bounds the facility power that
+can be drawn at this connection point. Accordingly, the sched-
+uled DC power demand must satisfy:
+Hn,c ≥0,
+0 ≤pDC
+n,t ≤Hn,c
+(19)
+The admitted capacity is a planning decision, whereas pDC
+n,t
+varies across operating periods with the workload schedule and
+server operation. Feasibility requires the connection limit to
+hold in every period.
+Conventional and renewable generation supply both the ex-
+isting system load and the additional DC demand. Let pG
+g,t de-
+note conventional generation, and pR
+r,t denote actual renewable
+generation. Generator operation requires:
+pG
+g ≤pG
+g,t ≤¯pG
+g
+(20)
+0 ≤pR
+r,t ≤¯pR
+r,t
+(21)
+Renewable curtailment is the portion of available renewable
+output that is not dispatched:
+pcurt
+r,t = ¯pR
+r,t −pR
+r,t ≥0
+(22)
+For transmission line ℓ, let o(ℓ) and e(ℓ) be its sending and re-
+ceiving buses, xℓdenote its reactance, and ¯fℓbe its active power
+rating. Under the DC power flow representation:
+fℓ,t = S base
+xℓ
+ θo(ℓ),t −θe(ℓ),t
+
+(23)
+Network constraints are:
+−¯fℓ≤fℓ,t ≤¯fℓ,
+ℓ∈L, t ∈T ,
+(24)
+−π ≤θb,t ≤π,
+b ∈N, t ∈T ,
+(25)
+6
+
+
+--- Page 7 ---
+DC 1
+DC 2
+DC 3
+Data Center Network
+Power Network
+Wind Power 
+Solar PV
+Workload demand
+Flexible resource
+Generation cost
+Power Supply
+IT Workload
+(Spatial Flexibility) (Temporal Flexibility)
+Data Flow
+Power Flow
+Information Flow
+(Fixed Workload)
+IW
+BW
+FW
+1
+STAGE 1  | Capacity frontier
+Max Hosting Capacity
+Feasible set:
+Network Constraints•  DC physics  •  Workload service
+2
+STAGE 2  | Cost-optimal operation
+Grid Dispatch
++ 
+DC Schedule
+Same feasible set
+Analysis of DC hosting capacity
+HC gains · Flexibility activation · Network bottleneck
+Fig. 1. Illustration of the proposed hosting capacity assessment of data centers.
+θbref,t = 0,
+t ∈T
+(26)
+Let Gb, Rb, and Db collect the generators, renewable units, and
+DCs at bus b, and let Lout
+b
+and Lin
+b collect its oriented outgoing
+and incoming lines. Nodal balance is:
+X
+g∈Gb
+pG
+g,t +
+X
+r∈Rb
+pR
+r,t = pload
+b,t +
+X
+n∈Db
+pDC
+n,t
++
+X
+ℓ∈Lout
+b
+fℓ,t −
+X
+ℓ∈Lin
+b
+fℓ,t,
+b ∈N, t ∈T
+(27)
+Together, these constraints require the computing service as-
+sociated with each admitted capacity to be supported by feasi-
+ble DC and power system operation over the annual horizon.
+The optimal value H⋆
+c is therefore the aggregate hosting capac-
+ity frontier under the modeled workload, equipment, genera-
+tion, and network constraints. The corresponding DC hosting
+capacity vector H⋆
+c is passed to Stage 2.
+3.2.3. Stage 2: Optimal operation and scheduling
+Stage 2 solves a DC optimal power flow problem to minimize
+the sum of generation and carbon costs and is formulated as
+follows:
+min
+V2c
+Coper
+c
+,
+Coper
+c
+= CG
+c + Ccarbon
+c
+(28)
+Unlike Stage 1, the Stage 2 decision set excludes the site
+capacities, which are now fixed parameters:
+V2
+c = {wInflex
+n,t
+, wI
+n,t, wB
+n,t, wn,t, wI
+n,n′,t, wB
+n,t,t′,
+mn,t, un,t, pIT
+n,t, pDC
+n,t , pG
+g,t, pR
+r,t, θb,t, fℓ,t}
+(29)
+The conventional generation cost is:
+CG
+c = ∆t
+X
+t∈T
+X
+g∈G
+c2,g(pG
+g,t)2 + c1,gpG
+g,t + c0,g
+
+(30)
+Conventional generation also incurs a carbon cost. With gener-
+ator emission factor γg, total emissions and the corresponding
+carbon cost are
+Ecarbon
+c
+= ∆t
+X
+t∈T
+X
+g∈G
+γgpG
+g,t,
+Ccarbon
+c
+= cCO2Ecarbon
+c
+(31)
+subject to:
+DC and workload constraints:
+(1)–(16),
+Transmission network constraints:
+(19)–(27),
+The Stage 2 objective in Eq. (28) optimizes system opera-
+tion at the hosting capacity frontier by minimizing total system
+operational cost. It combines the quadratic conventional gener-
+ation cost in Eq. (30) with the explicit carbon cost in Eq. (31),
+thereby considering the emissions associated with dispatch and
+favoring lower carbon supply [32]. The resulting solution de-
+scribes cost-minimizing annual operation for the capacity allo-
+cation obtained in Stage 1.
+3.2.4. Compact two-stage formulation
+Following the detailed stage formulations, the complete lex-
+icographic structure is written in the hierarchical form of
+Eq. (32). The framework first maximizes aggregate DC host-
+ing capacity and then minimizes annual operating cost at the
+7
+
+
+--- Page 8 ---
+resulting capacity allocation. The two stages are summarized
+as
+Stage 1:
+H⋆
+c = max
+V1c
+X
+n∈D
+Hn,c,
+Stage 2:
+min
+V2c
+
+CG
+c + Ccarbon
+c
+
+,
+with Hn,c = H⋆
+n,c,
+n ∈D
+(32)
+Both stages are subject to the DC power and IT constraints
+in Eqs. (1)–(3), the workload conservation and completion
+constraints in Eqs. (6)–(16), the DC connection constraint in
+Eq. (19), and the generation and transmission-network con-
+straints in Eqs. (20)–(27). The generation and carbon costs are
+defined in Eqs. (30) and (31), respectively.
+This sequential procedure gives priority to hosting capacity
+maximization and then minimizes operating cost for the opti-
+mized DC hosting capacity.
+4. Case studies
+This section evaluates the proposed framework on a modi-
+fied IEEE-118 transmission network. The models were imple-
+mented in Julia 1.12.5 and solved using Gurobi 13.0.0 [33]. All
+computations were executed on a workstation equipped with a
+14-core Intel Core i7 CPU @2.30 GHz and 16 GB RAM.
+4.1. Experiment settings
+The study uses a modified IEEE-118 transmission system,
+whose source provides annual network, generator, load, wind,
+and solar data [34]. Fig. 2 summarizes the modified transmis-
+sion network and the prospective DC locations. The system
+contains 118 buses and 186 lines, with DCs connected at buses
+32, 78, and 90. All simulations are conducted over an 8760-
+hour year with a 1-hour resolution.
+Workload arrival profiles are derived from the IN2P3 2024
+Workload Dataset [35]. Based on [36] and characteristics of DC
+workloads, the shares of interactive, batch, and fixed workloads
+are assumed to be 40%, 20%, and 40% respectively (Fig. 3).
+The DC configuration parameters are listed in Table 2, based
+on [37, 38].
+Table 2: Configuration of DCs.
+Parameter
+Value
+ηDC
+1.20
+pidle
+1.3 (kW)
+ppeak
+1.9 (kW)
+µ
+500 (workload units/(h))
+¯U
+0.80
+T D
+6 (h)
+To quantify the hosting capacity value of DC workload flex-
+ibility, the following four cases are simulated and compared:
+• Case 1: No workload flexibility (NF).
+• Case 2: Temporal flexibility of batch workloads (TF).
+• Case 3: Spatial flexibility of interactive workloads (SF).
+• Case 4: Coordinated spatial and temporal workload flexi-
+bility (STF).
+4.2. Simulation results analysis
+Fig. 4 compares the annual DC power profiles under the four
+flexibility configurations. Case 2 broadly preserves the con-
+sumption pattern of each DC in Case 1, while reshaping the
+temporal profile as batch workloads can be deferred within their
+allowable window. Case 3 exhibits a distinct spatial redistribu-
+tion pattern: DC1 and DC2 consume less power than case 1
+over long periods, whereas DC3 accommodates a larger share
+of workload. Case 4 combines these patterns with particularly
+pronounced high-power periods at DC3. Importantly, the dif-
+ferences among the trajectories reflect both the larger work-
+load scale enabled by the increased hosting capacity and the
+optimized spatial or temporal scheduling. The corresponding
+workload migration and deferral volumes are examined in Sec-
+tion 4.3.
+The following metrics quantify the hosting capacity gains
+relative to different cases. Case 1 (NF) serves as the benchmark
+for the other cases. The absolute and relative hosting capacity
+gains are defined as:
+VHC
+c
+= H⋆
+c −H⋆
+NF
+(33)
+vHC
+c
+= H⋆
+c −H⋆
+NF
+H⋆
+NF
+(34)
+The four case comparison also quantifies the interaction be-
+tween spatial and temporal flexibility:
+VHC
+interaction = H⋆
+STF −H⋆
+SF −H⋆
+TF + H⋆
+NF
+(35)
+To relate the HC gain to the accompanying change in annual
+system operational cost, the HC cost efficiency, expressed in
+MW per million pounds, is defined as:
+HCCEc =
+VHC
+c
+
+Coper
+c
+−Coper
+NF
+
+(36)
+Table 3 establishes Case 1 as the inflexible benchmark, with
+an aggregated hosting capacity of 4635.1 MW. Enabling tempo-
+ral flexibility alone in Case 2 raises this frontier to 5620.5 MW,
+corresponding to a gain of 985.4 MW (21.26% improvement
+over case 1). Spatial flexibility alone increases HC by 249.1
+MW (5.37%), raising the frontier to 4884.2 MW. The coordi-
+nated temporal and spatial flexibility in Case 4 achieves the
+largest hosting capacity, 6231.5 MW, which is 1596.4 MW
+(34.44% above the benchmark). This result reflects the greater
+flexibility value of temporal deferral, which can shift work-
+load away from network-constrained hours and exploit head-
+room available in subsequent periods, whereas spatial shifting
+is limited to the headroom available at alternative DC locations
+within the same hour. Coordinating the two mechanisms pro-
+duces the largest HC gain in this case study.
+8
+
+
+--- Page 9 ---
+100
+101
+102
+103
+104
+105
+106
+107
+108
+109
+110
+111
+112
+113
+114
+115
+116
+117
+118
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+45
+46
+47
+48
+49
+50
+51
+52
+53
+54
+55
+56
+57
+58
+59
+60
+61
+62
+63
+64
+65
+66
+67
+68
+69
+70
+71
+72
+73
+74
+75
+76
+77
+78
+79
+80
+81
+82
+83
+84
+85
+86
+87
+88
+89
+90
+91
+92
+93
+94
+95
+96
+97
+98
+99
+1
+2
+3
+4
+5
+6
+7
+8
+9
+DC1
+DC2
+DC3
+Region 1
+Region 2
+Bus
+Conventional generator
+Wind power
+Solar power
+Data center
+Fig. 2. Topology of the modified IEEE-118 transmission system and locations of the three data centers.
+Table 3: Simulation metrics under four cases.
+Case
+Hosting capacity
+System operating
+HCCEc
+Solution time
+H⋆
+c (MW)
+VHC
+c
+(MW)
+vHC
+c
+(%)
+VHC
+interaction (MW)
+cost (109 £)
+(MW/106 £)
+(s)
+1
+4635.1
+–
+–
+–
+4.405
+–
+1190.15
+2
+5620.5
+985.4
+21.26
+–
+4.546
+6.99
+1584.77
+3
+4884.2
+249.1
+5.37
+–
+4.442
+6.84
+2060.16
+4
+6231.5
+1596.4
+34.44
+361.9
+4.641
+6.77
+3167.51
+Jan
+Feb Mar Apr May Jun
+Jul
+Aug Sep Oct Nov Dec
+0
+40
+80
+120
+Mon
+Tue
+Wed
+Thu
+Fri
+Sat
+Sun
+0
+20
+40
+60
+80
+Arrived computational task
+(103 processing units h−1 MW−1)
+FW
+BW
+IW
+Total workload
+a
+b
+Fig. 3. Annual (a) and weekly (b) computational task arrivals at DC1.
+Substituting the results reported in Table 3 into Eq. (35) gives
+VHC
+interaction = 361.9 MW, equivalent to 7.81% of the Case 1 fron-
+tier. The coordinated HC gain therefore exceeds the sum of the
+two individual gains by 361.9 MW. Equivalently, adding spatial
+flexibility to the temporally flexible case yields an additional
+611.0 MW of HC, whereas adding temporal flexibility to the
+spatially flexible case yields a further 1347.3 MW. This pos-
+itive interaction indicates that temporal and spatial flexibility
+are complementary in expanding the feasible hosting capacity
+region, rather than providing merely additive benefits.
+Fig. 5 compares the hosting capacity of the three DCs across
+the four cases. Under Case 1, DC3 receives the largest HC, ap-
+proximately 2498 MW, compared with 1231 MW at DC1 and
+906 MW at DC2. Temporal flexibility in Case 2 increases the
+HC assigned to all three DCs. Spatial flexibility in Case 3 in-
+stead reshapes the allocation: more HC is supported at DC1
+while the HC at DC3 is lower than in Case 1, but the aggre-
+gate HC of the three DCs still increases. Under coordinated
+temporal and spatial flexibility, the HC at DC1 and DC2 rise to
+approximately 2033 and 1809 MW, respectively, while DC3 re-
+tains approximately 2389 MW. Relative to Case 1, the increases
+at DC1 and DC2 therefore more than compensate for the mod-
+est reduction at DC3. This reallocation represents the optimiza-
+tion outcome through which flexibility redistributes the addi-
+tional hosting capacity across DC locations.
+The system operational costs reported in Table 3 should be
+interpreted separately for each case, as each value corresponds
+to the hosting capacity frontier of the respective case. Relative
+9
+
+
+--- Page 10 ---
+0
+500
+1000
+1500
+DC1
+Case 1
+Case 2
+DC1
+Case 1
+Case 3
+DC1
+Case 1
+Case 4
+0
+500
+1000
+DC2
+DC2
+DC2
+Jan
+Mar
+May
+Jul
+Sep
+Nov
+0
+500
+1000
+1500
+2000
+2500
+DC3
+Jan
+Mar
+May
+Jul
+Sep
+Nov
+DC3
+Jan
+Mar
+May
+Jul
+Sep
+Nov
+DC3
+Power (MW)
+(a) Cases 1 and 2
+(b) Cases 1 and 3
+(c) Cases 1 and 4
+Fig. 4. Power consumption of DCs under (a) Cases 1 and 2, (b) Cases 1 and 3, and (c) Cases 1 and 4.
+1000
+1500
+2000
+2500
+3000
+Hosting capacity (MW)
+Case 1
+Case 2
+Case 3
+Case 4
+1231
+906
+2498
+1591
+1053
+2977
+1750
+933
+2201
+2033
+1809
+2389
+DC1
+DC2
+DC3
+Fig. 5. Hosting capacity of DCs under four cases.
+to Case 1, Cases 2–4 support more hosting capacity and have
+higher annual costs, reaching £4.546, £4.442, and £4.641 bil-
+lion, respectively. The corresponding HCCE values, calculated
+from the cost, remain within a range of 6.77–6.99 MW per mil-
+lion pounds. Case 4 thus delivers the largest absolute HC gain,
+although its incremental capacity-to-cost ratio is slightly lower
+than those of Cases 2 and 3. The richer flexibility formulations
+also increase computational complexity, resulting in longer so-
+lution times, from 1190.15 s in Case 1 to 3167.51 s in Case 4.
+These results quantify the HC frontier and its operational con-
+sequence. The associated changes in network operation are ex-
+amined in Section 4.4.
+4.3. Analysis of flexibility in DCs
+The HC gains reported in Section 4.2 raise a further question:
+how is the available DC flexibility actually utilized in the oper-
+ational schedule? Figure 6 addresses this question by showing
+the actual spatial and temporal workload shifting in Case 4. The
+widespread colored regions in Figs. 6(a) and (b) demonstrate
+that both spatial and temporal flexibility are activated through-
+out the year. The two maps therefore illustrate how spatial and
+temporal flexibility reshape the location and time of DC power
+demand in the optimized schedule.
+The annual pattern of spatial flexibility in Fig. 6(a) has a clear
+directional structure. DC1 and DC2 predominantly exhibit neg-
+ative workload shifts, whereas DC3 experiences positive shifts,
+with the spatial redistribution becoming more pronounced in
+the later part of the year. The simultaneous occurrence of op-
+posite signs across the three sites is consistent with workload
+migration: DC1 and DC2 primarily act as workload-sending
+DC sites, whereas DC3 predominantly serves as the workload-
+receiving DC site. The persistence of this pattern across the
+annual map shows that spatial flexibility is used as a recurring
+portfolio-level response, although its intensity varies with date
+and hour.
+The annual pattern of temporal flexibility in Fig. 6(b) exhibits
+a distinct operational pattern.
+Each DC displays alternating
+positive and negative regions, reflecting the temporal redistri-
+bution of workload across the day. Overall, workload is mainly
+shifted away from the morning and evening periods and to mid-
+day and overnight hours. These shifts are unevenly distributed
+across the year, and the late-year maps show more pronounced
+variations, particularly at DC1 and DC3. Temporal flexibility
+therefore reshapes DC power demand at each site, rather than
+reproducing the redistribution across DCs observed for spatial
+flexibility.
+10
+
+
+--- Page 11 ---
+0:00
+12:00
+24:00
+a
+DC 1 - spatial shift
+0:00
+12:00
+24:00
+DC 2 - spatial shift
+Jan
+Mar
+May
+Jul
+Sep
+Nov
+0:00
+12:00
+24:00
+DC 3 - spatial shift
+0:00
+12:00
+24:00
+b
+DC 1 - temporal shift
+0:00
+12:00
+24:00
+DC 2 - temporal shift
+Jan
+Mar
+May
+Jul
+Sep
+Nov
+0:00
+12:00
+24:00
+DC 3 - temporal shift
+−1000
+−750
+−500
+−250
+0
+250
+500
+750
+1000
+Net DC load shift (MW)
+24 Sep
+23:00
+25 Sep
+05:00
+25 Sep
+11:00
+25 Sep
+17:00
+25 Sep
+22:00
+−1000
+−500
+0
+500
+1000
+Net spatial load shift (MW)
+c
+14 Nov
+09:00
+14 Nov
+15:00
+14 Nov
+21:00
+15 Nov
+03:00
+15 Nov
+08:00
+−500
+0
+500
+Net temporal load shift (MW)
+d
+DC1
+DC2
+DC3
+Case 3 (c) / Case 2 (d)
+Case 4
+Fig. 6. Annual patterns of DC load shifting. a, b: Spatial and temporal load shifts under Case 4. Color mapping represents the quantity of net load shifts from other
+DCs/other times (positive values) or shifts to other DCs/other times (negative values). c, d: Typical activation windows of spatial and temporal flexibility under
+different cases.
+The enlarged windows in Figs. 6(c) and (d) further highlight
+these distinct spatial and temporal operating patterns. In the
+September spatial window, the solid Case 4 profiles show an
+increase at DC3 accompanied by reductions at DC1 and DC2.
+The dashed SF profiles follow the same direction of shifting
+but with smaller excursions over the main activated period. In
+the November temporal window, the solid profiles alternate be-
+tween negative and positive shifts at the three DCs, displaying
+the deferral and subsequent recovery of workload within the
+window. Relative to the dashed SF and TF profiles in panels (c)
+and (d), respectively, the STF case modifies both the magnitude
+and timing of the flexibility response at each DC, with the most
+pronounced differences observed at DC1 and DC3.
+Taken together, the annual maps and activation windows il-
+lustrate how the two flexibility mechanisms complement each
+other at the DC level. Spatial flexibility determines where eli-
+gible workloads are processed, whereas temporal flexibility de-
+termines when they are processed. Their coordinated utilization
+therefore provides two distinct dimensions of adjustment in the
+spatio-temporal scheduling of DC power demand. The result-
+ing impacts on the power system are examined separately in the
+next section.
+4.4. Analysis of system impact
+Sections 4.2 and 4.3 quantify the hosting capacity gains and
+characterize the spatial and temporal workload shifting. This
+section examines how workload shifting reshapes transmission
+line loading and allows additional DC hosting capacity to be
+accommodated within the existing network.
+Fig. 7(a) illustrates the loading patterns of L41, L121, and
+L140 during the selected peak period. Under Case 1 (NF), high
+loading is particularly evident on L121 and L140 around the
+middle of the period, while L41 exhibits more pronounced tem-
+poral fluctuations. Under Case 2 (TF), near-limit loading on
+L121 and L140 persists over a broader sequence of hours, re-
+flecting how the larger volume of workload is accommodated
+by scheduling its processing across time.
+Case 3 (SF) pro-
+duces a distinct spatial response: loading on L41 becomes more
+sustained, whereas L140 experiences longer intervals of rela-
+tively low loading. This redistribution demonstrates how shift-
+ing workloads across DC locations reshapes transmission line
+loading and alters the network headroom to accommodate ad-
+ditional DC demand. Under Case 4 (STF), high line loading
+extends to all three lines over a larger portion of the period.
+Therefore, by scheduling DC power demand across time and
+location, flexibility reshapes transmission line loading and en-
+ables existing network headroom to be utilized more effectively.
+The annual loading duration curves in Figs. 7(b)–(d) show
+how these operational differences extend over the year. Case 4
+(STF) exhibits the longest duration of near-limit operation on
+all three transmission lines, indicating more sustained utiliza-
+tion of their existing transmission capacity at the increased DC
+11
+
+
+--- Page 12 ---
+L41
+L121
+L140
+L41
+L121
+L140
+L41
+L121
+L140
+12 Nov
+19:00
+13 Nov
+19:00
+14 Nov
+19:00
+15 Nov
+19:00
+16 Nov
+19:00
+L41
+L121
+L140
+75
+80
+85
+90
+95
+100
+Line loading (%)
+0
+10
+20
+30
+40
+75
+80
+85
+90
+95
+100
+Critical line loading (%)
+99%
+L41
+0
+10
+20
+30
+40
+99%
+c
+L121
+0
+10
+20
+30
+40
+99%
+d
+L140
+a
+b
+Exceedance duration of annual hours (%)
+Case 1
+Case 2
+Case 3
+Case 4
+Fig. 7. System impacts of data center flexibility under the four cases. a: Loading of critical lines (L41, L121, and L140) during the peak period. b, c, d: Annual
+loading duration curves for L41, L121, and L140 under the four cases.
+hosting capacity. The individual flexibility cases reveal distinct
+responses. Relative to Case 1 (NF), Case 3 (SF) shortens near-
+limit operation on L121 and extends it on L140, demonstrating
+the redistribution of annual transmission line loading associated
+with spatial flexibility. Case 2 (TF) extends near-limit operation
+on all three lines through temporal flexibility. On L41, Case 2
+(TF) also maintains elevated loading for longer at lower loading
+thresholds. Temporal and spatial flexibility therefore produce
+distinct annual loading patterns on the same transmission line
+over the year.
+Together, these results explain the network mechanism un-
+derlying the hosting capacity gains. Spatial flexibility changes
+the distribution of demand among DC locations, while temporal
+flexibility changes its distribution across operating hours. Their
+coordinated use provides additional ways to supply the growing
+computational workload within the available transmission ca-
+pacity. The more sustained loading observed under STF accom-
+panies the increase in hosting capacity from 4635.1 MW under
+NF to 6231.5 MW, corresponding to a 34.44% improvement re-
+ported in Table 3. DC flexibility therefore increases the usable
+network headroom for additional DC connection through coor-
+dinated spatial and temporal scheduling of DC power demand.
+5. Conclusions and future work
+This paper developed a two-stage electricity–computation
+co-optimization framework for quantifying the spatial and tem-
+poral DC workload flexibility value in hosting capacity. The
+framework integrates workload scheduling, DC power con-
+sumption, generation dispatch, and transmission constraints
+over a complete 8760-hour year.
+The proposed two-stage
+framework first identifies the maximum aggregate DC hosting
+capacity in Stage 1 and then determines the annual system oper-
+ation and DC workload schedule at the resulting hosting capac-
+ity allocation in Stage 2. This formulation establishes a direct
+connection between the planning value of DC flexibility and the
+operational decisions through which that value is realized.
+The modified IEEE-118 case study demonstrates that both
+temporal and spatial workload flexibility increase the DC host-
+ing capacity of the transmission network. Relative to the in-
+flexible case, temporal and spatial flexibility provide gains of
+985.4 MW (21.26%) and 249.1 MW (5.37%), respectively,
+12
+
+
+--- Page 13 ---
+while their coordinated use increases the hosting capacity to
+6231.5 MW, representing a gain of 1596.4 MW (34.44%). The
+coordinated gain exceeds the sum of the stand-alone gains by
+361.9 MW (7.81%), demonstrating the complementary value of
+coordinated flexibility across locations and time. This value is
+realized through distinct operational mechanisms: spatial flex-
+ibility redirects interactive workloads primarily from DC1 and
+DC2 to DC3, whereas temporal flexibility defers batch work-
+loads from morning and evening periods to available midday
+and overnight hours. Their coordinated activation consequently
+reshapes both the hosting capacity allocation and the DC power
+demand profile.
+The resulting redistribution of line loading
+among L41, L121, and L140, together with the longer dura-
+tion of near-limit operation at the optimized hosting capacity,
+indicates fuller utilization of the existing transmission network
+capacity. Workload flexibility therefore enables the network to
+accommodate additional DC hosting capacity by coordinating
+where and when computational workloads are served.
+Future work can extend the framework towards uncertainty-
+aware connection assessment and its operational implemen-
+tation.
+Stochastic and distributionally robust optimization
+can incorporate variations in computational task arrivals, con-
+ventional system demand, and renewable availability to ob-
+tain security and reliability-qualified hosting capacity values.
+Matched capacity comparisons at a common DC hosting ca-
+pacity can quantify how workload flexibility affects its system
+impact in addition to its hosting capacity value. Finally, the
+optimized workload schedules can support the design of flexi-
+ble or non-firm connection arrangements by defining activation
+conditions, workload service requirements, measurement and
+verification procedures, and the settlement mechanisms. These
+extensions would translate the quantified hosting capacity value
+of DC workload flexibility into implementable planning and op-
+erational solutions for power systems accommodating rapidly
+growing AI-era DC demand.
+References
+[1] International Energy Agency, Energy and AI, Tech. rep.,
+International Energy Agency, Paris (Apr. 2025).
+URL
+https://www.iea.org/reports/
+energy-and-ai
+[2] A. Shehabi, S. J. Smith, A. Hubbard, A. Newkirk, N. Lei,
+M. A. Siddik, B. Holecek, J. G. Koomey, E. R. Masanet,
+D. A. Sartor, 2024 united states data center energy us-
+age report, Tech. Rep. LBNL-2001637, Lawrence Berke-
+ley National Laboratory, Berkeley, CA (Dec. 2024). doi:
+10.71468/P1WC7Q.
+URL https://doi.org/10.71468/P1WC7Q
+[3] Electric Power Research Institute, Powering data centers:
+U.S. energy system and emissions impacts of growing
+loads, Tech. Rep. 3002031198, Electric Power Research
+Institute (Oct. 2024).
+URL
+https://restservice.epri.com/
+publicdownload/000000003002031198/0/Product
+[4] North American Electric Reliability Corporation, Char-
+acteristics and risks of emerging large loads, Tech. rep.,
+North American Electric Reliability Corporation (Jul.
+2025).
+URL
+https://www.nerc.com/globalassets/
+who-we-are/standing-committees/rstc/
+whitepaper-characteristics-and-risks-of-emerging-la
+pdf
+[5] E. Masanet, A. Shehabi, N. Lei, S. Smith, J. Koomey,
+Recalibrating global data center energy-use estimates,
+Science 367 (6481) (2020) 984–986.
+doi:10.1126/
+science.aba3758.
+[6] E. Cremona, P. Czyzak, Grids for data centres: Ambitious
+grid planning can win europe’s AI race, Tech. rep., Ember
+(Jun. 2025).
+URL
+https://ember-energy.
+org/app/uploads/2025/06/
+Report-Grids-for-data-centres-in-Europe-PDF.
+pdf
+[7] K. Kim, F. Yang, V. M. Zavala, A. A. Chien, Data cen-
+ters as dispatchable loads to harness stranded power, IEEE
+Transactions on Sustainable Energy 8 (1) (2017) 208–218.
+doi:10.1109/TSTE.2016.2593607.
+[8] P. Huang, B. Copertaro, X. Zhang, J. Shen, I. Löfgren,
+M. Rönnelid, J. Fahlen, D. Andersson, M. Svanfeldt, A
+review of data centers as prosumers in district energy sys-
+tems: Renewable energy integration and waste heat reuse
+for district heating, Applied Energy 258 (2020) 114109.
+doi:10.1016/j.apenergy.2019.114109.
+[9] A. Radovanovi´c, R. Koningstein, I. Schneider, B. Chen,
+A. Duarte, B. Roy, D. Xiao, M. Haridasan, P. Hung,
+N. Care, S. Talukdar, E. Mullen, K. Smith, M. Cottman,
+W. Cirne, Carbon-aware computing for datacenters, IEEE
+Transactions on Power Systems 38 (2) (2023) 1270–1280.
+doi:10.1109/TPWRS.2022.3173250.
+[10] S. Chen, P. Li, H. Ji, H. Yu, J. Yan, J. Wu, C. Wang, Oper-
+ational flexibility of active distribution networks with the
+potential from data centers, Applied Energy 293 (2021)
+116935. doi:10.1016/j.apenergy.2021.116935.
+[11] Y. Cao, M. Cheng, S. Zhang, H. Mao, P. Wang, C. Li,
+Y. Feng, Z. Ding, Data-driven flexibility assessment for
+internet data center towards periodic batch workloads,
+Applied Energy 324 (2022) 119665. doi:10.1016/j.
+apenergy.2022.119665.
+[12] W. Zhang, V. M. Zavala, Remunerating space–time, load-
+shifting flexibility from data centers in electricity markets,
+Applied Energy 326 (2022) 119930. doi:10.1016/j.
+apenergy.2022.119930.
+[13] C. Li, K. Zheng, H. Guo, C. Kang, Q. Chen, Computation-
+power coupled modeling for IDCs and collaborative op-
+timization in ADNs, IEEE Transactions on Smart Grid
+13
+
+
+--- Page 14 ---
+15 (3) (2024) 2762–2775.
+doi:10.1109/TSG.2023.
+3321376.
+[14] B. Zeng, Y. Zhou, X. Xu, D. Cai, Bi-level planning ap-
+proach for incorporating the demand-side flexibility of
+cloud data centers under electricity-carbon markets, Ap-
+plied Energy 357 (2024) 122406.
+doi:10.1016/j.
+apenergy.2023.122406.
+[15] Z. Shao, N. Yu, D. Wong, Stochastic long-term joint de-
+carbonization planning for power systems and data cen-
+ters: A case study in PJM, International Journal of Elec-
+trical Power & Energy Systems 173 (2025) 111377. doi:
+10.1016/j.ijepes.2025.111377.
+[16] Y. Ye, D. Ma, Y. Wu, H. Hu, X. Zhang, C. Liu, D. Xu,
+Harvesting spatial-temporal load migration flexibility of
+data centers:
+A chance-constrained bi-level optimiza-
+tion model with endogenously formed risk-reflective lo-
+cational prices, Applied Energy 402 (2026) 126971. doi:
+10.1016/j.apenergy.2025.126971.
+[17] D. Kim, L. Dong, L. Xie, Flexibility-aware framework
+for efficient planner-initiated siting of data center, Na-
+ture Communications 17 (1) (2026) 6512. doi:10.1038/
+s41467-026-72324-9.
+[18] L. Fang, X. Li, Hosting capacity assessment and enhance-
+ment for edge data centers in active distribution networks,
+accepted for presentation at the 2026 IEEE Industry Ap-
+plications Society Annual Meeting (2026). arXiv:2606.
+01407, doi:10.48550/arXiv.2606.01407.
+[19] G. Manassero, Jr., R. Rozenblit Tiferes, T. Nasci-
+mento Ribeiro, A. Mazza, E. Pons, A resilience-aware
+methodology to support data center optimal allocation
+considering the transmission grid’s hosting capacity, Ap-
+plied Energy 423 (2026) 128351.
+doi:10.1016/j.
+apenergy.2026.128351.
+[20] O. Samir, H. Zeineldin, E. F. El-Saadany, Hosting capac-
+ity of AI training data centers with PEM support: A two-
+level optimization approach, Applied Energy 421 (2026)
+128231. doi:10.1016/j.apenergy.2026.128231.
+[21] Y. Zhang, D. C. Wilson, I. C. Paschalidis, A. K. Coskun,
+HPC data center participation in demand response: An
+adaptive policy with QoS assurance, IEEE Transactions
+on Sustainable Computing 7 (1) (2022) 157–171. doi:
+10.1109/TSUSC.2021.3077254.
+[22] T. Sukprasert, A. Souza, N. Bashir, D. Irwin, P. Shenoy,
+On the limitations of carbon-aware temporal and spatial
+workload shifting in the cloud, in: Proceedings of the
+Nineteenth European Conference on Computer Systems,
+Association for Computing Machinery, 2024, pp. 924–
+941. doi:10.1145/3627703.3650079.
+[23] Z. Wu, L. Chen, J. Wang, M. Zhou, G. Li, Q. Xia, In-
+centivizing the spatiotemporal flexibility of data centers
+toward power system coordination, IEEE Transactions on
+Network Science and Engineering 10 (2023) 1766–1778.
+doi:10.1109/TNSE.2023.3234445.
+[24] T. Yang, H. Jiang, Y. Hou, Y. Geng, Carbon manage-
+ment of multi-datacenter based on spatio-temporal task
+migration, IEEE Transactions on Cloud Computing 11 (1)
+(2023) 1078–1090. doi:10.1109/TCC.2021.3130644.
+[25] I. Riepin, T. Brown, V. M. Zavala, Spatio-temporal load
+shifting for truly clean computing, Advances in Applied
+Energy 17 (2025) 100202.
+doi:10.1016/j.adapen.
+2024.100202.
+[26] T. Wan, Y. Tao, J. Qiu, S. Lai, Internet data centers
+participating in electricity network transition consider-
+ing carbon-oriented demand response, Applied Energy
+329 (2023) 120305. doi:10.1016/j.apenergy.2022.
+120305.
+[27] Y. Cao, F. Cao, Y. Wang, J. Wang, L. Wu, Z. Ding, Man-
+aging data center cluster as non-wire alternative: A case
+in balancing market, Applied Energy 360 (2024) 122769.
+doi:10.1016/j.apenergy.2024.122769.
+[28] J. Jian, J. Zhao, H. Ji, L. Bai, J. Xu, P. Li, J. Wu, C. Wang,
+Supply restoration of data centers in flexible distribution
+networks with spatial-temporal regulation, IEEE Trans-
+actions on Smart Grid 15 (1) (2024) 340–354.
+doi:
+10.1109/TSG.2023.3286844.
+[29] Y. Zhang, B. Zou, X. Jin, Y. Luo, M. Song, Y. Ye, Q. Hu,
+Q. Chen, A. C. Zambroni, Mitigating power grid impact
+from proactive data center workload shifts: A coordinated
+scheduling strategy integrating synergistic traffic–data–
+power networks, Applied Energy 377 (2025) 124697.
+doi:10.1016/j.apenergy.2024.124697.
+[30] O. Van Geet, D. Sickinger, Best practices guide for
+energy-efficient data center design, Tech. rep., U.S.
+Department of Energy, Federal Energy Management
+Program (Jul. 2024).
+URL
+https://www.energy.gov/
+sites/default/files/2024-07/
+best-practice-guide-data-center-design.pdf
+[31] Z. Ding, Y. Cao, S. Zhang, P. Wang, J. Liu, M. Cheng,
+H. Mao, Coordinated operation for data center and power
+system in the context of energy internet (I): Energy de-
+mand management model of data center, Proceedings of
+the CSEE 42 (9) (2022) 3161–3177. doi:10.13334/j.
+0258-8013.pcsee.210813.
+[32] P. Andrianesis, P. Biskas, G. Liberopoulos, Evaluating
+the cost of emissions in a pool-based electricity market,
+Applied Energy 298 (2021) 117253. doi:10.1016/j.
+apenergy.2021.117253.
+[33] Gurobi Optimization, LLC, Gurobi Optimizer Reference
+Manual, Gurobi Optimization, LLC (2025).
+URL https://www.gurobi.com
+14
+
+
+--- Page 15 ---
+[34] I. Peña, C. B. Martinez-Anido, B.-M. Hodge, An extended
+IEEE 118-bus test system with high renewable penetra-
+tion, IEEE Transactions on Power Systems 33 (1) (2018)
+281–289. doi:10.1109/TPWRS.2017.2695963.
+[35] G. Cochard, B. Simon, CC-IN2P3 2024 workload dataset
+(2026). doi:10.5281/zenodo.18668107.
+URL https://doi.org/10.5281/zenodo.18668107
+[36] S. Klingert, S. Szilvas, Spinning gold from straw -
+evaluating the flexibility of data centres on power mar-
+kets, Energy Informatics 3 (2020) 7.
+doi:10.1186/
+s42162-020-00110-y.
+[37] Tencent Cloud Developer, The first global-scale com-
+mercial deployment of RDMA, Tencent Cloud’s core
+technology in computing (2018).
+URL
+https://cloud.tencent.com/developer/
+news/1261026
+[38] Y. Zhang, B. Zeng, Y. Zhou, H. Xu, W. Liu, Re-
+search on interactive integration planning of data cen-
+ters and distribution network driven by carbon emission
+reduction, Transactions of China Electrotechnical Soci-
+ety 38 (23) (2023) 6433–6450. doi:10.19595/j.cnki.
+1000-6753.tces.221646.
+15

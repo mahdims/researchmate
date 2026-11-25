@@ -1,0 +1,2392 @@
+--- Page 1 ---
+1
+Training-Free Multi-Agent Cooperative Embodied
+Search from Uncertain Vision-Language Priors
+Fan Pu, Keshu Wu, Jiwan Jiang, Shiyu Shen, Zhiwen Fan, Zhengzhong Tu, Jiachen Li, and Yang Zhou
+Abstract—Real-world Vision-Language Navigation (VLN) re-
+quires agents to act under partial observability, where map
+structure, semantic cues, and target locations may be incomplete
+or incorrectly inferred by foundation models. This paper presents
+a lightweight, training-free, and uncertainty-aware framework
+for cooperative multi-agent multi-target search in mapless en-
+vironments. Instead of learning an end-to-end navigation policy,
+the framework separates high-level semantic reasoning from low-
+level execution through a scalable graph-optimization backbone.
+Multimodal Large Language Models (MLLMs) serve only as
+hypothesis generators, proposing semantic zones, target-location
+cues, and possible navigable connections. These outputs are
+treated as uncertain priors and further refined using online
+observations and graph-context evidence. Cooperative navigation
+is then formulated as a rolling-horizon multi-agent mixed-integer
+linear program with a lexicographic objective that first maxi-
+mizes target-directed reward and then reduces travel distance,
+uncertain-edge use, and repeated visits. Experiments derived
+from 100 Matterport3D test cases show that the proposed
+framework improves target coverage and search efficiency over
+representative baseline methods, while shared information and
+joint planning enable more balanced workloads across agents. By
+operating on an abstract graph without relying on embodiment-
+specific policy parameters, the framework scales across varying
+numbers of agents and targets, generalizes to unseen environ-
+ments, and accommodates different perception modules and low-
+level controllers without task-specific retraining.
+Index Terms—Multi-agent systems, cooperative search, vision-
+language navigation, mixed-integer linear programming.
+I. INTRODUCTION
+Robots operating in human environments must make de-
+cisions from incomplete and evolving observations. Planning
+under partial observability and probabilistic robotics provide
+foundations for reasoning about uncertain states and environ-
+ment structure [1], [2], while mapping and SLAM enable
+navigation in unknown or partially known spaces [3]–[5]. Nev-
+ertheless, cooperative embodied search remains challenging
+when multiple robots must locate multiple targets without
+prior knowledge of the semantic layout of the environment,
+traversable connections, or target locations.
+Fan Pu, Keshu Wu, Jiwan Jiang, and Yang Zhou are with the Department
+of Civil and Environmental Engineering, Texas A&M University, TX 77843.
+Shiyu Shen is with the Department of Civil and Environmental Engineering,
+University of Illinois at Urbana-Champaign, IL 61801.
+Zhiwen Fan is with the Department of Electrical and Computer Engineering,
+Texas A&M University, TX 77843.
+Zhengzhong Tu is with the Department of Computer Science and Engi-
+neering, Texas A&M University, TX 77843.
+Jiachen Li is with the School of Industrial and Systems Engineering and
+the School of Mechanical Engineering, Georgia Institute of Technology, GA
+30332.
+Corresponding author: Yang Zhou.
+Vision-Language Navigation (VLN), Object-Goal Naviga-
+tion (ObjectNav), and their multi-object and open-vocabulary
+extensions have substantially advanced language-guided nav-
+igation and semantic object search [6]–[20]. Multi-robot task
+allocation, path planning, and reward-driven routing further
+provide mechanisms for coordinating agents under shared
+constraints [21]–[28]. However, most existing multi-robot for-
+mulations coordinate agents over known task representations
+and sufficiently reliable environment models, with task re-
+wards and graph connectivity largely treated as known during
+planning. These assumptions are restrictive in cooperative
+multi-agent multi-target search, where agents may duplicate
+one another’s exploration, targets compete for limited search
+effort, and each new observation can alter both target-location
+beliefs and feasible routes.
+Semantic exploration methods address part of this challenge
+by prioritizing frontiers, informative regions, or locations that
+are contextually related to a target [29]–[37]. Recent large
+language and vision-language models provide an additional
+source of commonsense knowledge and have been used to
+propose semantic subgoals, identify promising search regions,
+construct topological representations, and connect language
+instructions with robot actions [38]–[45]. Yet these outputs are
+not verified physical facts. Foundation models may hallucinate
+objects, semantic regions, or navigable connections [46], [47],
+making direct use of their predictions as action commands
+unreliable in partially observed environments.
+To address these limitations, this paper employs Multimodal
+Large Language Models (MLLMs) as structured hypothesis
+generators for cooperative embodied search. From panoramic
+observations and accumulated context, the MLLM proposes
+semantic zones, target-location scores, and possible con-
+nections beyond the verified neighborhood. These uncertain
+hypotheses populate a dynamic semantic topological graph
+and are updated through physical observations. A rolling-
+horizon multi-agent Mixed-Integer Linear Program (MILP)
+first maximizes target-directed reward and then minimizes
+travel distance, hypothesized-edge uncertainty, and revisits
+among reward-optimal routes. The abstract graph decouples
+semantic reasoning from embodiment-specific execution, al-
+lowing different perception modules and low-level controllers
+without retraining. For each current graph, belief state, and
+planning horizon, the MILP yields a solver-certified optimum,
+or an explicit optimality gap when terminated early.
+The contributions of this paper are threefold:
+• We propose a training-free and uncertainty-aware frame-
+work for cooperative multi-agent multi-target search, in
+which MLLMs generate semantic and topological hy-
+arXiv:2610.15038v1  [cs.RO]  10 Oct 2026
+
+
+--- Page 2 ---
+2
+potheses while a graph-based decision layer converts
+them into coordinated, executable actions.
+• We formulate cooperative search as a rolling-horizon
+MILP with a two-priority objective that first maximizes
+uniquely assigned target reward and then minimizes travel
+distance, hypothesized-edge uncertainty, and revisit costs
+while preserving the primary optimum.
+• We validate the framework across unseen environments,
+varying agent and target configurations, and multiple
+MLLM backbones. The proposed method consistently
+improves multi-agent target coverage and search effi-
+ciency over representative vision-language and decentral-
+ized baselines, while the controlled decentralized compar-
+ison demonstrates the benefit of shared graph information
+and joint planning for workload balance and parallel
+search efficiency.
+II. RELATED WORK
+A. Navigation, Mapping, and Embodied Search
+Planning
+under
+partial
+observability
+and
+probabilistic
+robotics provide the foundations for decision-making and state
+estimation under incomplete information [1], [2]. In mobile
+robotics, real-time navigation and map building, SLAM, and
+modern spatial mapping systems have enabled robots to op-
+erate in unknown or partially known environments [3]–[5].
+However, object search requires more than geometric mapping:
+robots must also reason about semantic regions, likely object
+locations, and the value of exploring uncertain areas.
+VLN
+and
+ObjectNav
+provide
+two
+major
+embodied-
+navigation formulations related to this work. VLN focuses on
+following natural-language instructions in visually grounded
+environments [6]–[10], [48], whereas ObjectNav asks an agent
+to search for a specified object category or instance in an
+unfamiliar scene [11]–[15]. Recent multi-object, lifelong, and
+open-vocabulary navigation methods further extend these set-
+tings to longer horizons and broader target categories [16]–
+[20]. Nevertheless, most of these studies focus on a single
+agent and do not directly address cooperative multi-agent
+multi-target search with uncertain map connectivity and dy-
+namically changing target-location estimates.
+B. Multi-Agent Planning and Semantic Exploration
+Cooperative search couples task allocation, route construc-
+tion, and information acquisition. Multi-robot task allocation
+methods assign robots to tasks under coupled utilities and con-
+straints [21], [22], while multi-agent path-finding and coverage
+planning construct coordinated routes over shared spatial rep-
+resentations [23], [24], [49]. Team-orienteering formulations
+optimize reward collection under travel budgets [25], [26],
+but typically assume known rewards and graph structure. The
+difficulty increases under partial observability because one
+agent’s observations can change the value and feasibility of
+the plans assigned to other agents, consistent with the broader
+complexity of decentralized planning under uncertainty [50].
+Frontier-based and information-gain-based exploration ex-
+pand unknown environments by prioritizing unexplored or
+informative regions [29], [30], and coordinated multi-robot
+exploration reduces redundant coverage by jointly considering
+information value and travel cost [31]–[33]. Semantic-search
+methods use object-place relations, semantic maps, memory,
+and contextual priors to prioritize locations likely to contain
+a target [13], [14], [34]–[37]. Vision-language frontier maps
+further guide exploration by ranking frontiers according to
+their visual-semantic relevance to the target [51]. In contrast
+to these approaches, our work coordinates multiple agents
+over a graph containing both physically verified transitions
+and uncertain MLLM-hypothesized connections.
+C. Foundation Models for Navigation and Object Search
+Pretrained language and vision-language models have in-
+creasingly been incorporated into robotic navigation and
+decision-making. Existing approaches connect language in-
+structions with feasible actions [38], combine language rea-
+soning with visual navigation [39], transfer web-scale vision-
+language knowledge to embodied control [40], [41], and use
+large models to propose semantic subgoals, promising search
+regions, or topological representations [42]–[45]. These meth-
+ods demonstrate that foundation models can provide useful
+high-level guidance without environment-specific training.
+However, hallucination remains a persistent limitation of
+both language and multimodal foundation models [46], [47].
+In embodied settings, hallucinations can appear as incorrect
+target-location predictions, non-existent semantic regions, or
+infeasible spatial connections. The proposed framework there-
+fore differs from methods that directly translate foundation-
+model outputs into actions. It treats MLLM outputs as uncer-
+tain graph hypotheses, revises them using physical observa-
+tions and graph-context evidence, and delegates coordinated
+action selection to an explicit optimization model with great
+generalizability.
+III. PROBLEM FORMULATION
+We consider cooperative embodied search in partially ob-
+served, mapless environments, where a team of robots Q
+must locate multiple targets K without prior knowledge
+of the environment topology, semantic regions, traversable
+connections, or target locations. As illustrated in Figure 1,
+the proposed framework follows a closed-loop hypothesize–
+verify–optimize–execute process. At each decision step, the
+robots acquire local panoramic observations and feasible one-
+hop actions; an MLLM then uses these observations, the
+task descriptions, and the accumulated graph context to pro-
+pose uncertain semantic and topological hypotheses, including
+target-location scores and possible unobserved connections.
+These hypotheses are then incorporated into a dynamic graph
+that distinguishes physically verified edges from ungrounded
+MLLM-proposed edges. A rolling-horizon MILP selects coor-
+dinated routes for the team, of which only the first grounded
+transition is executed before new observations are collected,
+the graph is updated, and the problem is solved again.
+A. Partial Observations and Graph Context
+At time t, the framework maintains a graph G1:t−1 con-
+taining the geometric, semantic, and hypothesized information
+
+
+--- Page 3 ---
+3
+2. MLLM hypothesis
+MLLM as 
+hypothesis 
+generator
+Updated by
+observed  evidence
+Direct target 
+detection 𝒇𝒌
+𝒕
+1
+Semantic 
+zones 𝒁𝒕
+2
+Target-location
+scores ξ𝑣,𝑘
+𝑡
+𝑝𝑣,𝑘
+𝑔𝑜𝑎𝑙,𝑡
+3
+Hypothesized edges 𝑬−𝑡
+Distance 𝑑
+Confidence
+0.62
+4
+1. Perception
+Time 𝑡, agent set 𝑞∈𝑸
+Panorama observations {𝑂𝑞𝑡}
+Task 𝑻:
+Find targets 𝑲
+…
+Graph context
+𝐺1:𝑡−1 ≔(𝑉1:𝑡−1, 𝐸1:𝑡−1)
+1
+𝑡−2
+𝑡−1
+…
+…
+time
+1
+2
+3
+3. Multi-resolution hypothesis graph
+Assignment (region → viewpoints)
+Living
+room
+Kitchen
+Hallway
+Study
+room
+Semantic zone layer (coarse)
+Viewpoint layer (fine)
+1
+2
+3
+Verified edge
+Hypothesized edge
+Viewpoints
+(grouped by zone)
+Targets
+Robots
+Online graph update
+•
+Edge confidence and distance update based on  Bayesian 
+evidence fusion
+•
+Viewpoint-zone assignment update
+•
+Target-location belief normalization
+4. Rolling-horizon MILP planner
+Input: updated hypothesis graph
+Objective (maximize)
+•
+Maximize target reward
+•
+Penalize travel distance
+•
+Penalize edge uncertainty
+•
+Penalize revisits
+Constraints
+•
+Coordinated multi-agent open 
+paths
+•
+Physically executable first moves
+•
+Node-flow consistency 
+•
+Dead-end avoidance
+……
+Planned coordinated paths
+(rolling horizon execution)
+1
+2
+3
+5. Action execution
+1
+2
+3
+Execute first move
+Low-level navigation
+Executes the first step only
+New observations
+1
+2
+3
+…
+…
+…
+Repeat until all 
+targets are found
+observe → update graph and hypothesis → re-optimize 
+𝒕= 𝒕+ 𝟏
+Fig. 1. Overall architecture of the proposed framework.
+7
+42
+13
+3 19 5 37
+Fig. 2.
+Panoramic observation at an agent’s current viewpoint. The red
+numbers denote the IDs of neighboring viewpoints returned by the navigation
+system and constitute the agent’s feasible one-hop action space.
+accumulated through time t −1. For any graph component,
+superscript t denotes information generated or observed at
+time t before integration, whereas 1 : t denotes the retained
+cumulative information. Each agent q, located at viewpoint
+nq, receives Ot
+q = (T, Irgb
+nq , Anq), where T contains the
+target descriptions, Irgb
+nq is the horizontal panorama observed
+at the current viewpoint, and Anq contains the neighboring
+viewpoints that are reachable in one step together with their
+travel distances. Figure 2 shows an example panorama. The
+red labels identify the neighboring viewpoint IDs returned by
+the navigation system; in this example, they form the feasible
+one-hop action set available from the current viewpoint. These
+local observations and feasible actions provide the current
+perceptual input for graph generation, while G1:t−1 supplies
+the accumulated context from previous steps. The MLLM then
+combines {Ot
+q : q ∈Q} with G1:t−1 to generate updated
+environment hypotheses and form G1:t. The planner then
+executes only the first selected action before obtaining new
+observations and replanning at time t + 1. Thus, the graph is
+progressively grounded and refined during exploration.
+B. Multi-Resolution Hypothesized Representation
+From {Ot
+q : q ∈Q}, the MLLM proposes semantic zones
+Zt := {zt
+prox,q : q ∈Q} ∪Zt
+dist, where zt
+prox,q describes the
+area currently occupied by agent q, and Zt
+dist contains directly
+observed distal areas. These zones provide coarse semantic
+context for viewpoint assignment, target-location scoring, and
+graph consistency. The viewpoint layer contains the current
+and reachable poses: Vt := S
+q∈Q Anq ∪{nq : q ∈Q}. The
+MLLM assigns each viewpoint to one semantic zone, and Π1:t
+n
+denotes the viewpoints assigned to zone n. Thus, semantic
+zones provide high-level context, while viewpoints and their
+connections support navigation and action execution.
+C. Foundation-Model Graph Hypotheses
+At time t, only targets that have not yet been directly
+detected remain active. We define the binary indicator f t
+k,
+which equals to 1 if target k has been found as of time t.
+Therefore, we define Kt
+act := {k ∈K : f t
+k = 0}. For any
+found target k /∈Kt
+act, target-location probabilities and raw
+target scores are removed from all nodes and are no longer
+included in graph-generation prompts.
+a) Node-level hypothesis: For each active target k ∈
+Kt
+act, the MLLM assigns nonnegative relative scores to eli-
+gible viewpoints based on the current observations and graph
+context; these scores are normalized into target-location prob-
+abilities used by the optimizer. Let Ct := {nq : q ∈Q}
+denote the set of current viewpoints. The eligible viewpoint
+set is defined as
+Vt
+elig :=
+
+v ∈V1:t : v /∈Ct, τ t
+v = 0
+	
+,
+(1)
+where τ t
+v indicates the times that viewpoint v has been visited
+as of time t. For each v ∈Vt
+elig and k ∈Kt
+act, let ξt
+v,k ≥0
+denote the raw target-location score. When the total score for
+target k is positive, the normalized target-location probability
+is given by pgoal,t
+v,k
+= ξt
+v,k/ P
+u∈Vt
+elig ξt
+u,k.
+We say that a viewpoint v is grounded if it has been visited,
+that is, τ t
+v > 0. For a grounded viewpoint v, an active target
+that is not directly detected at v is treated as absent from
+that viewpoint for planning purposes. Therefore, for any v ∈
+
+
+--- Page 4 ---
+4
+V1:t\Vt
+elig, k ∈Kt
+act, we fix pgoal,t
+v,k
+= 0. For any found target
+k /∈Kt
+act, its raw scores and target-location probabilities are
+removed from the graph state.
+b) Edge-level hypothesis: We define edges to describe
+possible navigable relations between feasible agent poses. At
+time slot t, let Et := Et
++ ∪Et
+−be the edges generated during
+time slot t, which consists of two disjoint subsets Et
++ and
+Et
+−. The set Et
++ contains local transitions returned by the
+navigation system from the agents’ current viewpoints to their
+visible neighboring viewpoints. These edges are physically
+verified and have measured travel distances. In contrast, Et
+−
+are MLLM hypothesized edges proposed from the current ob-
+servations and the accumulated graph context, which represent
+plausible navigable connections between viewpoint nodes that
+have not yet been physically visited. When edge hypotheses
+are available, ungrounded edges support look-ahead planning
+beyond the physically verified local neighborhood and remain
+uncertain until their connectivity is verified as exploration
+reaches the corresponding endpoints.
+For each physically observed edge {i, j} ∈Et
++, its ex-
+istence is verified and the travel distance dt
+{i,j} is directly
+measured. For each hypothesized edge {i, j} ∈Et
+−, let
+be{i,j} ∈0, 1 indicate whether the proposed connection is truly
+navigable. Before physical verification, the MLLM assigns
+an initial conditional edge-existence probability based on the
+agents’ current observations, the accumulated graph context
+through time t −1, and the target descriptions, as
+qcond,∗t
+{i,j}
+:= P
+ be{i,j} = 1 | {Ot
+q : q ∈Q}, G1:t−1, T
+
+.
+(2)
+Moreover, the MLLM also provides an initial distance
+estimate d∗t
+{i,j} for each newly hypothesized edge {i, j} ∈Et
+−.
+This estimate represents the expected travel distance if the
+hypothesized connection exists. Its initial uncertainty is repre-
+sented by the variance parameter (σ∗t
+{i,j})2. For each retained
+edge {i, j}, pt,cond
+exist,{i,j} denotes its conditional existence proba-
+bility at time t. For each retained ungrounded edge, dt
+{i,j} and
+(σt
+{i,j})2 denote its current distance estimate and variance.
+D. Dynamic Graph Update
+a) Node update: At time slot t, the MLLM proposes
+a set of semantic-zone hypotheses Zt from the current ob-
+servations, while the onboard navigation system provides the
+feasible viewpoint set Vt. These newly identified semantic
+zones and viewpoints are incorporated into the accumulated
+graph only when they have not appeared in previous time slots.
+Thus, the cumulative node sets are updated as
+Z1:t = Z1:t−1 ∪Zt,
+V1:t = V1:t−1 ∪Vt.
+(3)
+b) Viewpoint visit-status update: Once each agent ex-
+ecutes an action and reaches a new pose, its corresponding
+current viewpoint node becomes physically grounded. We
+require different agents to occupy distinct current viewpoint
+nodes at each time slot, that is, nq̸ = nq′ for all q, q′ ∈Q
+with q̸ = q′. Therefore, for the current viewpoint node nq of
+each agent q ∈Q, we mark the node as grounded and update
+its visit count as τ t
+nq = τ t−1
+nq +1, where τ t−1
+v
+= 0 if viewpoint
+node v is newly introduced at time slot t.
+c) Viewpoint assignment update: Let zt
+v ∈Z1:t denote
+the unique semantic zone assigned to viewpoint node v ∈V1:t
+at time slot t and Π1:t
+n
+is the viewpoint-assignment set:
+Π1:t
+n := {v ∈V1:t : zt
+v = n},
+∀n ∈Z1:t.
+(4)
+For a newly introduced viewpoint node v ∈Vt \ V1:t−1,
+the assignment zt
+v is initialized by the MLLM based on {Ot
+q :
+q ∈Q} and G1:t−1, so that every new viewpoint is assigned
+to one semantic zone upon entering the graph. For a viewpoint
+node v ∈V1:t−1 that already exists in the graph, its previous
+assignment is preserved, that is, zt
+v = zt−1
+v
+, unless v becomes
+grounded at the current time slot. In that case, the assignment
+is overridden by the current semantic zone, that is,
+zt
+nq = zt
+prox,q,
+∀q ∈Q : τ t−1
+nq
+= 0, τ t
+nq = 1.
+(5)
+This override is imposed because a viewpoint grounded for
+the first time at time slot t corresponds to the agent’s current
+location and should therefore be assigned to the proximal
+semantic zone inferred from the current observation.
+d) Edge update: Let E1:t denote the retained cumulative
+edge set after the update at time t; thus, E1:t := E1:t−1 ∪Et.
+We partition E1:t into grounded edges E1:t
++ and ungrounded
+edges E1:t
+−. An edge is grounded if at least one of its endpoint
+viewpoints is grounded, so that its existence is verified by the
+navigation system at that viewpoint. Accordingly, a grounded
+edge represents a physically verified executable movement,
+whereas an ungrounded edge represents a hypothesized con-
+nection that has not yet been physically verified.
+Recall that Anq denotes the action space of the current
+viewpoint of agent q. The edges Et := ∪q∈Q,j∈Anq {nq, j}
+then represent the set of physically observed transitions re-
+turned by the navigation system at time slot t, connecting each
+current viewpoint to its visible neighboring viewpoints with
+measured travel distances dt
+{i,j}. We update the grounded edge
+set as E1:t
++ = E1:t−1
++
+∪Et. By definition, every edge {i, j} in
+Et is grounded, and therefore pt,cond
+exist,{i,j} = 1. The ungrounded
+edge set contains only hypothesized edges whose endpoints
+remain ungrounded; hence, E1:t
+−=
+ E1:t−1
+−
+∪Et
+−
+
+\ Et.
+E. Uncertain Hypothesis Update
+Based on the updated graph, we revise the remaining un-
+certain hypotheses using the current observations and accumu-
+lated graph context. Target-location probabilities are updated
+from MLLM predictions over eligible viewpoints. The re-
+maining uncertainty is primarily associated with hypothesized
+edges E1:t
+−, whose existence likelihoods and distance estimates
+are refined as additional evidence becomes available.
+a) Edge distance hypothesis update:
+The distance-
+update rules apply only to ungrounded edges E1:t
+−based on
+Bayesian Gaussian fusion. For each ungrounded edge {i, j} ∈
+E1:t
+−, let δ{i,j} denote its latent true travel distance, conditioned
+on the event that edge {i, j} exists. Before incorporating the
+current observations {Ot
+q : q ∈Q}, let ¯dt
+{i,j} and (¯σt
+{i,j})2
+denote the prior mean and prior variance of δ{i,j}, respectively.
+For edges already present in G1:t−1, the prior mean and
+variance are inherited from the previous posterior estimates,
+that is, ¯dt
+{i,j} = dt−1
+{i,j} and (¯σt
+{i,j})2 = (σt−1
+{i,j})2. For newly
+
+
+--- Page 5 ---
+5
+introduced ungrounded edges in Et
+−at time t, the prior mean
+and prior variance of the edge distance are initialized by
+the MLLM-provided estimate, that is, ¯dt
+{i,j} = d∗t
+{i,j} and
+(¯σt
+{i,j})2 = (σ∗t
+{i,j})2.
+Because the initial distance hypothesis of a newly intro-
+duced edge is generated from the current observations, it
+is not fused again with evidence from the same time slot.
+Gaussian fusion is applied only to ungrounded edges that were
+already present in E1:t−1
+−
+. Conditioned on the edge-existence
+hypothesis, we assume the prior model
+δ{i,j} |
+ be{i,j} = 1, G1:t−1, T
+
+∼N
+
+¯dt
+{i,j}, (¯σt
+{i,j})2
+. (6)
+At time slot t, the current observation and graph context
+provide a cue-based distance estimate ˜dt
+{i,j} for edge {i, j}.
+We model this cue as
+˜dt
+{i,j} |
+ δ{i,j}, be{i,j} = 1, {Ot
+q : q ∈Q}, G1:t−1, T
+
+∼N
+
+δ{i,j}, (˜σt
+{i,j})2
+,
+(7)
+where (˜σt
+{i,j})2 is the cue variance, which quantifies the un-
+certainty of the current observation-derived estimate. When an
+informative cue is available, the Gaussian-Gaussian conjugate
+update yields the following Gaussian posterior:
+δ{i,j} |
+ be{i,j} = 1, {Ot
+q : q ∈Q}, G1:t−1, T
+
+∼N
+
+dt
+{i,j}, (σt
+{i,j})2
+,
+(8)
+with (σt
+{i,j})2 =
+
+
+
+
+
+ 
+1
+(¯σt
+{i,j})2 +
+1
+(˜σt
+{i,j})2
+!−1
+,
+{i, j} ∈E1:t−1
+−
+(σ∗t
+{i,j})2,
+{i, j} ∈Et
+−\ E1:t−1
+−
+,
+(9)
+For dt
+{i,j}, if {i, j} ∈E1:t−1
+−
+, then
+dt
+{i,j} = (σt
+{i,j})2
+ 
+¯dt
+{i,j}
+(¯σt
+{i,j})2 +
+˜dt
+{i,j}
+(˜σt
+{i,j})2
+!
+,
+(10)
+and otherwise if {i, j} ∈Et
+−\ E1:t−1
+−
+, then dt
+{i,j} = d∗t
+{i,j}.
+For an uncertain edge already present in G1:t−1, the updated
+distance dt
+{i,j} is obtained through a precision-weighted fusion
+of the historical estimate and the current cue-based estimate,
+whereas for a newly introduced edge, the current MLLM-
+provided distance and variance are retained. The remaining
+task is therefore to define the cue mean ˜dt
+{i,j} and cue variance
+(˜σt
+{i,j})2 for ungrounded edges.
+Given that, for {i, j} ∈E1:t
+−, one informative current cue is
+the empirical distance pattern of grounded edges, that is, the
+empirical mean µt
+vv and variance (σt
+vv)2 of the distances of
+existing grounded edge, as defined below:
+µt
+vv :=
+1
+|E1:t
++ |
+X
+{i,j}∈E1:t
++
+dt
+{i,j},
+(11)
+(σt
+vv)2 :=
+1
+|E1:t
++ |
+X
+{i,j}∈E1:t
++
+ dt
+{i,j} −µt
+vv
+2 + ε,
+(12)
+where ε > 0 is a small constant for numerical stability.
+Another informative current cue is the semantic support that
+nodes i and j belong to a common semantic zone. For this, let
+vt
+{i,j} be the binary indicator vt
+{i,j} which equals 1 if viewpoint
+nodes i and j are assigned to the same semantic zone, and
+equals 0 otherwise. Accordingly, when E1:t
++̸ = ∅, the empirical
+distance statistics provide the cue mean and cue variance for
+each {i, j} ∈E1:t
+−:
+˜dt
+{i,j} := µt
+vv,
+(˜σt
+{i,j})2 :=
+(σt
+vv)2
+1 + κvvvt
+{i,j}
+,
+(13)
+where κvv > 0 is a fixed parameter. Thus, the distance
+cue encourages the hypothesized ungrounded edge distance
+to remain close to the empirical local-transition scale.
+Because the plausibility of a hypothesized connection also
+depends on whether its estimated distance is consistent with
+observed local transitions, the distance information above
+is further used as evidence when updating edge-existence
+probabilities.
+b) Edge existence hypothesis update: For each grounded
+edge {i, j} ∈E1:t
++ , its existence is physically verified, and
+hence pt,cond
+exist,{i,j} = 1. For each ungrounded edge {i, j} ∈
+E1:t
+−, let be{i,j} ∈{0, 1} denote its latent edge-existence
+indicator, where be{i,j} = 1 indicates that the hypothesized
+connection is navigable. Because all endpoint viewpoints are
+supplied by the navigation system and are therefore known
+to exist, uncertainty is associated only with the connection
+between them. Accordingly, pt,cond
+exist,{i,j} directly represents the
+existence probability of the hypothesized edge.
+Let ¯qt
+{i,j} denote the prior conditional existence probability
+before applying the current evidence-based reweighting. For
+an ungrounded edge already present before time slot t, this
+prior is inherited from the previous posterior. For a newly
+introduced ungrounded edge, it is initialized by the MLLM-
+provided conditional edge-existence probability. Thus,
+¯qt
+{i,j} =
+(
+pt−1,cond
+exist,{i,j},
+{i, j} ∈E1:t−1
+−
+,
+qcond,∗t
+{i,j}
+,
+{i, j} ∈E1:t
+−\ E1:t−1
+−
+.
+(14)
+A newly introduced ungrounded edge {i, j} ∈E1:t
+−\E1:t−1
+−
+retains its MLLM-provided existence confidence because this
+confidence has already been inferred from the current obser-
+vations and graph context. Therefore, pt,cond
+exist,{i,j} = ¯qt
+{i,j}.
+For an ungrounded edge {i, j} ∈E1:t−1
+−
+, the existence
+probability is reweighted using two graph-based cues: whether
+its endpoint viewpoints are assigned to the same semantic
+zone, and whether its prior distance estimate is consistent
+with the empirical distance pattern of grounded edges. The
+prior distance estimate ¯dt
+{i,j} is used in this update so that the
+current distance-fusion result does not enter the edge-existence
+update again through the posterior distance.
+For each previously existing ungrounded edge, define the
+combined evidence score as
+ct
+{i,j} := log
+
+ϱ
+1 −ϱ
+  2vt
+{i,j} −1
+
+−
+  ¯dt
+{i,j} −µt
+vv
+2
+2(σtvv)2
+,
+(15)
+where 1/2 < ϱ < 1 is a fixed parameter. The first term pro-
+vides positive evidence when the two viewpoints are assigned
+to the same semantic zone and negative evidence otherwise.
+
+
+--- Page 6 ---
+6
+The second term penalizes the edge-existence hypothesis if the
+prior distance estimate deviates from the empirical distance
+pattern of physically verified local transitions.
+Using this score, we define the positive evidence weights
+under the edge-existence and edge-nonexistence hypotheses
+as
+λt,+
+{i,j} := exp
+1
+2ct
+{i,j}
+
+,
+λt,−
+{i,j} := exp
+
+−1
+2ct
+{i,j}
+
+,
+(16)
+which are likelihood surrogates that remain strictly positive.
+Then, for each previously existing ungrounded edge {i, j} ∈
+E1:t−1
+−
+, the posterior conditional existence probability is
+pt,cond
+exist,{i,j} =
+λt,+
+{i,j} ¯qt
+{i,j}
+λt,+
+{i,j} ¯qt
+{i,j} + λt,−
+{i,j}
+
+1 −¯qt
+{i,j}
+.
+(17)
+c) Target-location hypothesis update: For each eligible
+viewpoint v ∈Vt
+elig and active target k ∈Kt
+act, let ξt
+v,k ≥0
+denote the raw target-location score. This score is not treated
+as a calibrated probability. It is a relative target-location score
+used to compare eligible viewpoint nodes for the same active
+target. Existing eligible viewpoints retain their previous raw
+scores unless the MLLM updates them using the current
+observations and graph context. Newly eligible viewpoints that
+do not have prior raw scores must receive raw scores for all
+active targets. For each active target k ∈Kt
+act, the raw scores
+are normalized across eligible viewpoint nodes:
+pgoal,t
+v,k
+=
+ξt
+v,k
+P
+u∈Vt
+elig ξt
+u,k
+,
+∀v ∈Vt
+elig, k ∈Kt
+act,
+(18)
+which ensures that 0 ≤pgoal,t
+v,k
+≤1.
+For detection-fixed viewpoint nodes, target-location proba-
+bilities and raw scores for active targets are set to zero:
+pgoal,t
+v,k
+= 0,
+ξt
+v,k = 0,
+∀k ∈Kt
+act, v ∈V1:t \Vt
+elig. (19)
+Semantic regions do not carry target-location scores and
+they are retained only as semantic grouping nodes for view-
+point assignment and graph-context construction. For any
+found target k /∈Kt
+act, its raw scores and target-location prob-
+abilities are removed from all retained graph nodes. Therefore,
+subsequent graph generation and optimization consider only
+the remaining active targets.
+F. Optimization Model Design
+We formulate cooperative multi-agent search as a lexico-
+graphic Mixed-Integer Linear Program (MILP) that jointly
+determines which agent should pursue each active target at
+candidate viewpoints and constructs the corresponding agent
+routes over the current hypothesis graph. The routing com-
+ponent follows a network-flow formulation, where binary arc-
+selection variables and flow-conservation constraints construct
+an open path for each agent [52]. A lexicographic objective
+enforces strict priority among optimization criteria, ensuring
+that the primary target-search objective is optimized before
+secondary routing costs are considered [53].
+We consider multiple agents Q searching for multiple target
+objects K in a shared hypothesis graph G1:t. All agents share
+the same graph state, while each agent constructs its own
+open path from its current viewpoint. The optimization is
+solved in a rolling-horizon manner: the model plans a full
+path over the current hypothesis graph, but only the first
+physically executable transition is implemented before the
+graph is updated and the problem is solved again.
+In the optimization model, paths are constructed only over
+viewpoint nodes because executable navigation is represented
+by edge connectivity. Semantic regions are retained in the
+hypothesis graph for viewpoint assignment, semantic context,
+and target-location reasoning, but they are not routing nodes.
+Therefore, we define Nt := V1:t as the routing-node set. In
+particular, each agent’s current viewpoint nq ∈Nt serves as
+the fixed origin of its planned route.
+Since the hypothesis graph stores edges as undirected edges,
+each edge {i, j} ∈E1:t is converted into two directed arcs
+(i, j) and (j, i) in the optimization model. Thus, the directed
+routing-arc set is At :=
+
+(i, j), (j, i) : {i, j} ∈E1:t	
+. Each
+directed arc (i, j) ∈At inherits the travel distance dt
+{i,j}
+and conditional edge-existence probability pt,cond
+exist,{i,j} of its
+underlying undirected edge.
+For each agent q ∈Q, we define Nt
+q := Nt \ {nq} as the
+set of non-origin routing nodes whose inclusion in the planned
+route is determined by the optimization model. The current
+viewpoint nq is excluded from Nt
+q because it is already fixed
+as the route origin. The reward-endpoint set Rt
+q ⊆Nt
+q consists
+of the reachable, unvisited viewpoints outside Ct that remain
+after the dead-end exclusions introduced below.
+a) Decision Variables: For all (i, j) ∈At and q ∈Q,
+we define
+xt
+i,j,q =
+(
+1,
+if agent q uses directed arc (i, j),
+0,
+otherwise.
+For all n ∈Nt
+q and q ∈Q, we introduce the auxiliary
+node-selection variable
+yt
+n,q =
+(
+1,
+if agent q includes node n in its planned path,
+0,
+otherwise,
+which is introduced to simplify the model representation and
+does not introduce an independent decision, since its value
+is determined by the arc-selection variables xt
+i,j,q through
+equality constraints introduced below.
+For each node n ∈Nt and agent q ∈Q, let ut
+n,q be a
+continuous ordering variable used for subtour elimination. In
+addition, for each target k ∈K, reward endpoint v ∈Rt
+q, and
+agent q ∈Q, define
+at
+k,v,q =
+(
+1,
+if target k is assigned to endpoint v for agent q,
+0,
+otherwise,
+The viewpoint index v is retained because target reward
+is viewpoint-dependent. Allowing each target to contribute
+through at most one agent–viewpoint pair also prevents dif-
+fuse or noisy target-location scores from accumulating across
+multiple viewpoints. We further let x, y, u, and a denote the
+complete collections of arc-selection, node-selection, ordering,
+and target-assignment variables defined above, respectively.
+
+
+--- Page 7 ---
+7
+b) Lexicographic Objective: Let Ft denote the feasible
+set defined by the variable domains and constraints below.
+The primary objective maximizes the processed viewpoint-
+level target probabilities:
+Gt :=
+X
+q∈Q
+X
+v∈Rtq
+X
+k∈Kt
+act
+pgoal,t
+v,k
+at
+k,v,q.
+(20)
+The secondary cost terms are
+Dt :=
+X
+q∈Q
+X
+(i,j)∈At
+dt
+{i,j}xt
+i,j,q,
+(21)
+At :=
+X
+q∈Q
+X
+(i,j)∈At
+
+1 −pt,cond
+exist,{i,j}
+
+xt
+i,j,q,
+(22)
+Rt :=
+X
+q∈Q
+X
+v∈Ntq
+τ t
+vyt
+v,q.
+(23)
+Since grounded edges have unit existence probability, At
+penalizes only the use of hypothesized connections. For s ∈
+{dist, arc, visit}, let Ls and U s denote valid lower and upper
+bounds on the corresponding cost term. Each term X is
+normalized as
+Mt
+s(X) :=
+
+
+
+0,
+U s = Ls,
+X −Ls
+U s −Ls ,
+U s > Ls.
+(24)
+Let wdist, warc, and wvisit be nonnegative weights for
+normalized travel distance, edge uncertainty, and revisits,
+respectively. The resulting secondary route cost is
+Ψt := wdistMt
+dist
+ Dt
++ warcMt
+arc
+ At
++ wvisitMt
+visit
+ Rt
+.
+(25)
+We use a lexicographic objective because target discovery
+defines task success, while travel distance, edge uncertainty,
+and revisits determine how efficiently that success is achieved.
+The optimizer therefore first maximizes target reward and then
+minimizes routing cost without allowing efficiency gains to
+reduce the best achievable search reward. This also avoids
+introducing a cross-objective weighting parameter whose value
+could arbitrarily change the balance between search perfor-
+mance and route efficiency.
+The lexicographic objective is
+min
+(x,y,u,a)∈Ft
+Ψt
+(26a)
+s.t.
+Gt = Gt,⋆,
+where Gt,⋆:= max(x,y,u,a)∈Ft Gt.
+The two levels are solved sequentially by first obtaining
+Gt,⋆and then minimizing Ψt subject to Gt = Gt,⋆. Thus,
+the formulation is a hierarchical multi-objective model: the
+first level determines the reward-optimal solution set, while
+the second selects the most favorable route within that set.
+c) Path Construction Constraints: The planned route for
+each agent q ∈Q is modeled as an open path rooted at its
+current viewpoint nq. Each agent must depart exactly once
+from its current viewpoint:
+X
+(nq,j)∈At
+xt
+nq,j,q = 1,
+∀q ∈Q.
+(27)
+Moreover, only grounded edges can be executed immedi-
+ately:
+X
+j∈V1:t:{nq,j}∈E1:t
++
+xt
+nq,j,q = 1,
+∀q ∈Q.
+(28)
+The path is open and cannot return to the current viewpoint
+within the same planning round:
+X
+(i,nq)∈At
+xt
+i,nq,q = 0,
+∀q ∈Q.
+(29)
+For each candidate node, node selection is linked to incom-
+ing path flow:
+X
+(j,n)∈At
+xt
+j,n,q = yt
+n,q,
+∀n ∈Nt
+q, q ∈Q.
+(30)
+Each selected node can have at most one outgoing arc:
+X
+(n,j)∈At
+xt
+n,j,q ≤yt
+n,q,
+∀n ∈Nt
+q, q ∈Q.
+(31)
+Let degE1:t
++ (v) denote the number of physically verified
+navigable edges incident to node v. We define Bt
+:=
+n
+v ∈V1:t : τ t
+v > 0, degE1:t
++ (v) = 1
+o
+. These nodes corre-
+spond to previously visited dead ends. Revisiting such a node
+cannot reveal a new grounded continuation, because its only
+verified connection leads back to the already explored part of
+the graph. Therefore, to avoid unproductive backtracking, we
+exclude these nodes from planned paths:
+yt
+v,q = 0,
+∀q ∈Q, v ∈Bt ∩Nt
+q.
+(32)
+The following constraint ensures that target-assignment vari-
+ables can be activated only at selected reward endpoints:
+at
+k,v,q ≤yt
+v,q,
+∀k ∈K, v ∈Rt
+q, q ∈Q.
+(33)
+Moreover, if a reward coefficient is zero, the corresponding
+target-assignment variable is fixed to zero:
+at
+k,v,q = 0,
+∀k ∈K, v ∈Rt
+q, q ∈Q : pgoal,t
+v,k
+= 0.
+(34)
+Each target can contribute reward at most once across the
+team, and a found target cannot contribute additional reward:
+X
+q∈Q
+X
+v∈Rtq
+at
+k,v,q ≤1 −f t
+k,
+∀k ∈K.
+(35)
+If |Kt
+act| ≥|Q| and the positive-reward agent–target graph
+{(q, k) : ∃v ∈Rt
+q, pgoal,t
+v,k
+> 0} admits a matching that covers
+all agents, we additionally impose
+X
+k∈Kt
+act
+X
+v∈Rt
+q
+at
+k,v,q ≥1,
+∀q ∈Q.
+(36)
+To prevent multiple agents from choosing the same imme-
+diate next viewpoint, we impose
+X
+q∈Q:{nq,v}∈E1:t
++
+xt
+nq,v,q ≤1,
+∀v ∈V1:t.
+(37)
+
+
+--- Page 8 ---
+8
+d) Subtour Elimination: The above constraints enforce
+local path consistency but do not by themselves eliminate
+disconnected cycles. To suppress such subtours, we use Miller-
+Tucker-Zemlin constraints [54]. For all n ∈Nt and q ∈Q,
+let 1 ≤ut
+n,q ≤|Nt|. For all (i, j) ∈At and q ∈Q, impose
+ut
+i,q −ut
+j,q + |Nt|xt
+i,j,q ≤|Nt| −1.
+(38)
+These constraints ensure that the selected arcs for each agent
+form one ordered path rooted at the current viewpoint.
+e) Normalization Bounds: Let Ft
+q := {j ∈V1:t :
+{nq, j} ∈E1:t
++ }, dt
+max := max(i,j)∈At dt
+{i,j}, and rt
+max :=
+max(i,j)∈At(1 −pt,cond
+exist,{i,j}). The bounds in (24) are
+Ldist =
+X
+q∈Q
+min
+j∈Ftq
+dt
+{nq,j},
+(39)
+U dist =
+X
+q∈Q
+"
+max
+j∈Ftq
+dt
+{nq,j} + (|Nt| −2)dt
+max
+#
+,
+(40)
+Larc = 0,
+U arc = |Q|(|Nt| −1)rt
+max,
+(41)
+Lvisit =
+X
+q∈Q
+min
+j∈Ftq
+τ t
+j,
+U visit =
+X
+q∈Q
+X
+v∈Ntq
+τ t
+v.
+(42)
+These bounds follow from the grounded first-hop require-
+ment and the open simple-path structure enforced by the MTZ
+constraints; the upper bounds use the corresponding maximum
+per-arc costs over at most |Nt| −1 selected arcs.
+IV. EXPERIMENTS
+We evaluate the proposed framework and comparison meth-
+ods in the Matterport3D Simulator [6]. The evaluation con-
+sists of 100 test cases drawn from five indoor scans in the
+Matterport3D dataset [55]. For each scan, target objects are
+manually selected and annotated with a textual description
+and the indices of viewpoints whose panoramas contain the
+target. These visibility annotations are used exclusively by
+the offline Oracle and for performance evaluation. The test
+cases span team sizes of {1, 3, 5} agents and target-set sizes
+of {1, 4, 8} objects, with randomized initial agent locations
+and target selections. Each online method is run for at most
+30 decision steps and uses the same GPT-5.4 model [56],
+configured with medium reasoning effort, to detect targets
+from panoramic observations.
+A. Baseline Methods
+a) Offline Perfect-Knowledge Oracle: The Oracle is
+given the complete navigation graph, exact edge distances,
+agent start nodes, and detectable-viewpoint set Di,k for every
+target k and test case i. It first computes shortest paths among
+the agent start nodes and all target-detectable viewpoints.
+An exact per-agent dynamic program then determines the
+minimum-distance walk associated with each attainable target-
+coverage set. A second dynamic program combines these per-
+agent walks to cover all targets while minimizing the total
+distance traveled by the team. Targets visible from interme-
+diate nodes along a route are also counted as covered. The
+Oracle is unavailable to the online methods and provides the
+performance upper bound.
+b) VLFM-G:
+VLFM-G is our multi-agent extension
+of Vision-Language Frontier Maps (VLFM) [51]. It ranks
+observed, unvisited frontier viewpoints by target-conditioned
+visual-semantic relevance and coordinates agents over the
+online grounded partial graph. For each frontier, eight direc-
+tional panorama views are scored against target descriptions
+using the BLIP-2 image–text contrastive head [57], then fused
+with angular-confidence weighting to maintain its semantic
+value [51]. Let ¯St
+v denote the normalized maximum seman-
+tic value of frontier v over all active targets, and let ¯dt
+qv
+denote the normalized grounded shortest-path distance from
+agent q to frontier v. For a nonnegative distance weight β,
+VLFM-G assigns agents to distinct frontiers by maximizing
+U t
+qv = ¯St
+v −β ¯dt
+qv using the Hungarian algorithm [58], with
+dummy assignments representing wait actions. Conflicts in the
+agents’ first hops are resolved by retaining the highest-utility
+assignment and reassigning the remaining agents. Only the first
+grounded hop is executed before the next replanning step. The
+distance weight β is calibrated and selected using 20 held-out
+episodes that are disjoint from the test set.
+c) Decentralized No-Sharing Variant (Dec-Graph):
+Dec-Graph is a controlled variant of the proposed frame-
+work in which agents maintain separate graphs and select
+actions independently, while retaining the same target detector,
+hypothesis-update mechanism, and optimization model. Each
+agent q ∈Q independently uses MLLM to construct and
+update a private graph G1:t
+q
+from only its own observation
+history and then solves the single-agent specialization of (26)
+with Q = {q}. For a fair comparison across methods, the
+target-found status is the only information shared among
+agents: whenever an agent detects and claims a target as
+found, this status is communicated to all other agents, which
+subsequently also mark that target as found and remove it
+from their active target sets. Apart from this synchronized
+target-found status, no graph, observation, hypothesis, route, or
+action information is exchanged among agents. Consequently,
+target assignments and first-hop choices are not jointly coor-
+dinated: different agents may pursue the same active target
+or simultaneously occupy the same viewpoint while retaining
+separate observation histories and graph states. Dec-Graph
+coincides with the proposed method when |Q| = 1 and is
+therefore reported only for the multi-agent cases.
+B. Evaluation Metrics
+For each episode i ∈I, let Qi ⊆Q be the robot team,
+Ki ⊆K the target set, Vi the complete evaluation navigation
+viewpoint set, and Ti the terminal time. Let ni,t,q ∈Vi denote
+the viewpoint occupied by robot q at time t in episode i.
+For target k, let ˆyi,t,q,k = 1 indicate that robot q claims to
+detect target k at time t in episode i. A target is counted
+as verified only when a claimed detection is made from an
+oracle-detectable viewpoint, i.e., ni,t,q ∈Di,k. Specifically,
+we define Fi,k = 1 if there exist t ≤Ti and q ∈Qi
+such that ˆyi,t,q,k = 1 and ni,t,q ∈Di,k, which means that
+at least one robot reports detecting target k while occupying
+a viewpoint from the associated oracle-detectable viewpoints,
+and 0 otherwise.
+
+
+--- Page 9 ---
+9
+a) Progress: For multi-target search, we additionally
+report the fraction of verified targets found in each episode
+as Pi :=
+1
+|Ki|
+P
+k∈Ki Fi,k. Then the dataset-level Progress
+score is P :=
+1
+|I|
+P
+i∈I Pi, which assigns partial credit when
+a method finds only a subset of the requested targets.
+b) Team-PPL: To jointly evaluate search efficiency and
+partial task completion, we use team-level Progress weighted
+by Path Length. Let Ci,q denote the distance traveled by
+robot q in episode i. The total team distance and makespan
+distance are defined as CΣ,i := P
+q∈Qi Ci,q, and Cmax,i :=
+maxq∈Qi Ci,q, respectively. The Oracle minimizes total team
+distance. Accordingly, let C∗
+Σ,i and C∗
+max,i denote the total
+team distance and makespan distance within the Oracle solu-
+tion for episode i, respectively. We define
+TeamPPLΣ := 1
+|I|
+X
+i∈I
+Pi
+C∗
+Σ,i
+max
+
+CΣ,i, C∗
+Σ,i
+,
+(43)
+which evaluates the trade-off between verified target coverage
+and aggregate team travel. A higher TeamPPLΣ indicates that
+the team finds a larger fraction of the targets while keeping its
+total travel distance closer to the perfect-information Oracle.
+We further define
+TeamPPLmax := 1
+|I|
+X
+i∈I
+Pi
+C∗
+max,i
+max
+ Cmax,i, C∗
+max,i
+,
+(44)
+which evaluates verified target coverage relative to the longest
+route traveled by any individual robot. A higher TeamPPLmax
+indicates that the team achieves greater search progress while
+limiting its longest individual route and therefore reflects more
+efficient parallel execution.
+c) Route Detection F1 Score: We report detection F1 as
+a diagnostic of detector performance along each method’s exe-
+cuted trajectories. For each detection query, ˆyi,t,q,k is evaluated
+against whether ni,t,q ∈Di,k. Since different methods visit
+different viewpoints and find targets at different times, they
+induce different detection-query sets; hence, their F1 scores
+are not directly comparable.
+d) Probability-Weighted
+Geodesic
+Score
+(PWGS):
+PWGS measures how well the predicted target-location dis-
+tribution places probability mass near viewpoints from which
+the target is actually detectable. For target k in episode i,
+let dgeo
+i
+(v, u) be the ground-truth geodesic distance between
+viewpoints v and u, ∆i,k(v) := minu∈Di,k dgeo
+i
+(v, u) the
+distance from v to the nearest oracle-detectable viewpoint
+for target k, and ¯∆i,k(v) := ∆i,k(v)/ maxu∈Vi ∆i,k(u) its
+normalized value. At time t, the score for active target k
+is 1 −P
+v∈Vt
+elig pgoal,t
+v,k
+¯∆i,k(v). A score of 1 means that all
+probability mass is assigned to oracle-detectable viewpoints,
+while lower scores indicate that more probability is assigned
+farther from where the target can actually be detected. Within
+each episode, PWGS is averaged over all active target–time
+pairs, and the resulting episode-level scores are then aver-
+aged across episode set I. In our evaluation, the generated
+hypothesized edge candidates did not satisfy the required
+admissibility checks and were therefore removed before graph
+materialization, while the remaining graph components passed
+TABLE I
+PERFORMANCE ON THE SINGLE-AGENT TEST CASES (* INDICATES THE
+BENCHMARK METHOD).
+Method
+Progress
+Team-PPL
+F1
+PWGS
+Total
+Makespan
+Oracle
+1.000
+1.000
+1.000
+–
+-
+GPT-Medium
+0.271
+0.172
+0.172
+0.332
+0.601
+Qwen-Thinking
+0.275
+0.146
+0.146
+0.330
+0.590
+Qwen-Instant
+0.271
+0.142
+0.142
+0.388
+0.568
+Gemma-Instant
+0.217
+0.164
+0.164
+0.310
+0.580
+VLFM-G*
+0.258
+0.133
+0.133
+0.279
+–
+validation and were retained. Consequently, no edge hypoth-
+esis were available for evaluating edge-existence or edge-
+distance accuracy, and we do not report a separate edge-
+hypothesis metric. This reflects a limitation of current MLLMs
+in reliably generating valid edge hypotheses within the joint
+graph-generation task.
+e) Implementation details: All proposed MLLM vari-
+ants use identical graph-update and planning configura-
+tions. Following calibration, the target-directed MILP em-
+ploys the two-priority lexicographic objective in (26), with
+the secondary-level weights set to (wdist, warc, wvisit)
+=
+(0.17, 0.05, 0.30). For every newly hypothesized edge {i, j} ∈
+Et
+−, the initial distance variance is set to (σ∗t
+{i,j})2 = 4.0.
+The remaining hypothesis-update parameters are κvv = 1.0,
+ϱ = 0.7, and ε = 10−6. The parameter β is selected from
+{0, 0.1, 0.25, 0.5, 1} using 20 held-out calibration episodes,
+with β = 0 yielding the highest TeamPPLΣ and there-
+fore being used in all reported experiments. Dec-Graph uses
+the instruction-tuned Gemma 4 31B model in non-thinking
+mode [59] for hypothesis graph generation. It uses the same
+hypothesis-update and optimization parameters, but performs
+an independent graph update and MILP solve for each agent.
+Finally, all MILPs are solved using Gurobi 12.0.1 with a time
+limit of 30 seconds.
+C. Experiment Results
+The four proposed variants differ only in the graph-
+generation MLLM or inference mode. GPT-Medium uses
+GPT-5.4 with medium reasoning effort [56]; Gemma-Instant
+uses instruction-tuned Gemma 4 31B without thinking [59];
+and Qwen-Thinking and Qwen-Instant use Qwen3.6-35B-
+A3B with thinking enabled and disabled, respectively [60].
+Target detection, graph updating, optimization, execution, and
+episode budgets are identical across variants.
+All online methods use the same 100 episodes, initial view-
+points, target descriptions, detector, local navigation interface,
+and 30-step budget. Detection precedes action selection, and
+agents execute at most one synchronous local hop per step.
+Tables I and II report the 34 single-agent episodes (|Qi| = 1)
+and 66 multi-agent episodes (|Qi| ∈{3, 5}) (i.e., 3 and 5
+robots), respectively; both subsets include |Ki| ∈{1, 4, 8}
+(i.e., 1,4,and 8 targets to be found). Bold and underlined entries
+mark the best and second-best online results, with ties marked
+jointly and the offline Oracle excluded from ranking.
+
+
+--- Page 10 ---
+10
+TABLE II
+PERFORMANCE ON THE MULTI-AGENT TEST CASES (* INDICATES
+BENCHMARK METHODS).
+Method
+Progress
+Team-PPL
+F1
+PWGS
+Total
+Makespan
+Oracle
+1.000
+1.000
+1.000
+–
+-
+GPT-Medium
+0.500
+0.129
+0.267
+0.449
+0.697
+Qwen-Thinking
+0.465
+0.133
+0.290
+0.431
+0.629
+Qwen-Instant
+0.474
+0.105
+0.244
+0.379
+0.596
+Gemma-Instant
+0.467
+0.102
+0.233
+0.401
+0.636
+Dec-Graph*
+0.403
+0.089
+0.169
+0.148
+–
+VLFM-G*
+0.311
+0.076
+0.157
+0.077
+–
+4 . 1 4
+1 8 . 9
+7 . 7 3
+3 2 . 6
+9 . 7 6
+8 7 . 9
+P r o g r e s s
+0
+2 0
+4 0
+6 0
+8 0
+1 0 0
+V a l u e ( %
+)
+ 3 a g e n t s
+ 5 a g e n t s
+Fig. 3. Relative improvement of Gemma-Instant from Dec-Graph.
+a) Single-agent search: The single-agent results demon-
+strate a consistent advantage of the proposed graph-based
+search formulation over VLFM-G, with Gemma-Instant repre-
+senting the only exception in terms of Progress. GPT-Medium
+provides the clearest illustration: relative to VLFM-G, Progress
+increases 5%, while Team-PPL improves 29%. Gemma-Instant
+achieves lower Progress despite maintaining competitive effi-
+ciency and hypothesis-quality scores. This result is substan-
+tially influenced by six episodes that terminated prematurely
+following repeated failures to generate schema-valid graph up-
+dates. A second trend is that additional reasoning during graph
+generation improves the information provided to the planner.
+GPT-Medium ranks first or second across all reported single-
+agent metrics. The controlled Qwen comparison supports this
+trend: enabling thinking yields relative improvements of 1.5%
+in Progress, 2.8% in Team-PPL, and 3.9% in PWGS. These
+consistent gains suggest that additional reasoning produces
+more useful spatial hypotheses for downstream search.
+b) Multi-agent search: The advantage of the proposed
+framework becomes more pronounced in the multi-agent set-
+ting. All MLLM variants outperform the benchmark methods
+across every reported metric, with a substantially clearer
+margin than in the single-agent setting. This indicates that the
+proposed hypothesis-graph formulation benefits particularly
+from cooperative search, where shared information can be
+exploited across multiple agents.
+The choice of MLLM also has a strong effect under multi-
+agent search. In particular, the PWGS range across MLLM
+variants increases from 0.033 in the single-agent setting to
+0.101 in the multi-agent setting. This wider spread suggests
+that MLLM capability becomes consequential as the planner
+must construct spatial hypotheses that support coordinated
+decisions across multiple agents.
+To illustrate how the benefits of cooperation vary with team
+size, Figure 3 compares the three- and five-agent settings.
+Relative to the three-agent team, the five-agent team achieves
+larger improvements over its decentralized counterpart (Dec-
+Graph) in progress (from 4.14% to 32.60%) and maximum
+Team-PPL (from 7.73% to 87.9%)), indicating that cooperative
+navigation becomes more advantageous as the team expands.
+A detailed illustration of the online behavior is provided in
+Figure 4, which presents one GPT-Medium episode with eight
+targets, three of which are shown for clarity. In the figure,
+target-symbol shape identifies the target, and darker symbols
+indicate higher estimated probability that the corresponding
+target locates at the current viewpoint. We can observe that
+the inferred semantic zones align well with the agents’ obser-
+vations, and the estimated target-location probabilities remain
+consistent with the observed environmental context. For ex-
+ample, the strong airplane-picture hypotheses at viewpoints
+21 and 50 are consistent with the description “beside the
+Christmas tree”. The other targets are likewise distributed over
+semantically plausible viewpoints.
+Figure 5 further compares the resulting routes using the
+same episode for illustration. In this case, it can be observed
+that GPT-Medium distributes the exploration workload rela-
+tively evenly among the three agents. Compared with VLFM-
+G and Dec-Graph, it reduces total travel distance by 26.9% and
+61.7%, and reduces makespan by 15.6% and 57.1%. The route
+patterns in the figure further show that these gains arise from
+shared-graph coordination and cooperative navigation, which
+directs agents toward complementary branches and avoids the
+repeated exploration observed with Dec-Graph.
+V. CONCLUSION
+This paper presented a training-free and uncertainty-aware
+framework for cooperative multi-agent multi-target embodied
+search in mapless, partially observed environments. MLLMs
+are used to generate structured hypotheses over semantic
+regions, target locations, and navigable connectivity, which
+are progressively refined in a shared multi-resolution graph. A
+rolling-horizon MILP then converts these uncertain hypotheses
+into coordinated search decisions, balancing target discovery,
+travel efficiency, uncertainty, and repeated exploration.
+The framework was evaluated on 100 Matterport3D [55]
+test cases using multiple MLLM backbones [56], [59], [60]
+and compared with VLFM-G (a multi-agent VLFM [51] adap-
+tation), Dec-Graph (a decentralized baseline), and a perfect-
+knowledge Oracle. The results show consistent improvements
+over the benchmark methods in search progress and travel
+efficiency, with the advantage becoming more pronounced
+in multi-agent settings. The target-location results further
+show that MLLM reasoning quality affects how strongly the
+predicted probability mass is concentrated near the true targets
+in geodesic distance, particularly in cooperative search. More-
+over, comparison with Dec-Graph demonstrates that shared
+graph information and joint planning substantially improve
+coordination, especially by balancing workloads and enabling
+more effective parallel exploration.
+Performance is mainly limited by the accuracy and cali-
+bration of target-location and connectivity hypotheses and by
+the models’ visual grounding. Future work will incorporate
+
+
+--- Page 11 ---
+11
+14
+11
+17
+23
+16
+47
+agent 2
+agent 3
+19
+53
+25
+3
+21
+20
+42
+13
+54
+28
+4
+45
+1
+31
+34
+9
+29
+44
+49
+6
+10
+32
+2
+41
+43
+27
+8
+agent 1
+50
+12
+56
+35
+37
+26
+46
+0
+38
+22
+58
+33
+52
+48
+23
+16
+47
+agent 2
+agent 3
+38
+19
+53
+35
+37
+26
+25
+3
+50
+12
+21
+agent 1 10
+56
+20
+42
+13
+54
+28
+4
+32
+45
+11
+17
+46
+0
+22
+58
+33
+52
+48
+agent 2
+agent 3
+26
+19
+46
+0
+53
+35
+37
+38
+47
+52
+48
+25
+22
+33
+58
+16
+3
+50
+12
+21
+56
+agent 1
+Step 3
+2
+46
+Distributed observations
+agent 2
+agent 3
+Hypothesis graph (step 1)
+50
+3
+16
+25
+21
+56
+agent 1
+0
+46
+47
+33
+22
+58
+bright bathroom vanity area through the right-side doorway
+yellow bedroom with red quilt bed and Christmas tree by the curtains
+lavender bedroom with blue quilt bed and desk under the windows
+Christmas-decorated living room nook with TV and curio cabinets on the left side
+Christmas-decorated sitting area with sectional and large tree by the glass doors
+1
+16 25 21
+50
+3
+3
+47 33
+22
+Target objects
+framed airplane 
+picture beside the 
+Christmas tree
+Symbol:
+EXIT 6488 license 
+plate above the 
+bedroom doorway
+Symbol:
+Symbol:
+“No Trespassing” 
+sign above the 
+workbench closet
+Legend
+Ungrounded viewpoint
+Current viewpoint
+Semantic zone
+Undirected edge
+Hypothesis graph evolution
+Grounded viewpoint
+Step 6
+Step 9
+New semantic zones:
+narrow upstairs hallway with wood floor between bathroom, bedroom, and office doorways
+compact office-like room with desk and shelves through the right-side doorway
+bright white-counter kitchen area through the opening beside the dining nook
+Fig. 4. Illustrative GPT-Medium episode. Darker target symbols indicate higher estimated detectability; the floor plan is shown only for visualization and is
+unavailable to the agents.
+stronger perception and verification, online confidence cali-
+bration, and active hypothesis validation to approach Oracle-
+level performance. We will also evaluate larger environments,
+agent teams, and dynamic scenes, followed by physical-robot
+experiments under realistic sensing, localization, communica-
+tion, and execution uncertainty. These advances will support
+scalable and reliable real-world cooperative embodied systems.
+REFERENCES
+[1] L. P. Kaelbling, M. L. Littman, and A. R. Cassandra, “Planning and
+acting in partially observable stochastic domains,” Artificial Intelligence,
+vol. 101, no. 1–2, pp. 99–134, 1998.
+[2] S. Thrun, W. Burgard, and D. Fox, Probabilistic Robotics.
+Cambridge,
+MA, USA: MIT Press, 2005.
+[3] G. Oriolo, G. Ulivi, and M. Vendittelli, “Real-time map building and
+navigation for autonomous robots in unknown environments,” IEEE
+Transactions on Systems, Man, and Cybernetics, Part B (Cybernetics),
+vol. 28, no. 3, pp. 316–333, 1998.
+[4] M. W. M. G. Dissanayake, P. Newman, S. Clark, H. F. Durrant-
+Whyte, and M. Csorba, “A solution to the simultaneous localization
+and map building (SLAM) problem,” IEEE Transactions on Robotics
+and Automation, vol. 17, no. 3, pp. 229–241, 2001.
+[5] C. Cadena et al., “Past, present, and future of simultaneous localization
+and mapping: Toward the robust-perception age,” IEEE Transactions on
+Robotics, vol. 32, no. 6, pp. 1309–1332, 2016.
+[6] P. Anderson et al., “Vision-and-language navigation: Interpreting
+visually-grounded navigation instructions in real environments,” in Pro-
+ceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition (CVPR), 2018, pp. 3674–3683.
+[7] D. Fried et al., “Speaker-follower models for vision-and-language
+navigation,” in Advances in Neural Information Processing Systems
+(NeurIPS), 2018.
+[8] H. Tan, L. Yu, and M. Bansal, “Learning to navigate unseen environ-
+ments: Back translation with environmental dropout,” in Proceedings of
+the 2019 Conference of the North American Chapter of the Association
+for Computational Linguistics (NAACL), 2019, pp. 2610–2621.
+[9] A. Ku, P. Anderson, R. Patel, E. Ie, and J. Baldridge, “Room-across-
+room: Multilingual vision-and-language navigation with dense spa-
+tiotemporal grounding,” in Proceedings of the Conference on Empirical
+Methods in Natural Language Processing (EMNLP), 2020.
+[10] J. Krantz, E. Wijmans, A. Majumdar, D. Batra, and S. Lee, “Beyond the
+nav-graph: Vision-and-language navigation in continuous environments,”
+in ECCV 2020, vol. 12373.
+Springer, 2020, pp. 104–120.
+[11] M. Savva et al., “Habitat: A platform for embodied AI research,” in
+Proceedings of the IEEE/CVF International Conference on Computer
+Vision (ICCV), 2019, pp. 9339–9347.
+[12] D. Batra et al., “ObjectNav revisited: On evaluation of embodied agents
+navigating to objects,” arXiv preprint arXiv:2006.13171, 2020.
+[13] D. S. Chaplot, D. Gandhi, A. Gupta, and R. Salakhutdinov, “Object
+goal navigation using goal-oriented semantic exploration,” in Advances
+in Neural Information Processing Systems (NeurIPS), 2020.
+[14] H. Du, L. Li, Z. Huang, and X. Yu, “Object-goal visual navigation via
+effective exploration of relations among historical navigation states,”
+in Proceedings of the IEEE/CVF Conference on Computer Vision and
+Pattern Recognition (CVPR), 2023, pp. 2563–2573.
+[15] J. Chen, G. Li, S. Kumar, B. Ghanem, and F. Yu, “How to not train your
+dragon: Training-free embodied object goal navigation with semantic
+frontiers,” in Proceedings of Robotics: Science and Systems (RSS), 2023.
+[16] S. Wani, S. Patel, U. Jain, A. X. Chang, and M. Savva, “MultiON:
+Benchmarking semantic map memory using multi-object navigation,” in
+Advances in Neural Information Processing Systems (NeurIPS), 2020.
+[17] M. Khanna et al., “GOAT-Bench: A benchmark for multi-modal lifelong
+navigation,” in Proceedings of the IEEE/CVF Conference on Computer
+Vision and Pattern Recognition (CVPR), 2024, pp. 16 373–16 383.
+[18] A. Majumdar, G. Aggarwal, B. Devnani, J. Hoffman, and D. Ba-
+tra, “ZSON: Zero-shot object-goal navigation using multimodal goal
+embeddings,” in Advances in Neural Information Processing Systems
+(NeurIPS), vol. 35, 2022, pp. 32 340–32 352.
+[19] S. Y. Gadre, M. Wortsman, G. Ilharco, L. Schmidt, and S. Song, “CoWs
+on pasture: Baselines and benchmarks for language-driven zero-shot
+object navigation,” in Proceedings of the IEEE/CVF Conference on
+Computer Vision and Pattern Recognition (CVPR), 2023.
+[20] N. Yokoyama, R. Ramrakhya, A. Das, D. Batra, and S. Ha, “HM3D-
+OVON: A dataset and benchmark for open-vocabulary object goal
+navigation,” in Proceedings of the IEEE/RSJ International Conference
+on Intelligent Robots and Systems (IROS), 2024, pp. 5543–5550.
+[21] B. P. Gerkey and M. J. Matari´c, “A formal analysis and taxonomy of
+
+
+--- Page 12 ---
+12
+56
+3
+16
+10
+20
+6
+0
+46
+26
+35
+37
+38
+53
+32
+58
+22
+48
+52
+17
+11
+14
+41
+25
+28
+21
+4
+19
+47
+45
+27
+43
+VLFM-G
+agent 2
+agent 1
+agent 3
+3
+58→22→48→52→47→45→17→11→14
+→27→41 →27→41→43→41
+14.242 m
+2
+0→46→19→26→53→35→37→38→37
+→53→32→11→14
+12.161 m
+1
+56→3→56→16→4→16→25→28→25
+→21→10→20→6
+11.154 m
+Agent
+Route
+Distance
+56
+50
+12
+10
+13
+8
+6
+0
+46
+26
+35
+37
+38
+53
+32
+58
+22
+33
+48
+52
+17
+11
+14
+41
+GPT-Medium
+agent 1
+agent 2
+agent 3
+3
+58→22→33→48→52→17→11→14→41
+7.900 m
+2
+0→46→26→35→37→38→37→53→32
+7.519 m
+1
+56→50→56→50→12→10→13→8→6
+12.027 m
+Agent
+Route
+Distance
+56
+21
+42
+9
+0
+58
+47
+17
+11
+14
+Oracle
+agent 1
+agent 2
+agent 3
+3
+58→47→17→11→14
+5.500 m
+2
+0→0→0→0→0
+0.000 m
+1
+56→21→42→9→9
+6.355 m
+Agent
+Route
+Distance
+56
+10
+6
+0
+46
+26
+35
+37
+38
+53
+32
+58
+22
+48
+25
+19
+47
+Dec-Graph
+agent 2
+agent 1
+agent 3
+3
+58→47→33→52→48→2→47→23→32→23
+→32→53→35→37→35→46→0→46→26→53
+22.888 m
+2
+0→46→19→26→35→37→38→37→53→32
+→23→47→52→47→58→22→33→47 →2 →48
+20.774 m
+1
+56→25→12→10→42→13→8→44→36→29
+→15→51→9→49→6→8→54→57→40→5
+28.034 m
+Agent
+Route
+Distance
+12
+42
+13
+8
+44
+36
+29
+15
+51
+9
+49
+54
+57
+40
+5
+23
+33
+2
+52
+Fig. 5. Final routes for the Oracle, GPT-Medium, VLFM-G, and Dec-Graph. The tables report each agent’s viewpoint sequence and travel distance.
+task allocation in multi-robot systems,” The International Journal of
+Robotics Research, vol. 23, no. 9, pp. 939–954, 2004.
+[22] G. A. Korsah, A. Stentz, and M. B. Dias, “A comprehensive taxonomy
+for multi-robot task allocation,” The International Journal of Robotics
+Research, vol. 32, no. 12, pp. 1495–1512, 2013.
+[23] J. Yu and S. M. LaValle, “Structure and intractability of optimal multi-
+robot path planning on graphs,” in Proceedings of the AAAI Conference
+on Artificial Intelligence, 2013, pp. 1443–1449.
+[24] R. Stern et al., “Multi-agent pathfinding: Definitions, variants, and
+benchmarks,” in Proceedings of the International Symposium on Com-
+binatorial Search (SoCS), 2019, pp. 151–158.
+[25] I.-M. Chao, B. L. Golden, and E. A. Wasil, “The team orienteering
+problem,” European Journal of Operational Research, vol. 88, no. 3,
+pp. 464–474, 1996.
+[26] P. Vansteenwegen, W. Souffriau, and D. V. Oudheusden, “The orien-
+teering problem: A survey,” European Journal of Operational Research,
+vol. 209, no. 1, pp. 1–10, 2011.
+[27] X. Zhang, H. Qin, F. Wang, Y. Dong, and J. Li, “Lamma-p: Gen-
+eralizable multi-agent long-horizon task allocation and planning with
+lm-driven pddl planner,” in 2025 IEEE International Conference on
+Robotics and Automation (ICRA).
+IEEE, 2025.
+[28] P. Gupta, S. Bae, J. Li, and D. Isele, “Scale-plan: Scalable language-
+enabled task planning for heterogeneous multi-robot teams,” arXiv
+preprint arXiv:2603.08814, 2026.
+[29] B. Yamauchi, “A frontier-based approach for autonomous exploration,”
+in Proceedings of the 1997 IEEE International Symposium on Compu-
+tational Intelligence in Robotics and Automation, 1997, pp. 146–151.
+[30] C. Stachniss, G. Grisetti, and W. Burgard, “Information gain-based
+exploration using rao-blackwellized particle filters,” in Proceedings of
+Robotics: Science and Systems (RSS), 2005, pp. 65–72.
+[31] R. Simmons et al., “Coordination for multi-robot exploration and
+mapping,” in Proceedings of the Seventeenth National Conference on
+Artificial Intelligence (AAAI), 2000, pp. 852–858.
+[32] W. Burgard, M. Moors, C. Stachniss, and F. E. Schneider, “Coordinated
+multi-robot exploration,” IEEE Transactions on Robotics, vol. 21, no. 3,
+pp. 376–386, 2005.
+[33] D. Fox, J. Ko, K. Konolige, B. Limketkai, D. Schulz, and B. Stewart,
+“Distributed multirobot exploration and mapping,” Proceedings of the
+IEEE, vol. 94, no. 7, pp. 1325–1339, 2006.
+[34] A. Aydemir, K. Sj¨o¨o, J. Folkesson, A. Pronobis, and P. Jensfelt, “Search
+in the real world: Active visual object search based on spatial relations,”
+in Proceedings of the IEEE International Conference on Robotics and
+Automation (ICRA), 2011, pp. 2818–2824.
+[35] L. Kunze, K. K. Doreswamy, and N. Hawes, “Using qualitative spatial
+relations for indirect object search,” in Proceedings of the IEEE Inter-
+national Conference on Robotics and Automation (ICRA), 2014.
+[36] I. Kostavelis and A. Gasteratos, “Semantic mapping for mobile robotics
+tasks: A survey,” Robotics and Autonomous Systems, vol. 66, pp. 86–
+103, 2015.
+[37] S. Gupta, J. Davidson, S. Levine, R. Sukthankar, and J. Malik, “Cogni-
+tive mapping and planning for visual navigation,” in Proceedings of the
+IEEE Conference on Computer Vision and Pattern Recognition (CVPR),
+2017, pp. 2616–2625.
+[38] M. Ahn et al., “Do as i can, not as i say: Grounding language in robotic
+affordances,” in Proceedings of the 6th Conference on Robot Learning
+(CoRL), 2023.
+[39] D. Shah, B. Osinski, B. Ichter, and S. Levine, “LM-Nav: Robotic
+navigation with large pre-trained models of language, vision, and action,”
+in Proceedings of the 6th Conference on Robot Learning (CoRL), 2023.
+[40] D. Driess et al., “PaLM-E: An embodied multimodal language model,”
+in Proceedings of the 40th International Conference on Machine Learn-
+ing (ICML), 2023.
+[41] B. Zitkovich et al., “RT-2: Vision-language-action models transfer web
+knowledge to robotic control,” in Proceedings of the 7th Conference on
+Robot Learning (CoRL), 2023.
+[42] B. Yu, H. Kasaei, and M. Cao, “L3MVN: Leveraging large language
+models for visual target navigation,” in Proceedings of the IEEE/RSJ
+International Conference on Intelligent Robots and Systems (IROS),
+2023, pp. 3554–3560.
+[43] K. Zhou et al., “ESC: Exploration with soft commonsense constraints
+for zero-shot object navigation,” in Proceedings of the 40th International
+Conference on Machine Learning (ICML), 2023.
+[44] G. Zhou, Y. Hong, and Q. Wu, “NavGPT: Explicit reasoning in vision-
+and-language navigation with large language models,” in Proceedings
+of the AAAI Conference on Artificial Intelligence, vol. 38, no. 7, 2024,
+pp. 7641–7649.
+[45] P. Wu et al., “VoroNav: Voronoi-based zero-shot object navigation
+with large language model,” in Proceedings of the 41st International
+Conference on Machine Learning (ICML), 2024.
+[46] Z. Ji et al., “Survey of hallucination in natural language generation,”
+ACM Computing Surveys, vol. 55, no. 12, pp. 1–38, 2023.
+[47] Z. Bai et al., “Hallucination of multimodal large language models: A
+survey,” arXiv preprint arXiv:2404.18930, 2024.
+[48] H. Jiang et al., “Navtrust: Benchmarking trustworthiness for embodied
+navigation,” in IEEE/RSJ International Conference on Intelligent Robots
+and Systems (IROS), 2026.
+[49] K. Lee, H. Kim, J. Li, and J. Park, “Priority-aware multi-robot coverage
+path planning,” IEEE Robotics and Automation Letters, 2026.
+[50] D. S. Bernstein, R. Givan, N. Immerman, and S. Zilberstein, “The
+complexity of decentralized control of markov decision processes,”
+Mathematics of Operations Research, vol. 27, no. 4, pp. 819–840, 2002.
+
+
+--- Page 13 ---
+13
+[51] N. Yokoyama, S. Ha, D. Batra, J. Wang, and B. Bucher, “Vlfm: Vision-
+language frontier maps for zero-shot semantic navigation,” in 2024 IEEE
+International Conference on Robotics and Automation (ICRA), 2024.
+[52] L. A. Wolsey and G. L. Nemhauser, Integer and combinatorial opti-
+mization.
+John Wiley & Sons, 2014.
+[53] M. Ehrgott, Multicriteria optimization.
+Springer, 2005.
+[54] C. E. Miller, A. W. Tucker, and R. A. Zemlin, “Integer programming
+formulation of traveling salesman problems,” Journal of the ACM, vol. 7,
+no. 4, pp. 326–329, 1960.
+[55] A. X. Chang et al., “Matterport3D: Learning from rgb-d data in indoor
+environments,” in Proceedings of the 2017 International Conference on
+3D Vision (3DV), 2017, pp. 667–676.
+[56] OpenAI,
+“GPT-5.4
+Thinking
+System
+Card,”
+OpenAI,
+Tech.
+Rep.,
+Mar.
+2026.
+[Online].
+Available:
+https://openai.com/index/
+gpt-5-4-thinking-system-card/
+[57] J. Li, D. Li, S. Savarese, and S. Hoi, “BLIP-2: Bootstrapping language-
+image pre-training with frozen image encoders and large language mod-
+els,” in Proceedings of the 40th International Conference on Machine
+Learning, 2023.
+[58] H. W. Kuhn, “The hungarian method for the assignment problem,” Naval
+Research Logistics Quarterly, vol. 2, no. 1-2, pp. 83–97, 1955.
+[59] G. Team et al., “Gemma 4 technical report,” 2026. [Online]. Available:
+https://arxiv.org/abs/2607.02770
+[60] Qwen Team, “Qwen3.6-35B-A3B: Agentic coding power, now open
+to all,” April 2026. [Online]. Available: https://qwen.ai/blog?id=qwen3.
+6-35b-a3b

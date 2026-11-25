@@ -1,0 +1,2339 @@
+--- Page 1 ---
+SemOPT: Fixing Semantic Errors in LLM-based Optimization Modeling via
+Reward-Guided Search
+Zetong Zhou1,2∗, Wentao Zhang1,2∗, Jingyuan Wang1,2†, Yifan Yang1,2,
+Zizhuo Wang3, Shixi Hu4
+1School of Computer Science and Engineering, Beihang University, Beijing, China
+2MIIT Key Laboratory of Data and Decision Intelligence, Beihang University, Beijing, China
+3School of Data Science, The Chinese University of Hong Kong, Shenzhen, China
+4Cardinal Operations Technology Co., Shanghai, China
+{ztzhou, jywang}@buaa.edu.cn
+Abstract
+Operations research supports decision-making
+in domains such as energy, economics, and
+healthcare. Solving operations research prob-
+lems typically begins with optimization model-
+ing, which translates a natural-language prob-
+lem description into executable solver code.
+LLMs offer a promising way to automate this
+process, but they remain prone to errors. In
+practice, these errors can be divided into two
+categories: syntactic errors refer to solver code
+that fails to run successfully or is judged in-
+feasible by the solver; semantic errors refer to
+solver code that successfully returns an objec-
+tive value but violates the intent of the original
+problem. Since semantic errors do not trig-
+ger runtime failures, they are difficult to detect
+and rectify. To address this problem, we in-
+troduce SemOPT, a semantic-guided framework
+for correcting LLM-based optimization models.
+SemOPT combines a semantic reward model that
+distinguishes faithful math models from plau-
+sible but incorrect ones with an adaptive cor-
+rection system that applies hierarchical reward-
+guided search over the modeling space. Experi-
+ments on seven optimization modeling bench-
+marks show that SemOPT establishes a new state
+of the art and achieves an average 7.6% accu-
+racy improvement over the strongest baseline
+on complex datasets.
+1
+Introduction
+Operations research (OR) provides a fundamen-
+tal methodology for decision-making in domains
+such as energy (Krishnamurthy et al., 2018), eco-
+nomics (Garcia and You, 2015), healthcare (Del-
+gado et al., 2022), and beyond (Singh, 2012). Solv-
+ing OR problems typically starts with optimiza-
+tion modeling, which translates a natural-language
+problem description into a math model and solver
+code (e.g., Gurobi) (Huang et al., 2025b). Con-
+*Equal contribution.
+†Corresponding author.
+60.8%
+39.2%
+Problem Classification
+Syntactic
+Errors
+Semantic
+Errors
+66.7%
+33.3%
+Solved
+Unsolved
+78.6%
+21.4%
+Solved
+Unsolved
+Syntactic Errors Solution
+Semantic Errors Solution
+(a)
+(b)
+(c)
+Figure 1: (a) Distribution of syntactic versus semantic
+errors. (b)(c) Correction rates of syntactic and semantic
+errors via self-reflection.
+structing the model traditionally requires substan-
+tial domain expertise, but recent progress in LLMs
+has automated this process, with existing methods
+using fine-tuning or agent-based workflows to emu-
+late human modeling processes (Jiang et al., 2025;
+Huang et al., 2025a; Ahmaditeshnizi et al., 2024;
+AhmadiTeshnizi et al., 2024).
+Despite their promise, LLM-based modeling sys-
+tems remain error-prone (Yang et al., 2026). We
+divide their failures into syntactic and semantic
+errors. Syntactic errors refer to solver code that
+fails to run successfully or is judged infeasible by
+the solver. These failures are directly exposed by
+execution or solver feedback. Semantic errors, in
+contrast, refer to solver code that runs successfully
+and returns an objective value but violates the intent
+of the original problem, typically through misun-
+derstood constraints, incorrect objectives, or invalid
+modeling assumptions. These errors are harder to
+identify because execution feedback provides no
+explicit signal of the underlying logical mismatch.
+To quantify this issue, we prompt an LLM to gen-
+erate solver code end-to-end on the optimization
+modeling benchmark IndustryOR (Huang et al.,
+2025a) and execute the generated codes to catego-
+rize failures. As shown in Figure 1, semantic errors
+are more prevalent than syntactic errors. Moreover,
+three rounds of self-reflection (Shinn et al., 2023)
+correct 66.7% of syntactic errors but only 21.4%
+of semantic errors, confirming that semantic errors
+are the main bottleneck.
+arXiv:2609.37361v1  [cs.CL]  29 Sep 2026
+
+
+--- Page 2 ---
+Recent work has started to recognize the impor-
+tance of correcting semantic errors in optimiza-
+tion modeling, with search-based methods provid-
+ing the most instructive direction. Autoformula-
+tor (Astorga et al., 2025) uses Monte Carlo Tree
+Search(MCTS) to explore candidate math model
+components, while SolverLLM (Li et al., 2025) in-
+crementally constructs math models over structured
+elements with outcome-guided search. These meth-
+ods broaden the hypothesis space beyond single-
+pass generation, but two limitations remain. First,
+they often rely on general-purpose LLM evaluators,
+which are not specifically trained to distinguish se-
+mantically faithful math models from plausible but
+incorrect ones. Second, their search spaces are usu-
+ally organized around fine-grained mathematical
+components, entangling high-level modeling deci-
+sions with low-level implementation details. As a
+result, when an error stems from an incorrect mod-
+eling strategy, these methods tend to revise local
+equations rather than backtrack to the reasoning
+step where the error actually originated.
+To overcome these challenges, we propose
+SemOPT, a semantic-guided framework for correct-
+ing LLM-based optimization models. SemOPT first
+trains a semantic reward model to evaluate the logi-
+cal faithfulness between a problem description and
+generated solver code. It then uses this reward sig-
+nal to guide hierarchical search over three stages:
+modeling strategy, math model, and solver code,
+allowing the framework to revise errors at the ap-
+propriate level of abstraction. Finally, an adaptive
+gating mechanism triggers search only when the
+initial solver code falls below the semantic con-
+fidence threshold, reducing unnecessary compu-
+tation on straightforward instances. Experiments
+across seven benchmarks show that SemOPT estab-
+lishes a new state of the art on most datasets.
+Our contributions are summarized as follows:
+• We identify semantic errors as a core bottleneck
+in LLM-based optimization modeling and design
+a dedicated semantic reward model for error lo-
+calization and faithfulness evaluation.
+• We introduce a semantic-guided correction mech-
+anism that uses the reward model to guide hierar-
+chical search, and an adaptive gating mechanism
+balances accuracy and inference cost.
+• Extensive experiments across seven benchmarks
+demonstrate that SemOPT achieves a 7.6% accu-
+racy improvement over the strongest baseline on
+complex datasets.
+A factory manufactures products 
+A and B using limited labor. 
+Maximize total profit while 
+ensuring the production of A is at 
+least twice that of B.
+Natural Language Description
+Solver Code
+ 
+Math Model
+Figure 2: Overview of the three stages in optimization
+modeling process.
+2
+Preliminaries and Framework
+2.1
+Notation
+As illustrated in Figure 2, optimization model-
+ing successively connects three objects: a natural-
+language description, a math model, and a solver
+code (Yang et al., 2024).
+Natural Language Description. Let P denote the
+input problem description. It specifies the optimiza-
+tion context, parameters, objective intent, decision
+logic, and constraints in natural language.
+Math Model. A math model M formalizes P
+through decision variables x, an objective f(x),
+and constraints. Let g(x) ≤0 and h(x) = 0
+denote inequality and equality constraints, respec-
+tively. Formally, M is formulated as:
+min
+x f(x),
+s.t. g(x) ≤0,
+h(x) = 0.
+(1)
+Solver Code. Let C denote executable solver code
+that implements M, including the variables, objec-
+tive, and constraints. Executing C with a solver
+returns an objective value y or an execution failure.
+2.2
+Problem Statement
+Automated optimization modeling asks an LLM
+parameterized by θ to map a problem description
+P to solver code C, denoted as C ∼pθ(·|P). The
+desired output must satisfy two requirements: it
+should be executable, and the implemented model
+should be semantically faithful to P. We therefore
+distinguish two failure modes.
+Syntactic Error. A syntactic error occurs when
+C fails to run successfully or is judged infeasible
+by the solver. In this case, the failure is directly
+exposed by execution or solver feedback.
+Semantic Error. A semantic error occurs when C
+runs successfully and returns an objective value y,
+but the implemented math model is not faithful to
+the intent of P. Such errors arise from semantic-
+level modeling mismatches, including misunder-
+stood constraints, incorrect objectives, or invalid
+modeling assumptions.
+
+
+--- Page 3 ---
+Final Solution
+       import gurobipy as gp
+from gurobipy import GRB
+Modeling Strategy
+Math Model
+Solver Code
+0.75
+0.9
+0.85
+Problem Description
+System 1
+System 2
+OR Problem
+A factory manufactures products A 
+and B using limited labor. 
+Maximize total profit while 
+ensuring the production of A is at 
+least twice that of B.
+Instinct Solution
+       import gurobipy as gp
+from gurobipy import GRB
+Y
+es
+     
+Reward Model
+Semantic Alignment Score: [0, 1]
+E2E 
+    Judge
+Alignment 
+ Reflection
+    Choose the Best Node
+Answer
+Objective Value: 3050
+Run 
+Code 
+Semantic Reward Model
+Adaptive Correction System
+E2E
+Mutation Protocol
+Positive �+
+Negative �−
+Push Apart
+ Selection
+ Expansion
+ Evaluation
+Backpropagation
+(a)
+(b)
+�= �(�, �)
+Figure 3: Overview of the SemOPT framework. (a) Training pipeline of the semantic reward model. (b) Inference
+architecture of the adaptive correction system.
+2.3
+Framework Overview
+As illustrated in Figure 3, SemOPT corrects seman-
+tic errors with a semantic reward model and an
+adaptive correction system. Figure 3(a) shows how
+the reward model is trained to evaluate logical con-
+sistency, while Figure 3(b) shows how the trained
+model guides inference-time correction.
+Given a problem description P, SemOPT first
+samples initial solver code Cinit ∼pθ(·|P). It
+then applies a solver-informed evaluation: the code
+is executed, and if a syntax error occurs, the er-
+ror message is appended to the context for up to
+K = 3 rounds of reflection until the code runs
+or the budget is exhausted. The final confidence
+score is S = I(C) · R(P, C), where I(C) = 1 if
+the code executes successfully after reflection and
+0 otherwise, and R is the semantic reward model.
+The resulting score for the initial solver code is
+Sinit = I(Cinit) · R(P, Cinit).
+Next, SemOPT applies an adaptive gate with
+threshold τ. If Sinit > τ, the framework accepts
+Cinit and stops, avoiding unnecessary computa-
+tion. If Sinit ≤τ, the initial solver code falls be-
+low the semantic confidence threshold, and SemOPT
+activates semantic-guided MCTS. The search de-
+composes correction into modeling strategy, math-
+ematic model, and solver code, uses R as the value
+signal to navigate the tree, and returns refined
+solver code C.
+3
+Semantic Reward Model
+We train a semantic reward model R to assess
+whether generated solver code is faithful to the
+input problem. We instantiate R with a pre-trained
+LLM backbone (Michailidis et al., 2024) and re-
+place the language modeling head with a value head
+that outputs a continuous scalar. During inference,
+this scalar is normalized with a sigmoid function
+to produce a confidence score in [0, 1] for adaptive
+gating. During training, the raw value is used in
+the contrastive objective. The training pipeline con-
+sists of two steps: constructing preference data and
+learning R from pairwise comparisons.
+3.1
+Data Construction
+We construct a preference dataset Dpref from
+Dbase = {(Pk, y∗
+k)}K
+k=1, where Pk is a problem
+description and y∗
+k is the optimal value. For each
+problem, we define one preference entry as
+Ek = (Pk, C+
+k , C−
+k ).
+(2)
+Here, C+
+k contains solver code that runs success-
+fully, is semantically faithful to Pk, and returns y∗
+k,
+whereas C−
+k contains solver code that runs success-
+fully and returns objective values but is semanti-
+cally incorrect. The full dataset is
+Dpref = {E1, E2, . . . , EK}.
+(3)
+Trajectory Collection. For each Pk, we sample
+Ncand candidate solver code instances {Ck,i}Ncand
+i=1
+from the generator pθ(·|Pk) and execute each can-
+didate to obtain an objective value ˆyk,i. Let rk,i =
+|ˆyk,i −y∗
+k|/|y∗
+k|. After discarding candidates that
+fail to run or are judged infeasible by the solver, we
+initialize the preference sets according to objective-
+value correctness:
+Ck,i ∈C+
+k
+⇐⇒rk,i < 10−6,
+Ck,i ∈C−
+k
+⇐⇒rk,i ≥10−6.
+(4)
+Only candidates that run successfully and return ob-
+jective values are retained, so C−
+k captures semantic
+rather than syntactic failures.
+Trajectory Augmentation. Natural sampling cov-
+ers frequent errors but leaves long-tail semantic
+
+
+--- Page 4 ---
+traps underrepresented. We therefore augment each
+entry Ek with hard negatives produced by targeted
+mutations (Li et al., 2026). For each positive code
+instance C ∈C+
+k , we sample L mutation operators
+{mℓ}L
+ℓ=1 from Table 9 in Appendix B.1. Each oper-
+ator is injected into C independently, producing L
+mutated code instances { ˜Cℓ}L
+ℓ=1. Candidates that
+fail to run or are judged infeasible by the solver
+are discarded, and the remaining mutants that re-
+turn objective values are added to C−
+k as hard se-
+mantic negatives. This augmentation forces R to
+distinguish faithful math models from structurally
+plausible but semantically wrong solver code.
+3.2
+Contrastive Training
+The reward model R is trained to measure semantic
+consistency between a problem description P and
+solver code C. A straightforward approach is super-
+vised fine-tuning (SFT) (Dong et al., 2024), which
+assigns label 1 to C ∈C+
+k and label 0 to C ∈C−
+k .
+This formulation trains on individual labeled ex-
+amples, limiting the amount of supervision and
+making the model more prone to surface-pattern
+fitting rather than generalization.
+We therefore train R with a Bradley-Terry pair-
+wise objective (Sun et al., 2025). For each entry Ek,
+we sample a winner Cwin from the correct code set
+C+
+k and a loser Close from the incorrect code set
+C−
+k . This pairwise construction expands the effec-
+tive training set by pairing correct code instances
+with multiple incorrect ones, and it reduces the ten-
+dency to fit surface patterns in individual labeled
+examples. We define the reward margin as
+∆θ = Rθ(Pk, Cwin) −Rθ(Pk, Close).
+(5)
+The semantic reward model is optimized by min-
+imizing the negative log-likelihood of the winner
+being preferred over the loser:
+L(θ) = −E(Pk,Cwin,Close)∼Dpref [log σ(∆θ)].
+(6)
+Here, σ(·) is the sigmoid function. This objec-
+tive trains R to assign higher semantic consistency
+scores to faithful solver code than to solver code
+that runs successfully and returns objective values
+but is semantically incorrect.
+4
+Adaptive Correction System
+Using the semantic signal from R, we build an
+adaptive correction system that repairs semantic er-
+rors through hierarchical search while controlling
+inference cost to remain acceptable. The system
+balances single-pass generation and deeper reason-
+ing with an adaptive gate (Ji et al., 2026): initial
+solver code with high semantic confidence is ac-
+cepted directly, whereas lower-confidence code is
+routed to MCTS-based correction.
+4.1
+Gating via Direct Inference
+Given a problem description P, we first sample
+initial solver code from the generator, denoted as
+Cinit ∼pθ(·|P). Then the code is executed, re-
+flected upon for up to K rounds if syntax errors
+arise, and scored as Sinit = I(Cinit) · R(P, Cinit).
+Given a threshold τ, the gate compares Sinit
+against τ to determine the final solver code C:
+C =
+(
+Cinit,
+Sinit > τ,
+MCTS(P),
+Sinit ≤τ.
+(7)
+When Sinit > τ, the system returns Cinit di-
+rectly and avoids additional inference. Otherwise,
+the initial solver code falls below the semantic con-
+fidence threshold, and the system activates the hier-
+archical search described below for correction.
+4.2
+Hierarchical Decomposition
+When search is triggered, we use MCTS to explore
+the hypothesis space (Ding et al., 2025). Prior
+search-based methods are themselves hierarchical
+over formulation components such as decision vari-
+ables, objectives, and constraints (Astorga et al.,
+2025), but their search stays within a single level
+of modeling abstraction. In contrast, our search fol-
+lows the modeling process of human OR experts.
+It decomposes solver code generation into a three-
+stage trajectory S = (v(1), v(2), v(3)), organized as
+a search tree T rooted at v(0):
+• Modeling Strategy (v(1)) defines decision vari-
+ables and selects the optimization framework,
+such as LP or MILP.
+• Math Model (v(2)) mathematically formalizes
+the objective and constraints.
+• Solver Code (v(3)) implements the math model
+as executable solver code C.
+This hierarchy factorizes the generation policy as
+πθ(S|P) =
+3
+Y
+k=1
+πθ(v(k)|v(<k), P),
+(8)
+where v(<k) = {v(0), . . . , v(k−1)} denotes the par-
+tial modeling history. This decomposition enables
+MCTS to revise high-level modeling choices before
+committing to equations or code.
+
+
+--- Page 5 ---
+4.3
+MCTS Process
+The MCTS procedure, detailed in Algorithm 1 in
+Appendix A, starts from the root v(0) of the hier-
+archical tree T . Each node v stores a visit count
+N(v) and an estimated semantic value Q(v), both
+initialized to zero. Each iteration contains four
+phases as follows.
+1. Selection. Starting from v(0), the algorithm
+follows the child with the largest UCT score until
+reaching a leaf ˜v:
+UCT(v(i+1)) = Q(v(i+1)) + ω ·
+s
+ln N(v(i))
+N(v(i+1)) + ϵ,
+(9)
+where ω controls exploration and ϵ prevents divi-
+sion by zero. For newly expanded nodes that have
+not yet received semantic rewards, we follow Auto-
+formulator (Astorga et al., 2025) and use the same
+LLM as the policy network to assign initial prior
+scores. These priors support the cold-start choice
+among unscored successors.
+2. Expansion. If ˜v is non-terminal at depth i,
+we expand it by sampling H successors from the
+policy network:
+v(i+1)
+j
+∼πθ(·|˜v, P),
+j ∈{1, . . . , H}.
+(10)
+These nodes are added to T , and the successor
+with the highest LLM prior is selected as v∗for
+simulation. If ˜v is already terminal, we set v∗= ˜v.
+The prompts for each expansion layer are provided
+in Appendix I.
+3. Simulation. Starting from v∗, the rollout re-
+cursively samples lower-level states until a termi-
+nal solver code C is obtained. The system then
+applies the same solver-informed evaluation: C
+is executed, and upon syntax errors, the model
+reflects with appended error messages for up to
+K rounds. The final reward is computed as S =
+I(C) · R(P, C), where I(C) = 1 if the code runs
+successfully after reflection and 0 otherwise.
+4. Backward. The score S is propagated from v∗
+to v(0). For every node v on this path, we update:
+N(v) ←N(v) + 1,
+Q(v) ←Q(v) + S −Q(v)
+N(v)
+.
+(11)
+The process repeats iteratively until the budget
+Tmax is exhausted.
+In this way, MCTS repeatedly rolls out partial
+modeling states to terminal solver code and trans-
+fers semantic consistency scores back to intermedi-
+ate nodes. The resulting Q(v) values estimate how
+semantically promising each modeling branch is,
+therefore enabling the search to suppress flawed in-
+termediate choices and converge efficiently toward
+a correct solver code.
+5
+Experiments
+We evaluate SemOPT through the following three
+research questions:
+• RQ1: Overall Performance. How does SemOPT
+compare with baselines across benchmarks?
+• RQ2: Component Analysis. Are the proposed
+modules effective, and does SemOPT generalize
+across LLM backbones?
+• RQ3: Efficiency. How does SemOPT trade off
+accuracy and computational cost?
+5.1
+Experimental Setup
+Datasets. We evaluate on seven benchmarks (Xiao
+et al., 2025) divided into two groups: (1) Stan-
+dard Datasets: NL4Opt (Ramamonjison et al.,
+2022), NL4LP (Ahmaditeshnizi et al., 2024), Ea-
+syLP (Huang et al., 2025b), and ReSocratic (Yang
+et al., 2025c), which primarily contain standard
+linear programming problems; and (2) Complex
+Datasets:
+IndustryOR (Huang et al., 2025a),
+ComplexLP (Huang et al., 2025b), and Com-
+plexOR (Xiao et al., 2024), which include implicit
+constraints, long-context descriptions and serve as
+the primary testbed for semantic alignment.
+Baselines. We compare SemOPT with ten baselines
+in four groups: (1) Standard: Standard Prompt-
+ing and Self-Reflection (Shinn et al., 2023); (2)
+Workflow: OptiMUS (AhmadiTeshnizi et al., 2024),
+Chain-of-Experts (Xiao et al., 2024), OptiTree (Liu
+et al., 2025), and SAC-Opt (Zhang et al., 2025);
+(3) Fine-tuned: ORLM (Huang et al., 2025a) and
+SIRL (Chen et al., 2025); (4) Search-based: Aut-
+oformulator (Astorga et al., 2025) and Solver-
+LLM (Li et al., 2025). For fairness, all baselines
+use the same policy model and search settings as
+SemOPT, except the fine-tuned baselines, which use
+their own fine-tuned models.
+Implementation Details. We instantiate the policy
+networks (pθ, πθ) with GPT-4.1 Nano and fine-
+tune the semantic reward model R from Qwen3-
+4B-Instruct-2507 (Yang et al., 2025a). We report
+Accuracy, counting a solution as correct when its
+solver result differs from the ground truth by less
+than 10−6. We also report two sampling metrics:
+Pass@N (P@N), the probability that at least one
+
+
+--- Page 6 ---
+Table 1: Main results on seven optimization benchmarks. The best results are highlighted in bold, and the second-
+best results are underlined. Red arrows indicate absolute performance gains over the strongest baseline.
+Category
+Method
+Standard Datasets
+Complex Datasets
+NL4Opt
+NL4LP
+EasyLP
+ReSocratic
+IndustryOR
+ComplexLP
+ComplexOR
+Standard
+Prompting
+65.4%
+75.8%
+87.2%
+67.5%
+47.6%
+41.4%
+44.4%
+Reflection
+65.0%
+76.4%
+87.2%
+68.0%
+54.8%
+39.6%
+38.9%
+Workflow
+OptiMUS
+79.0%
+90.5%
+93.6%
+78.7%
+57.1%
+45.1%
+59.3%
+Chain-of-Experts
+74.8%
+90.5%
+93.2%
+79.4%
+59.5%
+46.0%
+50.0%
+OptiTree
+73.8%
+82.0%
+93.4%
+72.5%
+47.6%
+73.8%
+63.0%
+SAC-Opt
+85.1%
+95.5%
+94.3%
+89.3%
+57.1%
+74.8%
+55.6%
+Fine-tuned
+ORLM
+73.8%
+76.4%
+90.4%
+61.8%
+42.9%
+59.5%
+50.0%
+SIRL
+86.4%
+95.5%
+98.1%
+87.8%
+45.2%
+80.2%
+44.4%
+Search-based
+Autoformulator
+76.2%
+85.4%
+94.9%
+79.4%
+49.2%
+52.3%
+48.1%
+SolverLLM
+82.7%
+88.8%
+94.5%
+83.1%
+50.8%
+68.5%
+57.4%
+Ours
+SemOPT (BoN)
+87.9% (↑1.5%)
+96.1% (↑0.6%)
+97.6%
+89.8% (↑0.5%)
+64.3% (↑4.8%)
+82.9% (↑2.7%)
+66.7% (↑3.7%)
+SemOPT (P@N)
+91.1% (↑4.7%)
+99.4% (↑3.9%)
+98.5% (↑0.4%)
+93.1% (↑3.8%)
+66.7% (↑7.2%)
+86.5% (↑6.3%)
+72.2% (↑9.2%)
+of N samples is correct, and Best-of-N (BoN), the
+accuracy of the best solution selected by the re-
+ward model. Appendix B provides the remaining
+implementation details.
+5.2
+Overall Performance
+Main Results. As shown in Table 1, SemOPT ob-
+tains the best results on most datasets, with espe-
+cially clear gains on complex benchmarks. On
+ComplexOR, SemOPT reaches 72.2% accuracy, sur-
+passing the strongest baseline by 9.2%. The small
+gap between the Best-of-N and Pass@N results of
+SemOPT shows that the reward model reliably se-
+lects semantically faithful candidates when they
+appear in the sampled set.
+We make further observations as follows: 1)
+Standard and workflow methods lag behind on com-
+plex applied datasets, showing that generation or
+workflow decomposition alone is insufficient with-
+out a semantic verification signal. 2) Fine-tuned
+methods, especially SIRL, are strong on simpler
+datasets but less consistent on complex tasks, in-
+dicating that fine-tuning helps translate explicit re-
+quirements but still misses implicit constraints in
+long-context problems. 3) Search-based methods
+improve over single-pass generation but remain
+below SemOPT. Their reliance on general-purpose
+evaluators and on flat search makes recovery from
+strategy-level modeling errors difficult, whereas
+SemOPT backtracks across modeling strategy, math
+model, and code.
+Objective-value matching is the standard proto-
+col on these benchmarks, but it can credit a seman-
+tically incorrect formulation whenever that formu-
+lation happens to attain the same optimum. We
+therefore additionally validate SemOPT at the for-
+mulation level on 100 LP problems with reference
+formulations, scoring predictions by graph edit dis-
+tance and human audit alongside objective match-
+ing. SemOPT improves over the strongest fine-tuned
+baseline under all three criteria, indicating that the
+gains extend to formulation faithfulness rather than
+final-answer matching alone. Appendix D details
+the protocol and the full results.
+Robustness Analysis. We next recalibrate diffi-
+culty labels. Existing labels often depend on the
+number of constraints rather than the difficulty of
+finding a correct solution, yielding weak correla-
+tion with actual solver accuracy (Xiao et al., 2025).
+We therefore sample three solutions from the direct
+generator pθ(C|P) and label an instance as Easy if
+all three samples are correct, Hard if none are cor-
+rect, and Medium otherwise. This definition aligns
+difficulty with single-pass generation success.
+Table 1 shows that SIRL is the best or near-best
+baseline on multiple datasets, so we use it as the
+strongest baseline for the robustness comparison.
+The results in Table 2 show that SemOPT achieves
+clear improvements over SIRL on complex datasets.
+Except for the Medium subset of ComplexOR,
+which contains only a small number of instances,
+we can also notice that the improvement generally
+becomes larger as difficulty increases. This pattern
+supports the role of semantic-guided search in cor-
+recting hard cases where implicit requirements and
+high-level modeling decisions often cause errors.
+5.3
+Component Analysis
+We evaluate three variants to isolate the contri-
+bution of each component: (1) Backbone Vari-
+
+
+--- Page 7 ---
+Table 2: Accuracy (Best-of-N) across difficulty levels.
+We compare SemOPT against the single strongest base-
+line (SIRL) on Easy, Medium, and Hard subsets.
+Dataset
+Difficulty
+SIRL
+SemOPT
+NL4Opt
+Easy
+93.6%
+94.4% (↑0.8%)
+Medium
+82.0%
+84.0% (↑2.0%)
+Hard
+69.2%
+71.8% (↑2.6%)
+ComplexLP
+Easy
+88.6%
+88.6% (+0.0%)
+Medium
+94.1%
+97.1% (↑3.0%)
+Hard
+54.5%
+63.6% (↑9.1%)
+ComplexOR
+Easy
+55.6%
+77.8% (↑22.2%)
+Medium
+50.0%
+50.0% (+0.0%)
+Hard
+28.6%
+57.1% (↑28.5%)
+ants, which replace the generation backbone with
+Gemini-2.5-Flash-Lite, GPT-4.1 mini, and Qwen3-
+Max, testing whether the correction framework
+generalizes across LLM backbones; (2) Critic Vari-
+ants, which replace the fine-tuned semantic reward
+model with either the generation backbone (GPT-
+4.1 Nano) or the reward-model backbone (Qwen3-
+4B-Instruct-2507) during MCTS evaluation, test-
+ing whether the trained reward model provides a
+stronger semantic value signal; (3) Adaptive Gat-
+ing Ablation, which removes the confidence thresh-
+old and runs MCTS for all queries, testing whether
+adaptive gating reduces unnecessary inference cost.
+Backbone Variants.
+Table 3 presents the per-
+formance gains across diverse LLM backbones.
+SemOPT consistently outperforms standard prompt-
+ing in Best-of-N settings across all tested genera-
+tors. These gains indicate that the semantic correc-
+tion framework generalizes across LLM backbones
+rather than depending on a single generator.
+Because the fine-tuned baselines use their own
+specialized generators whereas SemOPT uses GPT-
+4.1 Nano, we further control for the generator itself.
+Keeping the semantic reward model, the adaptive
+gate, and the MCTS procedure fixed, we replace
+only SemOPT’s generator with the fine-tuned mod-
+els of ORLM and SIRL. As reported in Table 4,
+SemOPT outperforms ORLM and SIRL on all three
+datasets. The improvements reflect the correction
+framework rather than the choice of generator.
+Critic Variants. We examine the role of the se-
+mantic reward model from two angles: discrim-
+ination quality and downstream search accuracy.
+For discrimination quality, we evaluate whether the
+reward model distinguishes semantically faithful
+solver code from incorrect executable solver code.
+The test set is constructed from single-pass gener-
+ation on NL4Opt, ComplexLP, and ComplexOR.
+Table 3: Performance across LLM backbones. We com-
+pare SemOPT with standard prompting in BoN settings.
+Backbone LLM
+Method
+NL4Opt
+ComplexLP
+ComplexOR
+Gemini-2.5
+Flash-Lite
+Prompting (BoN)
+70.1%
+64.0%
+55.6%
+SemOPT (BoN)
+79.0%
+75.7%
+63.0%
+GPT-4.1 mini
+Prompting (BoN)
+74.8%
+64.8%
+55.6%
+SemOPT (BoN)
+86.9%
+79.3%
+66.7%
+Qwen3-Max
+Prompting (BoN)
+76.2%
+66.7%
+55.6%
+SemOPT (BoN)
+88.8%
+82.0%
+66.7%
+Table 4: Fine-tuned generator control on complex
+datasets. We replace only SemOPT’s generator with the
+fine-tuned models of ORLM and SIRL.
+Variant
+IndustryOR
+ComplexLP
+ComplexOR
+ORLM
+42.9%
+59.5%
+50.0%
+SemOPT w/ ORLM generator
+61.9%
+74.8%
+66.7%
+SIRL
+45.2%
+80.2%
+44.4%
+SemOPT w/ SIRL generator
+66.7%
+85.6%
+66.7%
+As shown in Table 5, the fine-tuned reward model
+achieves the highest AUC/F1 on all three datasets
+compared with both its unfine-tuned backbone and
+the policy LLM used for generation.
+For downstream search accuracy, Figure 4(a)
+breaks down model outputs into correct solutions,
+syntactic errors, and semantic errors under differ-
+ent critic models. The fine-tuned semantic reward
+model not only achieves the highest proportion of
+correct solutions across all benchmarks, but also
+yields a lower share of semantic errors compared
+to both the unfine-tuned base model and general-
+purpose LLM. This confirms that the reward model
+provides more precise semantic signals, guiding the
+search toward semantically consistent solutions.
+Because SemOPT differs from prior search-based
+methods in both evaluation and search structure,
+Table 6 separates their effects.
+Both controls
+use SemOPT’s semantic reward model. RM-only
+reranking samples the same number of end-to-end
+solver-code candidates and selects one without
+search, whereas Autoformulator-style + Seman-
+tic RM applies MCTS to formulation components
+such as variables, objectives, and constraints, with-
+out SemOPT’s strategy–math-model–code hierarchy.
+RM-only reranking performs worst, showing that
+reward-guided selection alone is insufficient. The
+Autoformulator-style variant narrows the gap, but
+SemOPT remains better, supporting the value of the
+correction hierarchy. Conversely, replacing the re-
+ward model with a general LLM critic while keep-
+ing the SemOPT hierarchy reduces performance by
+4.8, 4.5, and 5.6 points. The evaluator and hierar-
+chy therefore provide complementary gains.
+
+
+--- Page 8 ---
+Table 5: Reward-model discrimination performance.
+Each cell reports AUC / F1.
+Dataset
+Qwen3-4B
+Instruct-2507
+GPT-4.1
+Nano
+SemOPT
+RM
+NL4Opt
+0.546 / 0.781
+0.596 / 0.776
+0.744 / 0.849
+ComplexLP
+0.619 / 0.760
+0.701 / 0.785
+0.820 / 0.800
+ComplexOR
+0.576 / 0.667
+0.611 / 0.696
+0.833 / 0.778
+Table 6: Factorizing the semantic evaluator and the cor-
+rection hierarchy on complex datasets (BoN accuracy).
+Variant
+IndustryOR
+ComplexLP
+ComplexOR
+Autoformulator
+49.2%
+52.3%
+48.1%
+RM-only reranking
+52.4%
+50.5%
+44.4%
+Autoformulator-style + Semantic RM
+61.9%
+68.5%
+61.1%
+SemOPT hierarchy + general LLM
+59.5%
+78.4%
+61.1%
+SemOPT
+64.3%
+82.9%
+66.7%
+Adaptive Gating Ablation. Figure 4(b) analyzes
+the trade-off between accuracy and inference cost.
+This ablation removes the gate and runs MCTS for
+every query. This change increases API calls sub-
+stantially: on NL4Opt, w/o Gating uses about 2.6×
+more calls than the full framework while improv-
+ing accuracy by less than 1%. Average API calls
+also increase as dataset difficulty increases from
+NL4Opt to ComplexOR, indicating that the gate
+allocates more search budget to harder tasks.
+5.4
+Efficiency
+We evaluate efficiency from two perspectives:
+whether SemOPT improves over common iterative
+and search baselines under comparable budgets,
+and whether reward-guided search avoids the cost
+of exhaustive hypothesis enumeration.
+Comparison with Iterative and Search Baselines.
+Table 7 compares SemOPT with two classic itera-
+tive and search baselines, Self-Refinement (SR)
+and Beam Search (BS), on the combined hard sub-
+sets of NL4Opt, ComplexLP, and ComplexOR. To
+evaluate the efficiency of SemOPT itself, we set the
+iteration count of SR and the beam-search bud-
+get of BS so that both baselines use no less infer-
+ence cost than SemOPT. Under this setting, SemOPT
+achieves the highest accuracy while using less time
+and fewer API calls. This result shows that the im-
+provement of SemOPT comes from more effective
+semantic reward-guided correction rather than a
+larger inference budget.
+Comparison with Exhaustive Search. We next
+compare SemOPT with a brute-force Naive Search
+(NS) baseline that exhaustively evaluates a fixed
+candidate space. As shown in Table 8, NS ob-
+tains slightly higher accuracy on NL4Opt and Com-
+NL4Opt
+ComplexLP
+ComplexOR
+0
+20
+40
+60
+80
+100
+Proportion (%)
+73.8
+23.4
+67.6
+27.9
+55.6
+38.9
+85.0
+12.6
+78.4
+16.2
+61.1
+38.9
+87.9
+9.8
+82.9
+12.6
+66.7
+33.3
+(a)
+1
+2
+3
+1
+2
+3
+1
+2
+3
+NL4Opt
+ComplexLP
+ComplexOR
+50
+60
+70
+80
+90
+100
+Accuracy (%)
+(b)
+87.9
+82.9
+66.7
+88.8
+81.1
+66.7
+0
+10
+20
+30
+40
+Avg. API Calls
+1 Qwen3-4B
+2 GPT-4.1 Nano
+3 SemOPT RM
+Correct
+Syntactic Error
+Semantic Error
+SemOPT (Acc.)
+w/o Gating (Acc.)
+Correct
+Syntactic Error
+Semantic Error
+SemOPT (Acc.)
+w/o Gating (Acc.)
+SemOPT (Calls)
+w/o Gating (Calls)
+Figure 4: (a) Breakdown of model outputs under dif-
+ferent critic models. (b) Efficiency evaluation of the
+adaptive gating mechanism.
+Table 7: Efficiency comparison with iterative and search
+baselines on the combined hard subsets of NL4Opt,
+ComplexLP, and ComplexOR.
+Method
+Acc.
+Time (s)
+API Calls
+SR (25 iters)
+55.7%
+61.2
+26.0
+BS (beam 2, branch 5)
+63.3%
+38.9
+30.0
+SemOPT
+67.1%
+32.3
+25.1
+plexLP, but requires 84 API calls per instance.
+SemOPT matches NS on ComplexOR and trails it
+by only 0.9 average accuracy points across the
+three datasets, while reducing API calls to 12–19%
+of NS. These results show that SemOPT preserves
+nearly the same accuracy as exhaustive search but
+avoids most of its inference cost.
+Comparison with Pass@N Scaling. Figure 5 fur-
+ther compares SemOPT with standard prompting
+under Pass@N scaling. SemOPT lies on the upper-
+left side of the prompting curves, achieving higher
+accuracy with fewer API calls. For example, on
+ComplexLP, SemOPT reaches 86.5% accuracy with
+13.6 calls on average, whereas standard prompting
+saturates at 64.9% even with 64 calls. These results
+indicate that semantic guidance changes the cost-
+accuracy trade-off rather than merely increasing
+the number of sampled code instances.
+6
+Related Work
+LLMs for Optimization Modeling. Recent work
+on LLM-based optimization modeling falls into
+four groups. Standard methods such as Reflex-
+ion (Shinn et al., 2023) refine math models through
+iterative feedback. Workflow frameworks, includ-
+ing OptiMUS (AhmadiTeshnizi et al., 2024) and
+Chain-of-Experts (Xiao et al., 2024), decompose
+modeling into multi-agent pipelines. Fine-tuned
+models, such as ORLM (Huang et al., 2025a) and
+SIRL (Chen et al., 2025), adapt LLMs with domain-
+specific instruction tuning or reinforcement learn-
+ing. Search-based approaches, including Autofor-
+
+
+--- Page 9 ---
+Table 8: Comparison with exhaustive Naive Search
+(NS). Each cell reports accuracy / API calls.
+Method
+NL4Opt
+ComplexLP
+ComplexOR
+NS
+89.7% / 84.0
+83.8% / 84.0
+66.7% / 84.0
+SemOPT
+87.9% / 10.2
+82.9% / 13.6
+66.7% / 15.9
+1
+2
+4
+8 16 32 64
+API Calls
+70
+80
+90
+Accuracy (%)
+NL4Opt
+1
+2
+4
+8 16 32 64
+API Calls
+40
+50
+60
+70
+80
+ComplexLP
+1
+2
+4
+8 16 32 64
+API Calls
+50
+60
+70
+ComplexOR
+Standard Prompting
+SemOPT (Best of N)
+SemOPT (Pass@N)
+Figure 5: Comparison between SemOPT and the standard
+prompting baseline across optimization benchmarks.
+mulator (Astorga et al., 2025) and SolverLLM (Li
+et al., 2025), explore broader hypothesis spaces
+beyond single-pass generation. These methods im-
+prove modeling ability, but mainly target feasible
+or superficially plausible math models rather than
+semantic consistency with problem requirements.
+Error Correction in Optimization Modeling.
+LLMs produce modeling errors through halluci-
+nated or misinterpreted problem structure (Xie
+et al., 2025), commonly categorized as syntactic
+or semantic errors (Wang et al., 2025). Syntac-
+tic errors occur when generated solver code fails
+to run or is judged infeasible; execution or solver
+feedback directly exposes them. OptLLM (Zhang
+et al., 2024) and ORThought (Yang et al., 2026) re-
+fine code from tracebacks, while LLMOPT (Jiang
+et al., 2025) reduces such errors through domain-
+specific fine-tuning. Semantic errors occur when
+solver code runs and returns an objective value but
+violates the original problem intent through misun-
+derstood constraints, incorrect objectives, or invalid
+modeling assumptions. Although semantic error
+correction has been studied for LLM-generated
+content (Yang et al., 2025b; Gu et al., 2025; Islam
+et al., 2024), work targeting optimization modeling
+remains limited. Autoformulator (Astorga et al.,
+2025) and SolverLLM (Li et al., 2025) address this
+issue through broader search and candidate selec-
+tion, but rely on general-purpose verifiers that lack
+the domain sensitivity needed to separate plausible
+math models from semantically correct ones.
+7
+Conclusion
+We propose SemOPT, a framework for correcting
+semantic errors in LLM-based optimization mod-
+eling.
+SemOPT combines a pairwise-trained se-
+mantic reward model with semantic-guided MCTS
+over modeling strategies, math models, and solver
+code, while adaptive gating invokes search only
+when the initial solver code falls below the seman-
+tic confidence threshold. Comprehensive experi-
+ments across seven benchmarks show that SemOPT
+achieves the best results on most datasets, with
+especially strong gains on complex benchmarks.
+These results support semantic-guided search for
+reliable optimization modeling.
+Limitations
+This work focuses on automated optimization mod-
+eling from natural-language problem descriptions
+to executable solver code. Although SemOPT im-
+proves semantic consistency across seven bench-
+marks, our evaluation is still centered on bench-
+mark tasks rather than deployed decision-making
+workflows. The framework also assumes access
+to solver execution and reward-model training
+data for constructing semantic supervision. Fu-
+ture work will further investigate this direction in
+broader real-world settings, including domain trans-
+fer, more diverse optimization tasks, and more effi-
+cient semantic-guided search.
+Ethical Considerations
+SemOPT is intended as a research framework for im-
+proving the reliability of LLM-based optimization
+modeling. The main societal risk is over-reliance
+on automatically generated solver code in high-
+stakes decision-making settings. Executable opti-
+mization models still sometimes encode incorrect
+objectives, omit important constraints, or reflect
+inappropriate assumptions about the problem con-
+text. Such errors create risks of harmful decisions
+when used without expert review. We therefore
+recommend that generated models be audited by
+domain experts before deployment. The work uses
+existing optimization-modeling benchmarks and
+does not collect human-subject data. The frame-
+work also uses commercial and open-weight LLMs,
+so reproducibility and environmental cost depend
+on model availability, API behavior, and compute
+budget. AI assistance was used only for language
+polishing and basic code drafting; it was not used
+to formulate the research idea, design the experi-
+ments, derive the claims, or generate the results.
+
+
+--- Page 10 ---
+Acknowledgements
+Prof. Jingyuan Wang’s work is supported by the
+National Natural Science Foundation of China
+(No. 72242101), the Science and Technology De-
+velopment Fund Macau SAR (0052/2023/RIA1),
+and State Key Laboratory of Complex & Critical
+Software Environment (SKLCCSE-2025ZX-17).
+Prof.
+Zizhuo Wang’s research is partially sup-
+ported by the National Natural Science Foundation
+of China (NSFC) [Grant 72394361, 72425013],
+the Guangdong Provincial Key Laboratory of
+Mathematical Foundations for Artificial Intelli-
+gence (2023B1212010001), and the 1+1+1 CUHK-
+CUHK(SZ)-GDSTC Joint Collaboration Fund No
+2025A0505000079.
+References
+Ali AhmadiTeshnizi, Wenzhi Gao, Herman Brunborg,
+Shayan Talaei, Connor Lawless, and Madeleine
+Udell. 2024. Optimus-0.3: Using large language
+models to model and solve optimization problems at
+scale. arXiv:2407.19633.
+Ali Ahmaditeshnizi, Wenzhi Gao, and Madeleine Udell.
+2024. OptiMUS: Scalable optimization modeling
+with (MI)LP solvers and large language models. In
+Proc. of ICML, pages 577–596.
+Nicolás Astorga, Tennison Liu, Yuanzhang Xiao, and
+Mihaela van der Schaar. 2025. Autoformulation of
+mathematical optimization models using LLMs. In
+Proc. of ICML, pages 1864–1886.
+Yitian Chen, Jingfan Xia, Siyu Shao, Dongdong Ge, and
+Yinyu Ye. 2025. Solver-informed rl: Grounding large
+language models for authentic optimization modeling.
+In Proc. of NeurIPS, pages 106027–106069.
+Erwin J. Delgado, Xavier Cabezas, Carlos Martin-
+Barreiro, Víctor Leiva, and Fernando Rojas. 2022.
+An equity-based optimization model to solve the lo-
+cation problem for healthcare centers applied to hos-
+pital beds and covid-19 vaccination. Mathematics,
+10(11):1825.
+Yifu Ding, Wentao Jiang, Shunyu Liu, Yongcheng
+Jing, Jinyang Guo, Yingjie Wang, Jing Zhang, Zeng-
+mao Wang, Ziwei Liu, Bo Du, Xianglong Liu, and
+Dacheng Tao. 2025. Dynamic parallel tree search
+for efficient LLM reasoning. In Proc. of ACL, pages
+11233–11252.
+Guanting Dong, Hongyi Yuan, Keming Lu, Chengpeng
+Li, Mingfeng Xue, Dayiheng Liu, Wei Wang, Zheng
+Yuan, Chang Zhou, and Jingren Zhou. 2024. How
+abilities in large language models are affected by
+supervised fine-tuning data composition. In Proc. of
+ACL, pages 177–198.
+Daniel J. Garcia and Fengqi You. 2015. Supply chain de-
+sign and optimization: Challenges and opportunities.
+Computers & Chemical Engineering, 81:153–170.
+Jian Gu, Aldeida Aleti, Chunyang Chen, and Hongyu
+Zhang. 2025. A semantic-based optimization ap-
+proach for repairing llms: Case study on code gener-
+ation. arXiv:2503.12899.
+Chenyu Huang, Zhengyang Tang, Shixi Hu, Ruoqing
+Jiang, Xin Zheng, Dongdong Ge, Benyou Wang, and
+Zizhuo Wang. 2025a. ORLM: A customizable frame-
+work in training large models for automated optimiza-
+tion modeling. Operations Research, 73(6):2986–
+3009.
+Xuhan Huang, Qingning Shen, Yan Hu, Anningzhe Gao,
+and Benyou Wang. 2025b. LLMs for mathematical
+modeling: Towards bridging the gap between natural
+and mathematical languages. In Proc. of NAACL
+Findings, pages 2678–2710.
+Nafis Tanveer Islam, Joseph Khoury, Andrew Seong,
+Elias Bou-Harb, and Peyman Najafirad. 2024. En-
+hancing source code security with llms: Demysti-
+fying the challenges and generating reliable repairs.
+arXiv:2409.00571.
+Yixin Ji, Juntao Li, Yang Xiang, Hai Ye, Kaixin Wu, Kai
+Yao, Jia Xu, Linjian Mo, and Min Zhang. 2026. A
+survey of test-time compute: From intuitive inference
+to deliberate reasoning. Computational Linguistics,
+pages 1–51.
+Caigao Jiang, Xiang Shu, Hong Qian, Xingyu Lu, Jun
+Zhou, Aimin Zhou, and Yang Yu. 2025. Llmopt:
+Learning to define and solve general optimization
+problems from scratch. In Proc. of ICLR.
+Dheepak Krishnamurthy, Canan Uckun, Zhi Zhou,
+Prakash R. Thimmapuram, and Audun Botterud.
+2018. Energy storage arbitrage under day-ahead and
+real-time price uncertainty. IEEE TPWRS, 33(1):84–
+93.
+Dong Li, Xujiang Zhao, Linlin Yu, Yanchi Liu, Wei
+Cheng, Zhengzhang Chen, Zhong Chen, Feng Chen,
+Chen Zhao, and Haifeng Chen. 2025. Solverllm:
+Leveraging test-time scaling for optimization prob-
+lem via llm-guided search.
+In Proc. of NeurIPS,
+pages 100028–100058.
+Jiaxi Li, Yucheng Shi, Xiao Huang, Jin Lu, and Ninghao
+Liu. 2026. Mits: Enhanced tree search reasoning for
+llms via pointwise mutual information. In Proc. of
+PAKDD, pages 288–300.
+Haoyang Liu, Jie Wang, Yuyang Cai, Xiongwei Han,
+Yufei Kuang, and Jianye Hao. 2025. Optitree: Hier-
+archical thoughts generation with tree search for llm
+optimization modeling. In Proc. of NeurIPS, pages
+120713–120781.
+Kostis Michailidis, Dimos Tsouros, and Tias Guns.
+2024.
+Constraint modelling with llms using in-
+context learning. In 30th International Conference
+
+
+--- Page 11 ---
+on Principles and Practice of Constraint Program-
+ming, pages 20:1–20:27.
+Rindranirina Ramamonjison, Timothy Yu, Raymond
+Li, Haley Li, Giuseppe Carenini, Bissan Ghaddar,
+Shiqi He, Mahdi Mostajabdaveh, Amin Banitalebi-
+Dehkordi, Zirui Zhou, and Yong Zhang. 2022.
+Nl4opt competition: Formulating optimization prob-
+lems based on their natural language descriptions. In
+Proc. of the NeurIPS 2022 Competitions Track, pages
+189–203.
+Noah Shinn, Federico Cassano, Ashwin Gopinath,
+Karthik Narasimhan, and Shunyu Yao. 2023. Re-
+flexion: language agents with verbal reinforcement
+learning. In Proc. of NeurIPS, pages 8634–8652.
+Ajay Singh. 2012. An overview of the optimization
+modelling applications. Journal of Hydrology, 466–
+467:167–182.
+Hao Sun, Yunyi Shen, and Jean-Francois Ton. 2025. Re-
+thinking reward modeling in preference-based large
+language model alignment. In Proc. of ICLR.
+Qinglin Wang, Zhihong Sun, Ruyun Wang, Tao Huang,
+Zhi Jin, Ge Li, and Chen Lyu. 2025. Semguard: Real-
+time semantic evaluator for correcting llm-generated
+code. In Proc. of ASE, pages 1919–1930.
+Ziyang Xiao, Jingrong Xie, Lilin Xu, Shisi Guan,
+Jingyan Zhu, Xiongwei Han, Xiaojin Fu, WingYin
+Yu, Han Wu, Wei Shi, Qingcan Kang, Jiahui Duan,
+Tao Zhong, Mingxuan Yuan, Jia Zeng, Yuan Wang,
+Gang Chen, and Dongxiang Zhang. 2025. A survey
+of optimization modeling meets llms: progress and
+future directions. In Proc. of IJCAI, pages 10742–
+10750.
+Ziyang Xiao, Dongxiang Zhang, Yangjun Wu, Lilin
+Xu, Yuan Wang, Xiongwei Han, Xiaojin Fu, Tao
+Zhong, Jia Zeng, Mingli Song, and Gang Chen. 2024.
+Chain-of-experts: When llms meet complex opera-
+tions research problems. In Proc. of ICLR.
+Wantong Xie, Yi-Xiang Hu, Jieyang Xu, Feng Wu, and
+Xiangyang Li. 2025. Murka: Multi-reward reinforce-
+ment learning with knowledge alignment for opti-
+mization tasks. In Proc. of NeurIPS, pages 34878–
+34905.
+Linzi Xing, Xinglu Wang, Yuxi Feng, Zhenan Fan,
+Jing Xiong, Zhijiang Guo, Xiaojin Fu, Rindra Ra-
+mamonjison, Mahdi Mostajabdaveh, Xiongwei Han,
+Zirui Zhou, and Yong Zhang. 2024. Towards human-
+aligned evaluation for linear programming word prob-
+lems. In Proc. of LREC-COLING, pages 16550–
+16556.
+An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,
+Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao,
+Chengen Huang, Chenxu Lv, Chujie Zheng, Dayi-
+heng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge,
+Haoran Wei, Huan Lin, Jialong Tang, and 41 others.
+2025a. Qwen3 technical report. arXiv:2505.09388.
+Beinuo Yang, Qishen Zhou, Junyi Li, Chenxing Su,
+Panagiotis Angeloudis, and Simon Hu. 2026. Or-
+thought: Benchmarking and automating logistics op-
+timization modeling via structured llm reasoning. Ar-
+tificial Intelligence for Transportation, 6:100059.
+Chengrun Yang, Xuezhi Wang, Yifeng Lu, Hanxiao Liu,
+Quoc V. Le, Denny Zhou, and Xinyun Chen. 2024.
+Large language models as optimizers. In Proc. of
+ICLR.
+Ling Yang, Zhaochen Yu, Tianjun Zhang, Minkai Xu,
+Joseph E Gonzalez, Bin Cui, and Shuicheng Yan.
+2025b. Supercorrect: Advancing small llm reasoning
+with thought template distillation and self-correction.
+In Proc. of ICLR.
+Zhicheng Yang, Yiwei Wang, Yinya Huang, Zhi-
+jiang Guo, Wei Shi, Xiongwei Han, Liang Feng,
+Linqi Song, Xiaodan Liang, and Jing Tang. 2025c.
+Optibench meets resocratic: Measure and improve
+llms for optimization modeling. In Proc. of ICLR.
+Jihai Zhang, Wei Wang, Siyan Guo, Li Wang, Fangquan
+Lin, Cheng Yang, and Wotao Yin. 2024. Solving gen-
+eral natural-language-description optimization prob-
+lems with large language models. In Proc. of NAACL
+Industry Track, pages 483–490.
+Xinyu Zhang, Boxuan Zhang, Yuchen Wan, Lingling
+Zhang, Yixing Yao, Bifan Wei, Yaqiang Wu, and Jun
+Liu. 2026. OptiVerse: A comprehensive benchmark
+towards optimization problem solving. In Proc. of
+ACL Findings, pages 3059–3073.
+Yansen Zhang, Qingcan Kang, Yujie Chen, Yufei
+Wang, Xiongwei Han, Tao Zhong, Mingxuan Yuan,
+and Chen Ma. 2025. Sac-opt: Semantic anchors
+for iterative correction in optimization modeling.
+arXiv:2510.05115.
+
+
+--- Page 12 ---
+A
+MCTS Algorithm
+Algorithm 1 Semantic-Guided MCTS Process
+Input: Problem Description P, Semantic Reward Model R,
+Policy Network πθ, Budget Tmax, Expansion Count H,
+Exploration Constant ω, Reflection Rounds K
+Output: Best Solver Code C∗
+1: Initialize tree T with root node v(0)
+2: for iter ←1 to Tmax do
+3:
+v(i) ←v(0)
+4:
+while v(i) is not a leaf node do
+5:
+v(i+1)
+←
+arg maxu∈children(v(i))
+
+Q(u) + ω ·
+q
+ln N(v(i))
+N(u)+ϵ
+
+6:
+v(i) ←v(i+1)
+7:
+˜v ←v(i)
+8:
+if ˜v is not a terminal state then
+9:
+Sample {v(i+1)
+1
+, . . . , v(i+1)
+H
+} via v(i+1)
+j
+∼
+πθ(·|˜v, P)
+10:
+Add {v(i+1)
+1
+, . . . , v(i+1)
+H
+} to T as children of ˜v
+11:
+v∗←Select the node with the highest LLM prior
+12:
+else
+13:
+v∗←˜v
+14:
+if v∗is not a terminal state then
+15:
+C ←ROLLOUT(v∗, πθ)
+16:
+else
+17:
+C ←Extract solver code from v∗
+18:
+for k ←1 to K do
+19:
+Execute C and collect output
+20:
+if no syntax error then
+21:
+break
+22:
+else
+23:
+C ←πθ(C, error_msg, P)
+24:
+I ←1[no syntax error]
+25:
+Score S ←I · R(P, C)
+26:
+v ←v∗
+27:
+while v̸ = NULL do
+28:
+N(v) ←N(v) + 1
+29:
+Q(v) ←Q(v) + S−Q(v)
+N(v)
+30:
+v ←Parent(v)
+31: v ←v(0)
+32: for k ←1 to 3 do
+33:
+v ←arg maxu∈children(v) Q(u)
+34: C∗←Solver code of v
+35: return C∗
+B
+Training and Implementation Details
+B.1
+Semantic Mutation Operators
+Table 9 details the mutation operators used to con-
+struct hard semantic negatives for reward-model
+training. These operators are designed to preserve
+executable solver code whenever possible while
+perturbing the modeling intent. They cover three
+common sources of semantic error in optimization
+modeling: variable declarations, objective defini-
+tions, and constraints.
+Variable-level mutations alter the admissible so-
+lution space by relaxing variable types or removing
+bounds. Objective-level mutations change what the
+solver optimizes, either by flipping the optimiza-
+tion sense, changing coefficient signs, or dropping
+objective terms. Constraint-level mutations mod-
+ify feasibility logic through comparator changes,
+right-hand-side shifts, variable swaps, index mis-
+matches, or complete constraint removal. After the
+mutation process, candidates that fail execution or
+are judged infeasible are filtered out, so the remain-
+ing hard negatives correspond to executable but
+semantically incorrect solver code.
+Table 9: Semantic mutation operators for hard negative
+construction.
+Dimension
+Operator
+Implementation Logic
+Variable
+Type Relax
+Relax variable types (e.g., BINARY →CONTINUOUS)
+Bound Remove
+Remove lower/upper bounds
+Objective
+Sense Flip
+Swap direction (e.g., MIN →MAX)
+Coeff Noise
+Flip sign of variable coefficient in objective
+Term Drop
+Remove a term from objective expression
+Constraint
+Comparator Flip
+Swap inequality signs (e.g., ≥→≤)
+RHS Shift
+Modify RHS constant b to b × (1 ± ϵ)
+Var Swap
+Swap positions of two variables of same type
+Index Mismatch
+Swap iteration sets in loop constructs
+Constraint Drop
+Remove an entire constraint declaration
+B.2
+Hyperparameter Settings
+Table 10 details the hyperparameter configurations
+for the SemOPT framework to facilitate reproducibil-
+ity. The settings cover the generator, the MCTS
+reasoning process, and the adaptive gating mech-
+anism. The exploration constant ω regulates the
+balance between visiting new nodes and exploiting
+high-scoring branches. The node expansion size H
+defines the breadth of candidate generation at each
+reasoning step. Additionally, the gating threshold
+τ serves as the confidence cutoff for triggering the
+hierarchical search. This parameter is critical for
+balancing inference accuracy and computational
+cost by filtering straightforward instances.
+Table 10: Hyperparameter configurations for SemOPT.
+Parameter
+Value
+Generator (LLM) Settings
+Temperature
+0.9
+Top-p
+0.9
+Max Tokens
+2048
+MCTS Settings
+Exploration Constant (ω)
+1.414
+Simulations
+[4, 16]
+Node Expansion Size (H)
+4
+Reward Scale
+[0, 1]
+Adaptive Gating Settings
+Gating Threshold (τ)
+0.6
+
+
+--- Page 13 ---
+B.3
+Reward Model Training Details
+The semantic reward model is initialized from
+Qwen3-4B-Instruct-2507.
+We
+train
+it
+on
+3,000 optimization-modeling problems from OR-
+Instruct (Huang et al., 2025a), split into 2,700 train-
+ing and 300 validation problems, which yield 8,254
+positive–negative preference pairs. We verify that
+the reward-model training problems do not overlap
+with the evaluation benchmarks. Table 11 summa-
+rizes the main training configuration.
+Table 11: Detailed training configuration for the seman-
+tic reward model.
+Base Model
+Train / Val
+Problems
+Pairs
+Epochs
+Batch
+LR
+Max
+Len.
+Qwen3-4B-Instruct-2507
+2700 / 300
+8254
+3
+32
+2e−5
+2048
+C
+Baseline Details
+This section supplements the baseline descriptions
+in the experimental setup.
+C.1
+Standard Methods
+Standard Prompting is a single-pass generation
+baseline. It directly prompts the policy model to
+produce solver code from the problem description,
+without self-revision, external tool feedback, fine-
+tuning, or search. Self-Reflection follows the Re-
+flexion framework (Shinn et al., 2023), which im-
+proves a language agent through verbal feedback
+stored in memory rather than parameter updates. In
+our setting, the model reflects on previous execu-
+tion or solver feedback and regenerates solver code
+in later attempts.
+C.2
+Workflow Methods
+OptiMUS (AhmadiTeshnizi et al., 2024) is a mod-
+ular LLM-based system for modeling and solving
+(MI)LP problems from natural-language descrip-
+tions. It develops math models, writes and debugs
+solver code, evaluates generated solutions, and uses
+these evaluations to improve correctness and effi-
+ciency. Chain-of-Experts (Xiao et al., 2024) is a
+multi-agent framework for complex OR problems.
+It assigns agents to specialized OR roles and uses
+a conductor to coordinate forward thought con-
+struction and backward reflection. OptiTree (Liu
+et al., 2025) performs tree search over a hierarchi-
+cal taxonomy of OR problem types. It identifies
+simpler subproblems and synthesizes global mod-
+eling thoughts from the selected hierarchy. SAC-
+Opt (Zhang et al., 2025) uses semantic anchors ex-
+tracted from the original problem and reconstructed
+from generated code. It aligns the two sets of an-
+chors and selectively corrects mismatched objec-
+tives or constraints.
+C.3
+Fine-tuned Methods
+ORLM (Huang et al., 2025a) trains open-weight
+LLMs for optimization modeling using OR-
+Instruct, a semi-automated data synthesis frame-
+work. The resulting models are specialized for
+translating natural-language OR problems into
+math models and solver code. SIRL (Chen et al.,
+2025) applies solver-informed reinforcement learn-
+ing with verifiable rewards. External optimization
+solvers evaluate executable code and the associ-
+ated LP representation, providing rewards based on
+syntax, feasibility, and solution quality.
+C.4
+Search-based Methods
+Autoformulator (Astorga et al., 2025) formulates
+optimization models through MCTS over a hier-
+archical space of modeling choices. It uses sym-
+bolic pruning to remove redundant branches and
+LLM-based evaluation to score partial math models.
+SolverLLM (Li et al., 2025) is a training-free test-
+time scaling framework. It generates math models
+and solver code through MCTS, using dynamic ex-
+pansion, prompt backpropagation, and uncertainty
+backpropagation to guide the search process.
+D
+Model-Level Semantic Validation
+Objective-value matching is the standard evaluation
+protocol on optimization-modeling benchmarks,
+but it credits a semantically incorrect formulation
+whenever that formulation happens to attain the
+reference optimum. This section reports a comple-
+mentary validation of SemOPT at the formulation
+level.
+Evaluation Protocol.
+Following prior work
+on human-aligned evaluation of LP word prob-
+lems (Xing et al., 2024), we convert the predicted
+and the reference LP model into attributed bipartite
+graphs and compute the graph edit distance (GED)
+between them.
+Variable nodes encode bounds
+and objective coefficients, constraint nodes en-
+code constraint bounds, and edges encode variable–
+constraint coefficients. We report three metrics.
+GED Acc. counts a prediction as correct only
+when the edit distance is zero, which yields a strict
+lower bound on formulation correctness. Obj Acc.
+is the objective-matching metric used in the main
+
+
+--- Page 14 ---
+experiments, which is an upper bound because a
+semantically wrong model can return the correct
+objective by coincidence. For instances on which
+the two criteria disagree, we manually audit the
+predicted and the reference formulation, and report
+the human-verified correctness rate as Oracle Acc.
+Dataset. The benchmarks used in the main ex-
+periments either release only target objective val-
+ues, contain too few formulation-level instances,
+or are too simple for the three metrics to separate
+meaningfully. We therefore extract 100 LP prob-
+lems with explicit reference formulations from Op-
+tiVerse (Zhang et al., 2026), denoted OptiVerse-
+LP-100, and compare SemOPT against SIRL, the
+strongest fine-tuned baseline.
+Table 12: Formulation-level validation on OptiVerse-
+LP-100.
+Method
+GED Acc.
+Oracle Acc.
+Obj Acc.
+SIRL
+36%
+36%
+38%
+SemOPT
+44%
+47%
+49%
+Results. As shown in Table 12, SemOPT improves
+over SIRL by 8 points in GED Acc., 11 points in
+Oracle Acc., and 11 points in Obj Acc. The gain
+therefore extends to formulation faithfulness rather
+than final-answer matching alone. The small gap
+between GED Acc. and Obj Acc. also indicates
+that objective matching is a useful proxy for seman-
+tic correctness, although not a complete one.
+The two residual gaps have different causes. The
+Obj–Oracle gap corresponds to false positives un-
+der objective matching. In OptiVerse-53, for in-
+stance, the problem specifies a total investment of
+200,000 yuan, whereas SemOPT models it as an up-
+per bound of at most 200,000 yuan; the optimum
+happens to exhaust the full budget, so the objective
+matches although the formulation does not. The
+GED–Oracle gap instead usually reflects imperfec-
+tions in the reference model. In OptiVerse-678, the
+reference model imposes only non-negativity on
+the number of trucks, while SemOPT additionally
+imposes integrality; GED marks this as a mismatch
+even though the stricter formulation is semantically
+valid.
+Counterfactual Sensitivity.
+We further test
+whether the reward model responds to specific prob-
+lem statements rather than to surface features of the
+solver code. In ComplexLP-1, the original descrip-
+tion requires food quantities to be integers, and the
+corresponding solver code encodes this integral-
+ity requirement, receiving a reward score of 0.72.
+We then modify only the problem description so
+that food quantities may be fractional, leaving the
+solver code unchanged. The reward score drops to
+0.41. The reward model is thus sensitive to mis-
+matches between individual problem requirements
+and the solver code, even though it emits a scalar
+score without sentence-level rationales.
+E
+Parameter Sensitivity Analysis
+E.1
+Gating Threshold Sensitivity
+We tune the gating threshold τ on the validation
+set over {0.2, 0.4, 0.6, 0.8, 1.0} and select τ = 0.6
+as the default trade-off between accuracy and infer-
+ence cost. Table 13 reports the corresponding test-
+set behavior on NL4Opt, ComplexLP, and Com-
+plexOR. Lower thresholds trigger search only for
+low-confidence cases and reduce API calls, but they
+under-correct difficult instances. Higher thresholds
+approach the w/o Gating setting and slightly im-
+prove accuracy on some datasets, but require sub-
+stantially more calls. The default τ = 0.6 keeps
+accuracy close to the best setting while avoiding
+much of the extra inference cost.
+Table 13: Sensitivity to the gating threshold τ. Each
+cell reports accuracy / API calls.
+Dataset
+τ = 0.2
+τ = 0.4
+τ = 0.6
+τ = 0.8
+τ = 1.0
+NL4Opt
+72.9% / 4.1
+79.0% / 8.4
+87.9% / 10.2
+88.8% / 19.6
+88.8% / 26.8
+ComplexLP
+53.2% / 4.6
+73.8% / 10.2
+82.9% / 13.6
+83.8% / 20.1
+81.1% / 27.4
+ComplexOR
+44.4% / 5.8
+63.0% / 13.1
+66.7% / 15.9
+66.7% / 22.3
+66.7% / 29.5
+E.2
+Sampling Efficiency
+We further analyze the impact of the node expan-
+sion size H on the performance of SemOPT. As illus-
+trated in Figure 6, we evaluate both Best-of-N and
+Pass@N metrics across NL4Opt, ComplexLP, and
+ComplexOR. The results indicate that while accu-
+racy consistently improves as H increases from 1 to
+10, the performance gain saturates rapidly. Specif-
+ically, the accuracy typically reaches a plateau
+around H = 4 across all datasets. This observa-
+tion demonstrates the high sampling efficiency of
+our framework. It indicates that SemOPT achieves
+near-optimal performance with a minimal compu-
+tational budget, justifying our selection of H = 4
+as the default setting for the main experiments as
+reasonable.
+
+
+--- Page 15 ---
+1 2
+4
+6
+8
+10
+Candidate Size H
+75
+80
+85
+90
+Accuracy (%)
+NL4Opt
+1 2
+4
+6
+8
+10
+Candidate Size H
+70
+75
+80
+85
+90
+ComplexLP
+1 2
+4
+6
+8
+10
+Candidate Size H
+55
+60
+65
+70
+ComplexOR
+Best-of-N
+Pass@N
+Figure 6: Impact of node expansion size H on SemOPT
+performance across three benchmarks.
+F
+Result Variability Analysis
+F.1
+Run-to-Run Variation
+To assess the stability of the hard-subset compar-
+ison, Table 14 reports mean accuracy with run-
+to-run variation on the hard subsets of NL4Opt,
+ComplexLP, and ComplexOR. Each value is com-
+puted over repeated runs on the same instances;
+the reported ± values therefore describe variation
+induced by stochastic generation and MCTS explo-
+ration, rather than uncertainty over the benchmark
+population. SemOPT improves over the strongest
+baseline on all three hard subsets, with the largest
+margin on ComplexOR. The relatively higher
+variation on NL4Opt reflects the fact that sev-
+eral instances lie near the decision boundary, so
+small changes in the sampled search trajectory can
+change the selected solution. Despite this variance,
+the mean accuracy of SemOPT remains above the
+strongest baseline in every setting, confirming that
+the improvement is not attributable to a single fa-
+vorable run.
+Table 14: Hard-subset accuracy with variation.
+Hard Subset
+SIRL
+SemOPT
+NL4Opt
+69.2% ± 2.56%
+71.8% ± 4.44%
+ComplexLP
+54.5% ± 5.25%
+63.6% ± 3.03%
+ComplexOR
+28.6% ± 0.00%
+57.1% ± 0.00%
+F.2
+Paired Hard-Subset Analysis
+Run-to-run variation alone does not quantify uncer-
+tainty caused by the finite number of test instances.
+We therefore report absolute counts and paired
+instance-level tests in Table 15. The confidence
+interval is a 90% conditional exact interval for the
+paired net gain, computed from discordant pairs
+and scaled by the number of instances. The p-value
+is from the exact two-sided McNemar/binomial test
+on the same discordant outcomes.
+The combined hard subsets contain 79 instances,
+on which SemOPT wins seven paired cases and loses
+Table 15: Paired analysis on hard subsets. Counts are
+the number of solved instances over the subset size.
+Subset
+SIRL
+SemOPT
+SemOPT-only
+/ SIRL-only
+Gain
+90% CI
+/p
+NL4Opt-hard
+27/39
+28/39
+1/0
++2.6%
+[−2.3%, 2.6%] / 1.000
+ComplexLP-hard
+18/33
+21/33
+4/1
++9.1%
+[−4.8%, 14.8%] / 0.375
+ComplexOR-hard
+2/7
+4/7
+2/0
++28.5%
+[−15.8%, 28.6%] / 0.500
+Combined hard
+47/79
+53/79
+7/1
++7.6%
+[0.6%, 10.0%] / 0.070
+one, yielding a 7.6-point net gain and a positive
+90% interval. The ComplexOR-hard result is based
+on only seven instances (2/7 versus 4/7), so it
+should be interpreted as supportive rather than con-
+clusive evidence. Taken together with the repeated-
+run results above, the paired counts provide a more
+complete picture: the advantage persists across the
+combined hard set, while the small ComplexOR
+subset warrants caution.
+G
+Error Analysis
+G.1
+Syntactic Error Handling
+This section specifies how syntactic and runtime
+errors are accounted for during search. When a roll-
+out reaches a solver-code leaf, the code is executed.
+If the solver or the Python runtime reports an er-
+ror, the error message is appended to the context
+and the generator regenerates the code for up to K
+reflection rounds. If execution still fails after K
+rounds, the rollout receives a score of 0 and is not
+passed to the semantic reward model.Every node
+that initially triggers an error undergoes regenera-
+tion, and its final score enters backpropagation like
+any other node.
+Table 16: Syntactic error handling during search. The
+error rate is computed over all evaluated nodes; repair
+outcomes are computed over the nodes that initially
+triggered repair.
+Dataset
+Syntax-error
+Rate
+Correctly
+Repaired
+Still Erroneous
+(Score 0)
+IndustryOR
+33.1%
+64.1%
+35.9%
+ComplexLP
+34.2%
+74.7%
+25.3%
+ComplexOR
+46.8%
+81.8%
+18.2%
+Table 16 reports the resulting statistics. Roughly
+one third of the evaluated nodes on IndustryOR
+and ComplexLP trigger at least one execution er-
+ror, and the rate rises to 46.8% on ComplexOR,
+whose problems involve larger and more heavily
+indexed models. Reflection repairs the majority of
+these cases, and the remaining nodes are assigned
+a score of 0. This separates code-level execution
+handling, which relies on solver feedback, from
+
+
+--- Page 16 ---
+semantic correction, which is applied only to code
+that already runs.
+G.2
+Semantic Error Taxonomy
+To characterize the errors that remain after cor-
+rection, we analyze the 40 instances that SemOPT
+still answers incorrectly under BoN on IndustryOR,
+ComplexLP, and ComplexOR. We first categorize
+each error by the layer of the search hierarchy
+at which it originates, then further categorize the
+math-model errors by the component of the formu-
+lation that is wrong.
+Table 17: Distribution of the 40 remaining SemOPT er-
+rors by hierarchy layer, and of the 28 math-model errors
+by formulation component.
+Error Category
+Count
+Share
+By hierarchy layer (40 errors)
+Modeling Strategy
+9
+22.5%
+Math Model
+28
+70.0%
+Solver Code
+3
+7.5%
+By formulation component (28 math-model errors)
+Parameter
+2
+7.1%
+Decision Variable
+7
+25.0%
+Objective Function
+4
+14.3%
+Constraint
+15
+53.6%
+As Table 17 shows, most residual errors occur
+at the math-model layer, and constraints are the
+single largest source within that layer. This is con-
+sistent with the observation that constraints carry
+the implicit requirements of a problem description
+and are therefore the hardest component to recover
+from natural language. Only 7.5% of the errors
+are introduced at the solver-code layer, indicating
+that implementation is rarely the bottleneck once
+a faithful math model is available. The 22.5% of
+errors that originate at the strategy layer support
+including an explicit strategy layer in the search
+hierarchy, since an incorrect optimization frame-
+work or variable definition cannot be repaired by
+later layers. The taxonomy also suggests a prac-
+tical ordering for future improvements: stronger
+extraction of implicit constraints should address the
+dominant error source, while better strategy classi-
+fication can prevent errors from propagating into
+every downstream representation. In contrast, addi-
+tional code-level repair is likely to have a smaller
+effect once the generated program is already exe-
+cutable.
+H
+Qualitative Analysis
+As illustrated in Figure 7, we present a case study
+on “IndustryOR-37” to illustrate how SemOPT re-
+solves semantic ambiguities. The core challenge
+of this problem involves an implicit “backlogging”
+constraint. This allows for unmet demand to be car-
+ried over to subsequent periods, a logic that contra-
+dicts standard non-negative inventory assumptions.
+Failure of Direct Inference. As shown in the
+figure, the direct inference (System 1) fails to cap-
+ture this hidden requirement. It generates a stan-
+dard inventory balance equation that assumes non-
+negativity, leading to an invalid model.
+Reasoning Process of SemOPT. In contrast,
+through its capacity of semantic discrimination,
+SemOPT manages to figure out the correct answer.
+SemOPT activates MCTS to explore the modeling
+space.
+At the leaf nodes, the semantic reward
+model distinguishes between plausible but incor-
+rect math models. As shown in the figure, the
+model assigns the highest confidence score of 0.56
+to the math model that explicitly incorporates the
+backlog variable. In contrast, it assigns a lower
+score of 0.44 to the candidate that omits this vari-
+able. This effectively suppresses the semantically
+misaligned solution.
+Both candidates are exe-
+cutable, so solver feedback alone cannot distin-
+guish them; the decision depends on whether the
+formulation captures the problem’s implicit back-
+log logic. This trajectory confirms that SemOPT
+uses the reward model to actively reason through
+conflicting constraints and successfully rectifies se-
+mantic errors that standard prompting methods fail
+to identify.
+IndustryOR Problem37
+The contract booking numbers for three products, I, II, 
+and III, for each quarter of the next year are shown in 
+Table 1-10.[Table 1-10]...How should the factory 
+arrange its production to minimize the total 
+compensation and storage costs?
+0.47
+0.56
+0.44
+Type: IP, Production Planning
+Constraint: Dynamic Flow Balance
+Hidden: Backlogging
+Type: MILP, Production Planning
+Constraint: Dynamic Flow Balance
+Hidden: None-Negative
+Wrong Format
+Parameters, Variables, 
+Objective Functions...
+Constraint: 
+Parameters, Variables, 
+Objective Functions...
+Constraint: 
+System 1 -- 
+Didn’t Pass
+Figure 7: Case study on IndustryOR-37.
+I
+Prompts for Optimization
+To ensure reproducibility, we provide the prompts
+of SemOPT as follows:
+
+
+--- Page 17 ---
+Prompt for MCTS Layer 1: Modeling Strategy
+You are an expert in Operations Research. Your task is to determine the modeling strategy for the
+given problem.
+Problem Description: {problem_description}
+Your Task: 1. Identify the specific optimization framework (e.g., LP, MILP, NLP). 2. Define the
+decision variables, specifying their types (Continuous, Integer, Binary) and semantic meaning. 3.
+List implicit constraints and key modeling assumptions.
+Output Format:
+Return a strictly valid JSON object with the following keys:
+- "problem_type":
+The algorithmic framework (e.g., "Mixed Integer Linear Programming"). - "decision_variables": A
+list of objects, each with "name", "type", and "description". - "assumptions": A list of strings
+clarifying ambiguities or implicit logic (e.g., "X must be non-negative"). - "strategy_summary":
+A concise high-level approach (no formulas).
+Guidelines:
+- Variable Types:
+Be rigorous.
+Use INTEGER/BINARY for discrete entities (people,
+counts) and CONTINUOUS for rates/amounts. - Framework: Choose MILP if *any* discrete variables or
+logical constraints (if-then) are present. - Output ONLY the JSON object.
+Figure 8: Full prompt for the modeling-strategy layer of MCTS.
+Prompt for MCTS Layer 2: Math Model
+You are an expert in mathematical optimization modeling. Translate the provided strategy into a
+clean LaTeX-style math model.
+Context: - Original problem: {original_problem} - Problem type: {strategy.problem_type} - Decision
+Variables: {strategy.decision_variables} - Assumptions: {strategy.assumptions} - Strategy Summary:
+{strategy.strategy_summary}
+Task Definition: 1. Define all sets, parameters, variable declarations, objective, and constraint
+expressions based strictly on the provided strategy. 2. You must strictly adhere to the "Decision
+Variables" defined in the strategy snapshot. Do not change their types or meanings. 3. Preserve
+LaTeX notation, maintain consistent units, and ensure every implied constraint appears explicitly.
+Output Format: Provide the model as a single JSON object with exactly these five keys: "sets",
+"parameters", "variables", "objective", and "constraints".
+Key Reminders: - Output only the JSON object—no explanatory text. - Keep each field non-empty; add
+"None" explicitly if nothing applies. - Ensure notation and units stay consistent throughout the
+math model.
+Figure 9: Full prompt for the math model layer of MCTS.
+Prompt for MCTS Layer 3: Solver Code
+You are an expert in optimization programming with Gurobi. Your task is to implement the provided
+math model as executable Python code.
+Context:
+-
+Original
+Problem:
+{original_problem}
+-
+Strategy
+Snapshot:
+-
+Problem
+Type:
+{strategy.problem_type}
+-
+Decision
+Variables:
+{strategy.decision_variables}
+-
+Math
+Model:
+{math_model}
+Task Definition: 1. Import necessary libraries (gurobipy). 2. Define sample data for all parameters
+and sets using reasonable example values. The code must be directly executable. 3. Create the Gurobi
+model and define decision variables, strictly adhering to the types (Continuous, Binary, Integer)
+specified in the Strategy and Math Model. 4. Implement the objective function and all constraints
+exactly as formulated in the Math Model.
+5.
+Perform the optimization (model.optimize()).
+6.
+Include error handling for GRB.INFEASIBLE or GRB.UNBOUNDED statuses. 7. CRITICAL: If the solution
+is optimal, print the objective value using EXACTLY this format: "Optimal objective value: " +
+str(model.objVal).
+Output Format: Provide ONLY the Python code. Do not include markdown formatting or explanatory
+prose.
+Figure 10: Full prompt for the solver-code layer of MCTS.

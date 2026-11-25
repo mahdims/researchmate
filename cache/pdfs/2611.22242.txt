@@ -1,0 +1,988 @@
+--- Page 1 ---
+Optimal Energy and LLM Task Scheduling for
+Multiple Cloud Data Centers
+Zhongqi Zhao∗†, Lei Fan∗†, and Zhu Han∗
+∗Department of Electrical and Computer Engineering, University of Houston, Houston, TX, USA
+†Department of Engineering Technology, University of Houston, Houston, TX, USA
+Abstract—This paper studies coordinated Large Language
+Model (LLM) training-task scheduling and facility operation
+for geographically distributed cloud data centers (CDCs). The
+central question is how two scheduling flexibilities—cross-CDC
+task transfer and task reordering—affect service and economic
+outcomes when remote execution remains subject to compute,
+bandwidth, energy, and zone-temperature constraints. We formu-
+late a mixed-integer optimization model that jointly determines
+task outcomes, heterogeneous-node assignment, execution timing,
+pre-execution data transfer, node activation, and facility opera-
+tion. A deterministic 24-hour case study contains 3 CDCs, 15
+heterogeneous graphics processing unit (GPU) nodes, 4 thermal
+zones per CDC, and 103 tasks. In this instance, enabling transfer
+increases net profit by 57.9% relative to the otherwise matched
+no-transfer variant and increases completed tasks from 76 to 103.
+The more restrictive no-transfer FIFO-prefix variant completes
+14 tasks and yields negative profit. The proposed schedule trans-
+fers 39 tasks, achieves 70.3% node utilization, and maintains zone
+temperatures within 24◦C–27◦C. These fixed-instance results
+indicate that cross-CDC transfer and task-reordering flexibility
+can improve the modeled profit and task-completion outcomes
+under the studied conditions.
+Index Terms—Cloud data centers, energy management, LLM
+task scheduling, mixed-integer linear programming, optimization
+I. INTRODUCTION
+Training Large Language Models (LLMs) requires substan-
+tial computation, data movement, and storage input/output
+(I/O), and these workloads are commonly executed in cloud
+data centers (CDCs) [1], [2]. In a geographically distributed
+deployment, an operator must decide not only when and where
+each training task runs, but also whether its data should be
+transferred to another CDC. That placement decision changes
+node use, communication demand, heat generation, and facility
+energy requirements.
+Prior work has addressed several parts of this problem.
+Cooling-control and digital-twin methods target facility energy
+[3], while learning-based approaches schedule or migrate data-
+center tasks [4]. Recent studies also consider multi-cloud
+task scheduling, data-center network management, and geo-
+distributed job-and-data placement [5]–[7]. These advances
+establish that geographic placement, communication, and fa-
+cility operation matter. They do not, however, determine how
+much value arises from cross-CDC transfer and how much
+arises from relaxing a restrictive task order when both mech-
+anisms are evaluated under the same physical and economic
+constraints.
+LLM training tasks are both computation- and data-
+intensive. Their placement therefore cannot be based on pro-
+cessor availability alone: a remote task consumes outbound
+and inbound bandwidth, and its data must arrive before exe-
+cution begins. CDCs also differ in node composition, avail-
+able capacity, and operating conditions. A remote assignment
+can improve the modeled objective only when its placement
+benefit offsets transfer cost and remains feasible under these
+constraints [7], [8].
+Task placement is also coupled to facility operation. Ac-
+tivating a node changes computing energy and zone heat,
+which affects air-conditioning demand and the site energy
+balance. Storage, renewable supply, and grid purchases further
+constrain feasible operation. Carbon-aware scheduling across
+AI data-center parks similarly shows that workload flexibility
+must be interpreted together with site conditions [9]. Here,
+these facility constraints provide the feasibility context for
+comparing the two scheduling flexibilities; they are not treated
+as an independent claim of universal energy efficiency.
+Motivated by this distinction, we ask a question regard-
+ing to a fixed time horizon: under one coupled compute–
+communication–facility model, what changes when cross-
+CDC transfer is disabled, and what changes when task re-
+ordering is additionally replaced by a FIFO-prefix restriction?
+The comparison is diagnostic rather than statistical. It separates
+the two modeled flexibility mechanisms while holding the task
+set, node set, CDC assignments, rewards, penalties, and energy
+parameters fixed.
+The main contributions of this paper are summarized as
+follows:
+• We
+formulate
+a
+multi-CDC
+optimization
+model
+that
+couples
+task
+outcomes
+and
+execution
+timing
+with heterogeneous-node assignment and bandwidth-
+constrained, pre-execution task transfer.
+• We place these decisions within modeled node-energy,
+zone-temperature, air-conditioning, storage, renewable-
+supply,
+and
+grid-purchase
+constraints
+so
+that
+each
+scheduling variant is evaluated under the same cross-layer
+feasibility conditions.
+• We use a fixed-instance comparison of the proposed, No
+Transfer (No TF), and No Transfer with FIFO-prefix
+order (No TF+FIFO) variants to separate the effects
+of cross-CDC transfer and task-reordering flexibility on
+profit, task completion, concurrency, and node utilization.
+arXiv:2611.22242v1  [eess.SY]  17 Nov 2026
+
+
+--- Page 2 ---
+TABLE I
+LLM TASK POOLS AND ELECTRICITY-PRICE COEFFICIENTS
+CDC
+LLM Task Pool
+Price (NMU/kWh)
+CDC1
+{1 : LLMw
+1,1
+· · ·
+m : LLMNTS
+1,m}
+βe,g
+1,T
+CDC2
+{1 : LLMNTS
+2,1
+· · ·
+p : LLMNTS
+2,p }
+βe,g
+2,T
+...
+...
+· · ·
+...
+...
+CDCN
+{1 : LLMTS
+N,1
+· · ·
+q : LLMTS
+N,q}
+βe,g
+N,T
+CDC i
+z1
+Ni,1
+z2
+Ni,2
+z3
+Ni,3
+z4
+Ni,4
+heterogeneous GPU nodes and zone HVAC
+grid + renewable + battery
+CDC k
+z1
+Nk,1
+z2
+Nk,2
+z3
+Nk,3
+z4
+Nk,4
+heterogeneous GPU nodes and zone HVAC
+grid + renewable + battery
+task-data transfer
+remote assignment
+home tasks: hj = i
+home tasks: hj = k
+Fig. 1. Multi-CDC problem layout. Each CDC contains heterogeneous nodes
+partitioned into thermal zones; remote execution requires inter-CDC task-data
+transfer, while computing and HVAC decisions share the local facility-energy
+balance.
+The rest of this paper is organized as follows. Section II
+presents the problem definition and mathematical formulation.
+Section III reports the numerical results and discusses the
+scheduling and energy-management behavior of the optimized
+solution. Section IV concludes the paper.
+II. PROBLEM DEFINITION AND FORMULATIONS
+This section presents a mixed-integer programming (MIP)
+formulation for net operating profit under LLM training-task
+scheduling, data transfer, and facility constraints. We consider
+a set I of CDCs located in different regions. Each task j ∈J
+has a fixed home CDC denoted by hj ∈I. Tasks are classified
+exogenously as non-time-sensitive (NTS), time-sensitive (TS),
+or already running before the scheduling horizon. The TS
+class represents users who selected priority service before
+the optimization begins; priority purchase is not a decision
+variable. Table I illustrates the initial task pools.
+Each CDC contains heterogeneous computing nodes dis-
+tributed across thermal zones. Let Ni,z be the nodes in zone
+z of CDC i, and let ℓn ∈I denote the CDC containing node
+n. Fig. 1 illustrates the resulting multi-CDC hierarchy and
+the coupling between task transfer, zone-level computing, and
+facility operation.
+Given task classes, home CDCs, processing times, dead-
+lines, data volumes, economic coefficients, node limits, and
+facility profiles, the model determines each task outcome,
+execution node and interval, required transfer, and CDC energy
+dispatch. A remote assignment is feasible only when its data
+reach the destination before startup and both CDCs satisfy
+their communication limits. The output is therefore a joint
+task, transfer, node, storage, HVAC, and grid schedule rather
+than an unconstrained geographic placement.
+A. Cloud Data Center Modeling Overview
+We formulate the multi-CDC coordination problem over
+t ∈T = {1, 2, . . . , T} with step length ∆t. The optimizer
+jointly determines task status, execution node, running tra-
+jectory, inter-CDC data transfer, battery charging/discharging,
+HVAC operation, and grid purchase. Indices i, j, n, z, and
+t denote CDC, task, node, zone, and time slot; sets I, J ,
+N, Z, and T
+collect them. Binary variables are mainly
+{x, u, v, z, y}; other lowercase symbols denote continuous de-
+cision variables. Uppercase symbols and Greek letters denote
+parameters/constants, except temperature variables such as
+T Zone
+i,z,t and T AC
+i,z,t.
+The complete problem is summarized as follows:
+max cprofit −closs −cHold −cTF −
+X
+t∈T
+cOp
+t
+,
+(1)
+s.t. cprofit =
+X
+j∈J
+Cprofit
+j
+xDone
+j
+,
+(2)
+closs =
+X
+j∈J
+Closs
+j
+xAbort
+j
+,
+(3)
+cHold =
+X
+j∈J
+CHold
+j
+xHold
+j
+,
+(4)
+cTF =
+X
+j∈J
+Ctransfer
+j
+xTF
+j
+,
+(5)
+cOp
+t
+=
+X
+i∈I
+βe,g
+i,t eGrid
+i,t
+, ∀t ∈T .
+(6)
+The objective in (1) maximizes net profit. Variables cprofit,
+closs, cHold, cTF, and cOp
+t
+are completed-task revenue, abortion
+penalty, holding penalty, transfer cost, and grid-purchase cost,
+all in normalized monetary units (NMU). Parameters Cprofit
+j
+,
+Closs
+j
+, CHold
+j
+, and Ctransfer
+j
+are in NMU/task. Variable eGrid
+i,t
+is grid-purchased energy in kWh/slot, βe,g
+i,t is the electricity-
+price coefficient in NMU/kWh, and cOp
+t
+is consequently in
+NMU/slot.
+B. LLM Training Task Scheduling
+The scheduling block includes four parts: final task states,
+execution assignment and temporal consistency, node-level
+capacity coupling, and cross-CDC transfer feasibility.
+1) Task States and Assignment:
+xDone
+j
++ xAbort
+j
++ xHold
+j
+= 1, ∀j ∈J ,
+(7)
+xTF
+j
+= 0, ∀j ∈J w,
+(8)
+xHold
+j
+= 0, ∀j ∈J w ∪J TS,
+(9)
+xAbort
+j
+= 0, ∀j ∈J NTS ∪J w,
+(10)
+X
+n∈N
+xtask
+j,n = xDone
+j
+, ∀j ∈J .
+(11)
+Equation (7) assigns each task to exactly one base state. Binary
+variables xDone
+j
+, xAbort
+j
+, and xHold
+j
+indicate completion, abor-
+tion, and holding; xTF
+j
+indicates remote execution; and xtask
+j,n
+indicates assignment to node n. Sets J w, J TS, and J NTS are
+already-running, time-sensitive, and non-time-sensitive tasks.
+
+
+--- Page 3 ---
+Constraints (8)–(11) enforce state eligibility and assignment
+consistency.
+2) Temporal Scheduling Constraints:
+utask
+j,n,t ≤xtask
+j,n , ∀j ∈J , ∀n ∈N, ∀t ∈T ,
+(12)
+utask
+j,n,t−1 −utask
+j,n,t −vSD
+j,n,t + vSU
+j,n,t = 0, ∀j ∈J , ∀n ∈N, ∀t ∈T ,
+(13)
+vSD
+j,n,t + vSU
+j,n,t ≤1, ∀j ∈J , ∀n ∈N, ∀t ∈T ,
+(14)
+X
+n∈N
+X
+t∈T
+utask
+j,n,t =
+X
+n∈N
+T task
+j,n xtask
+j,n , ∀j ∈J NTS ∪J TS,
+(15)
+min{t+T task
+j,n −1,T }
+X
+τ=t
+utask
+j,n,τ ≥T task
+j,n vSU
+j,n,t,
+(16)
+∀j ∈J NTS ∪J TS, ∀n ∈N, ∀t = 1, . . . , T −T task
+j,n
++ 1,
+X
+n∈N
+X
+t∈T
+vSU
+j,n,t = xDone
+j
+, ∀j ∈J NTS ∪J TS,
+(17)
+X
+n∈N
+T TS
+jX
+t=1
+utask
+j,n,t =
+X
+n∈N
+T task
+j,n xtask
+j,n , ∀j ∈J TS,
+(18)
+utask
+j,Nw
+j ,0 = 1, ∀j ∈J w,
+(19)
+utask
+j,n,0 = 0, ∀j ∈J w,
+(20)
+∀n ∈N, n̸ = Nw
+j .
+utask
+j,n,0 = 0, ∀j ∈J NTS ∪J TS, ∀n ∈N,
+(21)
+X
+t∈T
+utask
+j,Nw
+j ,t = T rem
+j
+xDone
+j
+, ∀j ∈J w.
+(22)
+Binary variable utask
+j,n,t indicates that task j runs on node n at
+time t, while vSU
+j,n,t and vSD
+j,n,t indicate startup and shutdown.
+Parameters T task
+j,n , T TS
+j
+, N w
+j , and T rem
+j
+are processing duration
+in integer slots, deadline slot, initial node, and remaining
+duration of an already-running task. Constraints (12)–(22)
+enforce assignment consistency, startup/shutdown logic, non-
+preemptive execution, deadlines, and initial/remaining-work
+conditions.
+3) Node Capacity and Node Power Coupling:
+X
+j∈J
+rj,nutask
+j,n,t ≤Rn, ∀n ∈N, ∀t ∈T ,
+(23)
+X
+j∈J
+utask
+j,n,t ≤1, ∀n ∈N, ∀t ∈T ,
+(24)
+eCDC
+i,t
+=
+X
+n∈Ni
+eNode
+n,t
+, ∀i ∈I, ∀t ∈T ,
+(25)
+eNode
+n,t
+=
+
+P idle
+n
+zn,t +
+X
+j∈J
+P task
+j,n utask
+j,n,t
+
+∆t,
+(26)
+∀n ∈N, ∀t ∈T ,
+utask
+j,n,t ≤zn,t, ∀j ∈J , ∀n ∈N, ∀t ∈T .
+(27)
+Here, rj,n is the resource demand, eCDC
+i,t
+and eNode
+n,t
+are
+CDC- and node-level computing energy, and zn,t is the
+node ON/OFF state. Parameters Rn, P idle
+n
+, and P task
+j,n
+are
+node capacity, idle power, and task-induced power; Ni is the
+node set in CDC i. Constraints (23)–(27) enforce capacity,
+no-overlap, energy aggregation, node-energy accounting, and
+ON/OFF coupling.
+TABLE II
+IMPLEMENTED COMPUTING-NODE INVENTORY
+Node Type
+Number of Nodes
+DGX1
+4
+DGXA100
+4
+DGXA100s
+2
+DGXA200
+2
+DGXH100
+3
+4) Transferred Tasks and Communication Constraints:
+xTF
+j
+= xDone
+j
+−
+X
+{n∈N |IN(n)=IJ(j)}
+xtask
+j,n , ∀j ∈J ,
+(28)
+DjxTF
+j
+=
+X
+t∈T
+ybw,out
+j,t
+, ∀j ∈J NTS,
+(29)
+DjxTF
+j
+=
+T TS
+jX
+t=1
+ybw,out
+j,t
+, ∀j ∈J TS,
+(30)
+ybw,out
+j,t
+≤Y
+bw,out
+j
+xTF
+j
+, ∀j ∈J , ∀t ∈T ,
+(31)
+X
+{j∈J |IJ(j)=i}
+ybw,out
+j,t
+≤BW
+out
+i
+, ∀i ∈I, ∀t ∈T ,
+(32)
+ybw,out
+j,t
+=
+X
+{n∈N |IN(n)̸=IJ(j)}
+ybw,in
+j,n,t , ∀j ∈J , ∀t ∈T , (33)
+ybw,in
+j,n,t ≤Y
+bw,in
+j,n
+xtask
+j,n , ∀j ∈J , ∀n ∈N, ∀t ∈T ,
+(34)
+X
+{j∈J , n∈Ni}
+ybw,in
+j,n,t ≤BW
+in
+i , ∀i ∈I, ∀t ∈T ,
+(35)
+t
+X
+τ=1
+ybw,in
+j,n,τ ≥DjvSU
+j,n,t+1,
+(36)
+∀j ∈J , ∀t = 1, . . . , T −1,
+∀n ∈N : IN(n)̸ = IJ(j).
+vSU
+j,n,1 = 0, ∀j ∈J , ∀n ∈N : ℓn̸ = hj.
+(37)
+Equation (28) defines remote execution. Because the supplied
+data do not identify a physical byte scale, we use normalized
+data units (NDU): Dj is in NDU, while ybw,out
+j,t
+and ybw,in
+j,n,t
+are outbound and inbound transfer volumes in NDU/slot.
+Parameters Y
+bw,out
+j
+, Y
+bw,in
+j,n
+, BW
+out
+i
+, and BW
+in
+i
+are likewise
+in NDU/slot. Constraints (29)–(37) enforce full transmission,
+bandwidth caps, flow balance, and data arrival before remote
+startup. The case study assumes no pre-positioned remote task
+data, so a remote task cannot start in slot 1.
+C. Facility Energy and Zone-Temperature Constraints
+We adapt the data-center energy model in [10]. For each
+one-hour slot, the site energy balance is
+eGrid
+i,t
++ eS
+i,t + pdis
+i,t ∆t = eHVAC
+i,t
++ eCDC
+i,t
++ pch
+i,t∆t.
+(38)
+Here, pch
+i,t and pdis
+i,t are battery charging and discharging power.
+The storage-state equation includes charging and discharging
+efficiencies, and renewable energy in excess of modeled de-
+mand may be curtailed.
+
+
+--- Page 4 ---
+The MIP uses an affine discrete-time zone model,
+T Zone
+i,z,t = T Zone
+i,z,t−1 +
+X
+z′∈adj(i,z)
+ai,z′,z
+ T Zone
+i,z′,t−1 −T Zone
+i,z,t−1
+
++ bi,zθi,z,t −qAC
+i,z,t,
+θi,z,t =
+X
+n∈Ni,z
+eNode
+n,t
+,
+∀i, z, t.
+(39)
+Coefficients ai,z′,z and bi,z absorb the one-hour discretiza-
+tion and zone thermal parameters; qAC
+i,z,t is the modeled
+temperature-reduction term linked to HVAC energy and
+bounded supply conditions. This form assigns each node’s heat
+contribution only to its own zone and keeps the printed model
+affine. The case study enforces the reported zone-temperature
+bounds. The supplied result package does not document a
+cyclic terminal battery condition, so the grid-purchase results
+below are interpreted only for this 24-h instance.
+III. NUMERICAL VALIDATION
+We solve the deterministic case study with the commercial
+solver Gurobi on a workstation.
+A. Experimental Setup
+The deterministic case includes 3 CDCs, 15 heterogeneous
+GPU nodes, 103 LLM training tasks, and a 24-h horizon with
+one-hour time slots. Each CDC has 4 thermal zones, and the
+workload contains 72 NTS tasks, 30 TS tasks, and 1 already-
+running task. Node types are listed in Table II. Idle power is
+set to 20% of rated node power. Power is represented in kW;
+under the one-hour case assumption, slot energy is in kWh
+and cumulative energy is reported in MWh. The formulation
+represents independently executable, single-node training jobs;
+it does not model synchronized distributed training, checkpoint
+failures, or communication collectives during execution. The
+supplied package does not document measurement provenance
+for every task and facility parameter, so the study is treated
+as a parameterized case rather than a production trace.
+We conduct three experiments using identical tasks, nodes,
+CDC assignments, rewards, hold/abort penalties, transfer costs,
+and energy parameters. The Proposed model retains cross-
+CDC transfer and task-reordering flexibility. The No Transfer
+(No TF) variant prohibits cross-CDC transfer while preserving
+reordering. The No Transfer with FIFO-prefix order (No
+TF+FIFO) variant additionally prevents a later task from
+being selected when an earlier task in the same fixed order is
+skipped. This restriction is stronger than a general operational
+FIFO policy. Proposed versus No TF isolates cross-CDC
+transfer within this model, whereas No TF versus No TF+FIFO
+isolates relaxation of the implemented FIFO-prefix restriction.
+Monetary quantities are reported in NMU, energy prices in
+NMU/kWh, and transfer quantities in NDU or NDU/slot as
+applicable. These same-instance comparisons are descriptive,
+not statistical.
+The Proposed case was solved with Gurobi 11.0.3 on an
+AMD Ryzen 9 3900X using 24 threads. Before presolve,
+the model contained 259,433 constraints, 231,097 variables,
+TABLE III
+CORE FIXED-INSTANCE COMPARISON. PROFIT IS IN NORMALIZED
+MONETARY UNITS (NMU), AND TF DENOTES TRANSFERRED TASKS.
+Model
+Profit
+Done
+Rate
+TF
+Abort
+Hold
+Proposed
+26,025.11
+103
+100.0%
+39
+0
+0
+No TF
+16,483.81
+76
+73.8%
+0
+6
+21
+No TF+FIFO
+−8,629.92
+14
+13.6%
+0
+30
+59
+TABLE IV
+SCHEDULING BEHAVIOR AND SERVICE CAPABILITY. J/S DENOTES
+CONCURRENT JOBS/ACTIVE SERVERS.
+Model
+Transfer
+Mean
+Peak
+Mean
+CDC Done
+Data
+Jobs
+J/S
+Finish
+0/1/2
+Proposed
+320.62
+10.54
+11/11
+13.32
+45/23/35
+No TF
+0.00
+6.92
+8/10
+12.51
+51/13/12
+No TF+FIFO
+0.00
+1.00
+1/1
+12.50
+11/2/1
+and 1,122,754 nonzero coefficients. After 14,264.21 s, Gurobi
+returned an incumbent of 26,025.1126 NMU, a best bound
+of 26,027.0789 NMU, and a 0.0076% relative gap under
+the configured 10−4 tolerance. Equivalent terminal logs were
+not available in the supplied package for the two restricted
+variants; their results are therefore reported without a solver-
+quality equivalence claim.
+B. Comparative Results
+1) Flexibility, Profit, and Completion: In this fixed instance,
+Table III shows monotonic improvement as the two mod-
+eled flexibilities are restored. Enabling cross-CDC transfer
+increases profit from 16,483.81 to 26,025.11 NMU, a gain of
+9,541.30 NMU or 57.9% relative to No TF, while completing
+27 additional tasks. Relaxing the FIFO-prefix restriction has a
+larger descriptive difference: No TF+FIFO completes 14 tasks
+and yields negative profit because 30 TS tasks are aborted
+and 59 NTS tasks are held, whereas No TF completes 76
+tasks. The proposed model completes all 103 tasks without
+aborting or holding any task. These comparisons quantify the
+two flexibility effects for the stated formulation and instance;
+they do not establish their distribution across other workloads.
+2) Scheduling Behavior and Service Capability: Table IV
+reports the associated scheduling behavior. The proposed
+model sustains 10.54 concurrent tasks on average, compared
+with 6.92 for No TF and 1.00 for No TF+FIFO. Its peak
+task/computing-node concurrency reaches 11/11, and com-
+pleted tasks are distributed as 45/23/35 across the three CDCs.
+The optimized transfer of 320.62 normalized data units ac-
+companies the increase in completed-task throughput rather
+than merely changing execution locations. Although the mean
+completion slots are similar across the variants, the proposed
+model completes substantially more tasks within the same 24-
+slot horizon.
+3) Grid Energy, Server Activity, and Battery Operation:
+Table V reports grid purchases, battery operation, and node
+activity while excluding electricity-purchase cost. Despite
+completing 27 more tasks, the proposed solution purchases
+2.145 MWh from the grid, approximately 3.736 MWh (63.5%)
+less than No TF based on the unrounded values. This is
+
+
+--- Page 5 ---
+Fig. 2. LLM task schedule across heterogeneous nodes.
+TABLE V
+ENERGY COMPARISON. GRID, CHARGE, AND DISCHARGE ARE IN MWH;
+PEAK IS IN KW. U/O DENOTES NODE-UTILIZATION/SERVER-ON
+PERCENTAGES.
+Model
+Grid
+Peak
+Charge
+Disch.
+U/O
+(MWh)
+(kW)
+(MWh)
+(MWh)
+(%)
+Proposed
+2.145
+137.23
+0.579
+1.231
+70.3/70.3
+No TF
+5.882
+357.46
+0.814
+1.479
+46.1/52.2
+No TF+FIFO
+0.000
+0.00
+0.367
+1.006
+6.7/6.7
+a grid-purchase comparison, not a general energy-efficiency
+result: the variants complete different numbers of tasks and
+use storage differently.
+Figure 3 compares stored-energy trajectories across the three
+CDCs. The proposed trajectory declines from 158.5 kWh at
+the first recorded slot to 37.5 kWh at the last recorded slot in
+each CDC. Because the supplied package does not document
+a cyclic terminal-storage requirement, part of the 24-h grid-
+purchase outcome depends on using initially available stored
+energy. No TF relies more heavily on CDC 0, whereas No
+TF+FIFO combines low grid purchase with low activity. Its
+zero grid purchase does not imply greater energy efficiency
+because it completes only 14 tasks and activates computing
+nodes in 6.7% of node-time slots.
+4) Detailed Scheduling and Node Selection:
+Figure 2
+presents the proposed task schedule, where jp, tjp, and wj
+denote NTS, TS, and already-running tasks. The implemented
+inventory contains the five node types in Table II. DGXH100,
+DGXA200, and DGXA100 nodes carry most of the displayed
+schedule, whereas the DGX1 nodes remain off. Because
+many high-reward tasks originate in CDC 0, the optimized
+solution assigns selected tasks to remote nodes when the
+resulting transfer, execution, and site-operation decisions im-
+prove the modeled objective. The schedule therefore reflects
+the joint formulation; it does not by itself establish a general
+performance-per-watt ranking among node types.
+5) Cross-CDC Transfer Scheduling: Figure 4 visualizes
+the traffic exchanged among the three CDCs and its tempo-
+ral evolution. The optimized schedule has a total outbound
+transfer volume of 320.62 normalized data units and remotely
+executes 39 tasks. The transfer pattern is asymmetric: 14 tasks
+move from CDC 0 to CDC 1, 19 from CDC 0 to CDC 2, 5
+from CDC 1 to CDC 2, and 1 from CDC 2 to CDC 1. The
+solution allocates communication capacity selectively when
+remote placement improves the modeled objective. It also
+schedules data movement near the corresponding execution
+windows while satisfying the modeled inbound and outbound
+bandwidth limits. These observations describe how transfer
+flexibility is used in this instance without implying that the
+same pattern holds for other workloads.
+6) Thermal and Air-Conditioning Management: The opti-
+mized zone and air-conditioning trajectories remain within the
+reported modeled limits throughout the 24-h horizon. Zone
+temperatures lie between 24◦C and 27◦C, and the final average
+zone temperature of each CDC is 24◦C. AC supply tempera-
+tures lie between 24◦C and 25.81◦C. These extrema establish
+feasibility with respect to the modeled temperature constraints;
+they do not establish robustness to thermal-parameter error or
+production safety margins. The result nevertheless illustrates
+why node placement and facility operation are evaluated
+together: a compute assignment changes the heat input as-
+signed to its zone and the corresponding modeled cooling
+requirement.
+7) Summary of Findings: The comparison identifies com-
+plementary effects from the two modeled flexibilities. Re-
+
+
+--- Page 6 ---
+Fig. 3. Battery-state trajectories in kWh across the three CDCs for the proposed and baseline scheduling variants.
+Fig. 4. Cross-CDC inbound and outbound transfer decisions.
+laxing the FIFO-prefix constraint avoids the severe head-
+of-line blocking observed in that restricted variant, while
+enabling cross-CDC transfer adds 9,541.30 NMU of profit
+relative to No TF and expands the feasible placement choices.
+The proposed case has the highest completion, concurrency,
+utilization, and profit among the three reported solutions while
+satisfying the modeled bandwidth and temperature constraints.
+For this instance, the results support the potential value of
+evaluating computing, communication, and facility decisions
+jointly. Broader conclusions require additional workload in-
+stances, sensitivity studies, practical scheduling baselines, and
+consistent solver-quality records for all variants.
+IV. CONCLUSION
+This paper used a coupled multi-CDC optimization model to
+separate the fixed-instance effects of cross-CDC task transfer
+and task-reordering flexibility. Relative to No TF, the proposed
+model increases profit by 57.9% and completes 103 rather
+than 76 tasks. The more restrictive No TF+FIFO variant
+completes 14 tasks and yields negative profit, exposing the
+effect of head-of-line blocking under the implemented FIFO-
+prefix constraint. The proposed schedule transfers 39 tasks and
+satisfies the modeled bandwidth and zone-temperature limits.
+These results illustrate the potential value of coordinating com-
+puting, communication, and facility operation in the studied
+instance. Establishing general performance requires repeated
+workload instances, transfer- and energy-parameter sensitiv-
+ities, additional scheduling baselines, documented terminal-
+storage assumptions, and consistent solver-quality statistics for
+all variants.
+ACKNOWLEDGMENT
+This work was supported by the U.S. National Science
+Foundation under Award No. 2541996.
+REFERENCES
+[1] K. Qian, Y. Xi et al., “Alibaba HPN: A data center network for large
+language model training,” in Proceedings of the ACM SIGCOMM 2024
+Conference, 8 2024, pp. 691–706.
+[2] K. Gunnam, A. Mohandas et al., “LLM training workload IO character-
+istics,” in 2025 IEEE International Symposium on Circuits and Systems
+(ISCAS).
+IEEE, Jun. 2025, pp. 1–6.
+[3] Z. Zhang, Y. Zeng et al., “Smart DC: an AI and digital twin-based
+energy-saving solution for data centers,” in NOMS 2022-2022 IEEE/IFIP
+Network Operations and Management Symposium.
+IEEE, 6 2022, pp.
+1–6.
+[4] J. Lou, Z. Tang, and W. Jia, “Energy-efficient joint task assignment
+and migration in data centers: A deep reinforcement learning approach,”
+IEEE Transactions on Network and Service Management, vol. 20, no. 2,
+pp. 961–973, 9 2022.
+[5] X. Tang, F. Liu et al., “LLM-assisted reinforcement learning: leveraging
+lightweight large language model capabilities for efficient task schedul-
+ing in multi-cloud environment,” IEEE Transactions on Consumer
+Electronics, vol. 71, no. 2, pp. 5631–5644, 2025.
+[6] K. Srikandabala, K. Prabagar et al., “Optimization and management of
+data center networks: A scoping review on key themes, challenges, and
+artificial intelligence and machine learning approaches,” IEEE Access,
+Jul. 2025.
+[7] Z. Ding, J. Lang et al., “Energy-aware scheduling of jobs and data in
+geo-distributed data centers,” IEEE Transactions on Industry Applica-
+tions, Mar. 2026.
+[8] S. Jaiswal, K. Jain et al., “Serving models fast and slow: optimizing
+heterogeneous LLM inferencing workloads at scale,” Small, vol. 13, no.
+15k, p. 17k, Feb. 2025.
+[9] J. Han, E. Du et al., “Carbon-aware spatial-temporal scheduling for
+multiple AI data center parks with training and inference workloads
+characteristics,” IEEE Transactions on Industry Applications, Mar. 2026.
+[10] Z. Zhao, L. Fan, and Z. Han, “Optimal data center energy manage-
+ment with hybrid quantum-classical multi-cuts benders’ decomposition
+method,” IEEE Transactions on Sustainable Energy, vol. 15, no. 2, pp.
+847–858, 8 2023.

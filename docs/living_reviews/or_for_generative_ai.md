@@ -1,10 +1,133 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-09-10
+**Last Updated:** 2026-11-24
 
 ---
 
 ## Recent Papers
+
+#### 2026-11-24 — backfill of papers missed 2026-09-09 to 2026-11-13 (15 papers)
+
+### [Coordinating Distributed AI Servers with Industrial Loads to Reduce Grid-Interconnection Needs](https://arxiv.org/abs/2611.18951)
+
+**2026-11-13** | Columbia University | M=6 P=7 I=5 
+
+*Method:* Mixed-integer linear program (Gurobi) jointly sizing CPU/GPU server groups, scheduling firm/flexible deadline-constrained AI tasks, and routing tasks across factory nodes to minimize annualized server, interconnection, and energy cost | *LLM role:* none
+
+> Lyu and Xu formulate a joint MILP for sizing CPU/GPU server groups, scheduling deadline-constrained firm/flexible AI tasks, and routing tasks across factories to minimize annualized server, interconnection, and energy costs. Using 2030 demand projections and measured hourly production loads for 31 Chinese manufacturing industries, they report that factory-site deployment reduces additional grid-interconnection capacity by 60–63% versus new data centers, and by 98% with cross-site routing, from 1,488 MW to 30 MW nationally. Results are backed by public code and real load data, though the analysis is deterministic and routing benefits are an unconstrained upper bound. The key transferable insight is that co-locating AI workloads with existing heterogeneous loads and exploiting non-coincident peak capacity can substantially reduce infrastructure requirements. This is relevant to OR for AI infrastructure, but its contribution is an application-specific MILP case study rather than a methodological advance for LLM serving or GPU scheduling.
+
+### [Reducing Batch Makespan for LLM Agent Workloads through Inference-Environment Coordination](https://arxiv.org/abs/2611.16661)
+
+**2026-11-12** | Ant Group | M=6 P=7 I=5 *discuss*
+
+*Method:* Coordinated serving-system optimizations: workload-aware hybrid-cache allocation model, load-bounded consistent hashing (LBCH) routing, routing-prefix (RP) scheduling, capacity separation, and Chain-Advancing Action Scheduling (CAAS) | *LLM role:* none
+
+> Feng et al. propose coordinated inference-environment optimizations for batch execution of multi-turn LLM agent tasks, including a workload-aware hybrid-cache allocation model, trajectory-label-based routing/scheduling, and capacity separation with Chain-Advancing Action Scheduling. Live experiments with Ling-3.0/3.1-Flash on BFCL, SWE-bench Multilingual, WideSearch, and MCP-Atlas report 10.4–65.0% makespan reductions with aligned scores, and controlled replay isolates individual optimizations. The key insight is that separating sample admission from environment execution and scheduling pending environment jobs by observed chain progress can substantially improve GPU utilization and shorten batch tails under constrained tool capacity. The workload-aware cache model also provides a simple way to choose cache ratio and concurrency for hybrid LLMs. This is useful for LLM serving scheduling but is not central to LLM evolutionary search methods.
+
+### [Spot Markets for AI Inference: Dynamic Capacity Allocation and Pricing on a Shared Accelerator Fleet](https://arxiv.org/abs/2611.11215)
+
+**2026-11-08** | New York University | M=7 P=8 I=7 *discuss*
+
+*Method:* Model predictive control solving a per-period linear program (piecewise-linear revenue segments, tangent cuts on expected normal overflow, cumulative deadline constraints) with receding horizon | *LLM role:* none
+
+> The paper formulates dynamic spot pricing and placement for a shared LLM inference fleet as a model-predictive-control problem solved by a small LP, deriving a batching-induced latency exchange rate, optimal slack pricing, backfill reliability, and placement hysteresis. Numerical results are backed by paired simulations with 20 random draws and standard errors, showing a 7.4% profit gain over fixed half-price practice and capturing 93% of the perfect-forecast gain on a stylized 512-accelerator week. The key insight is that continuous batching turns interactive-vs-spot capacity into a linear displacement constraint, with one interactive token per second displacing rho_m > 1 spot tokens per second, making pricing and placement tractable through shadow prices. This is relevant to LLM serving scheduling and resource allocation because it provides a principled cost/price model for latency tiers, deadlines, and power caps, though it does not address LLM evolutionary search or multi-agent coordination.
+
+### [Asymptotic Optimality of $cμ$-Rule for LLM Inference Scheduling under Memory Constraint](https://arxiv.org/abs/2611.04807)
+
+**2026-11-03** | HKUST, University of Southern California | M=7 P=7 I=6 *discuss*
+
+*Method:* Fluid-limit queueing analysis yielding a cμ priority rule with effective service rate μ_j = [a_pf s_j + (a_kv + b/M) m̃_j]^{-1}; smoothed cμ-inspired implementable policy with moving-average admission window | *LLM role:* none
+
+> Li et al. develop a fluid-limit queueing model for LLM inference scheduling under KV-cache memory constraints and prove that a cμ priority rule with effective service rates minimizes holding cost and completion time; they also introduce a smoothed cμ-inspired policy for finite systems. On an NVIDIA H800 with production traces, cμ-backfill reduces average latency from 35.5s to 9.5s on To-B and from 30.2s to 10.4s on semi-synthetic workloads compared with vLLM, while remaining competitive with or better than SVF/MC-SF/WAIT. The key transferable idea is to compute effective service rates from prefill compute, KV-cache I/O, and memory capacity, then use cμ ordering plus future-KV feasibility checks for admission and backfilling. This is a relevant, theory-backed scheduling method for LLM serving under memory constraints; it does not change LLM evolutionary search approaches.
+
+### [Layer-wise CPU-GPU Scheduling for LLM Inference on Memory-Limited Consumer GPUs](https://arxiv.org/abs/2611.01393)
+
+**2026-11-01** | Keio University, SoftBank Corp. | M=6 P=7 I=6 
+
+*Method:* Latency model L=max(C(m),W(m)) with relaxed transfer constraints; continued-fraction search to find integer ratio x:y of CPU vs stream layers balancing avg CPU compute time and avg transfer time; layer placement into cpu/resident/stream modes with async pinned-memory weight prefetch hidden behind CPU computation | *LLM role:* none
+
+> This paper presents a layer-wise CPU/GPU placement and scheduling method for LLM inference on memory-limited single-GPU systems. It models decode latency as max(total computation, total transfer) after relaxing transfer timing constraints and uses a continued-fraction search to choose the ratio of CPU-executed layers to GPU streamed layers. On a consumer RTX 5090, it reports 3.5x speedup over HuggingFace Accelerate and 6.3x over DeepSpeed ZeRO-Inference for OPT-30B, hiding 99.6% of transfers; however, it is 22% slower than SplitGen for Llama2-70B under host-memory pressure. The key insight is that CPU computation during batch-size-1 decode can be deliberately used as a planned window to hide weight transfers, with simple average-based ratio balancing providing strong offloading gains. This is relevant to LLM serving scheduling, but it is not a fundamental advance and lacks code release and statistical rigor.
+
+### [Queuing for Inference: Dynamic Memory Footprints and Costly Preemption](https://arxiv.org/abs/2610.33923)
+
+**2026-10-24** | Purdue University | M=6 P=7 I=6 
+
+*Method:* Queuing-theoretic analysis of a new M/G_g/1^C_β model plus Multi-Level-Priority-Threshold (MLPT)-(θ,k) scheduling policy with derived mean response time and empirical rule-of-thumb for quantum θ | *LLM role:* none
+
+> This paper introduces a queueing model for LLM inference serving that couples attained-service-dependent KV-cache growth, finite memory capacity with service slowdown, and memory-proportional preemption overhead. It shows that classical Gittins scheduling can become unstable under costly preemption and proposes MLPT, a multi-level age-threshold policy with derived mean response time and an empirical rule for threshold selection. Simulations over 100,000 jobs show 15–50% mean response time reductions over FCFS and stable behavior where capped Gittins degrades. The key insight is that optimal scheduling balances short-job priority against memory-dependent preemption overhead, with the memory slowdown threshold serving as a natural preemption point in limited-memory regimes. This is relevant for LLM serving scheduling theory but remains an analytical/simulation study without real-system validation.
+
+### [Efficient KV Cache Migration for Geo-Distributed LLM Inference in Collaborative Edge Computing](https://arxiv.org/abs/2610.22172)
+
+**2026-10-15** | The Hong Kong Polytechnic University, National University of Defense Technology, Wuhan University | M=6 P=7 I=6 
+
+*Method:* Hybrid KV cache migration combining direct KV transmission with activation-based recomputation; LP-relaxation extreme-point solution plus bipartite perfect matching, with binary search over T (2-approximation) | *LLM role:* none
+
+> Zhang et al. propose EdgeFlow, a hybrid KV cache migration scheme for geo-distributed collaborative edge LLM inference that combines direct KV cache transmission with activation-based recomputation, overlapped in a pipeline. They formulate a multi-node migration problem and give a 2-approximation algorithm based on LP relaxation and bipartite perfect matching. Experiments on a real 100+ GPU testbed with Qwen2.5-32B and Llama3.1-70B report up to 45.8% migration time reduction over direct transmission, though statistical rigor is limited. The key transferable idea is treating KV cache migration as a scheduling problem where choosing between data movement and recomputation adapts to heterogeneous bandwidth and compute, a perspective useful for LLM serving scheduling. This matters for OR/optimization methods applied to LLM inference infrastructure, but it is not a breakthrough for the team's primary evolutionary search agenda.
+
+### [Vesta: Queueing-Aware LLM Scheduling for Real-World Workloads](https://arxiv.org/abs/2610.14686)
+
+**2026-10-10** | Tencent, The Chinese University of Hong Kong | M=8 P=8 I=7 *discuss*
+
+*Method:* Holder-executor disaggregation with hash-based session holder assignment and per-request executor selection minimizing congestion-priced completion time (backlog + prefill/transfer service cost + pi(rho)*(S_i - S_min)) | *LLM role:* none
+
+> Zou et al. present Vesta, a queueing-aware scheduler for distributed agentic LLM serving that separates stable hashed KV-cache holders from per-request executors and prices the queueing externality of each placement via an M/M/c-derived congestion function. On production agentic traces, Vesta improves throughput by 14.0% and reduces mean TTFT by 57.8% over SMetric in PD-colocated deployments, and reduces mean/P99 TTFT by up to 18.1%/29.0% in disaggregated settings; these gains are backed by real trace replays on 32-instance clusters. The key transferable idea is to charge only the incremental service demand beyond the cheapest candidate using a utilization- and Erlang-waiting-probability-based price, which automatically favors migration under slack and locality under congestion. This is directly useful for OR-based LLM serving scheduling and should be considered when formulating cluster-scheduling objectives, though the paper lacks released code and repeated-run variance.
+
+### [Dissecting the Carbon-SLO Tension in Geo-Distributed LLM Serving](https://arxiv.org/abs/2610.14571)
+
+**2026-10-10** | Pennsylvania State University | M=6 P=7 I=6 
+
+*Method:* Latency-centric geo-distributed LLM serving simulator with hardware-calibrated analytical prefill/decode latency and power models, plus four schedulers: carbon-weighted greedy, batch ILP (HiGHS), iterative load-coupled ILP, and facility-location MILP | *LLM role:* none
+
+> Topcu et al. build a hardware-calibrated geo-distributed LLM serving simulator that models continuous batching, queueing, and per-phase power, and evaluate four carbon-aware schedulers including a facility MILP that prices batched energy collectively. Results report 26–60% carbon savings over round-robin with about 3% average SLO violations, with savings growing with carbon-intensity spread and shrinking under high load; the numbers are backed by calibrated latency/power models and end-to-end validation. The key useful idea is to use engine-level active batch load and queue depth to estimate TTFT/TPOT at scheduling time, and to charge per-datacenter fixed energy as a facility cost in a MILP, which gives a strong carbon–SLO balance. This is relevant for LLM serving scheduling and batch resource allocation, though it is not a fundamental advance for LLM evolutionary search or multi-agent optimization.
+
+### [TokenRouter: Efficient Serving System for Token-Level LLM Routing](https://arxiv.org/abs/2610.12242)
+
+**2026-10-08** | Tsinghua University, Carnegie Mellon University | M=6 P=7 I=6 *discuss*
+
+*Method:* Model-centric subserver runtime with decoupled tri-loop execution, handoff-resume pending state, and delayed-batching scheduler with DTMC-derived optimal threshold | *LLM role:* none
+
+> TokenRouter presents a serving system for token-level LLM routing, using request-centric programming and model-centric subservers with asynchronous tri-loop execution, a handoff-resume KV-cache mechanism, and a delayed-batching scheduler whose threshold is derived from a DTMC throughput model. The paper reports 2.01–64.15× throughput gains over official and SGLang-based baselines across five routing algorithms and multiple workloads, with ablation breakdowns showing delayed batching contributes materially. The key insight is that controlled batching delay, optimized via a formal Markov-chain throughput model, can substantially reduce batch admission delay for irregular multi-model token arrivals; the handoff-resume pending state also avoids costly prefix rematching. This is relevant for LLM serving scheduling, providing a concrete queueing/scheduling design that could inform batch scheduling for multi-model inference, though it is outside LLM evolutionary search.
+
+### [JOVE: Joint Execution and Verification for Resource-Aware LLM Task Graphs](https://arxiv.org/abs/2610.03296)
+
+**2026-10-02** | University of Texas at Austin, DEVCOM Army Research Laboratory | M=7 P=7 I=7 *discuss*
+
+*Method:* Per-query MILP for joint executor-LLM assignment and selective verification, with LinUCB ridge-regression quality estimates, D-optimal information-gain bonus, and dual dynamic pricing for long-term budget | *LLM role:* decomposition_guide
+
+> Zhang et al. propose an online MILP framework that jointly assigns executor LLMs to task-graph nodes and chooses which node outputs to pay to verify, under a long-term average API-cost budget and per-query latency chance constraints. On four reasoning benchmarks, JOVE reports accuracy comparable to unconstrained baselines while using 3.7–16.3x lower cost and 8.3–17.0x lower latency, though results are mean ± std over only three random orderings with no significance tests. The key transferable idea is the D-optimal information-gain bonus that makes verification a decision variable: a node is verified when the expected reduction in parameter uncertainty exceeds its priced verification cost, enabling selective paid feedback to improve future allocations. This matters for resource-constrained LLM serving, task-graph orchestration, and active selection of process reward labels in multi-agent optimization.
+
+### [Predictive Rolling-Horizon Optimization for Commitment-Aware Model-Parallel Inference under Spatio-Temporal Edge Dynamics](https://arxiv.org/abs/2609.31018)
+
+**2026-09-25** | Tongji University, Xiamen University, Western University | M=6 P=6 I=6 
+
+*Method:* Prediction-guided rolling-horizon (receding-horizon) optimization: adaptive multi-timeslot demand estimation (Module A) + certainty-equivalent ES-state rollout with uniform future loading, progress-aware workload surrogate scoring of all feasible current-stage SD-ES mappings, and analytical CCT recovery | *LLM role:* none
+
+> Liwang et al. propose PROMISE, a predictive rolling-horizon framework that jointly schedules model-parallel DNN inference tasks and sets committed completion times under stochastic arrivals and load-dependent edge capacity. Simulations over 400 timeslots and a Raspberry Pi cluster show improved task completion and reward relative to several baselines, though quantitative gaps are only shown in figures without variance or significance tests. The key transferable idea is treating service commitments as endogenous decisions and recovering CCTs analytically from rollout-predicted completion times, with a progress-aware surrogate for evaluating current mappings. This is relevant to inference scheduling and SLO-based resource allocation, but the exhaustive enumeration of mappings limits scalability and it is not directly competitive with our primary LLM evolutionary search directions.
+
+### [An Approximate Queueing Model of LLM Inference Serving for SLO-Driven Autoscaling](https://arxiv.org/abs/2609.20957)
+
+**2026-09-17** | IBM T. J. Watson Research Center | M=7 P=8 I=6 
+
+*Method:* Three-parameter (alpha, beta, gamma) mean-value per-iteration work model combined with a state-dependent birth-death Markov chain over batch occupancy; Nelder-Mead joint fit of parameters from observed TTFT/ITL, with online sliding-window re-estimation; model-based analyzer selects minimum replica count satisfying TTFT/ITL SLOs | *LLM role:* none
+
+> Ramani and Tantawi develop a three-parameter queueing model (baseline per-iteration overhead, per-token compute, and KV-cache access cost) combined with a state-dependent birth-death Markov chain to predict TTFT and ITL for continuous-batching LLM inference. Offline validation on H100 GPUs serving Llama-3.1-8B and Qwen2.5-14B reports average ITL relative errors around 5-8% and TTFT errors 14-16%. An SLO-driven autoscaler using online sliding-window parameter fitting records 7/127 SLO violation cycles versus 27/128 for a decode-throughput baseline, at higher replica counts. The key transferable idea is that a compact analytical model with continuously re-estimated parameters can serve as a control primitive for replica autoscaling, avoiding reliance on indirect utilization thresholds. This is relevant for LLM serving optimization and resource allocation, though its homogeneous mean-length and Poisson arrival assumptions limit accuracy near saturation and under bursty traffic.
+
+### [End-to-End Latency-Minimizing and Load-Balanced Request Scheduling for Edge LLM Inference in Agentic AI Services](https://arxiv.org/abs/2609.17193)
+
+**2026-09-15** | Concordia University, Hang Seng University of Hong Kong | M=6 P=8 I=6 *discuss*
+
+*Method:* Lyapunov drift-plus-penalty reformulation + PPO actor-critic with LSTM-based reward redistribution (sequence truncation + value bootstrapping) over a sequence-MDP | *LLM role:* none
+
+> Li et al. formulate online edge LLM request scheduling as a sequence-MDP and propose LYREO, combining Lyapunov virtual queues, LSTM-based reward redistribution, and PPO to minimize latency while balancing KV-cache load. Simulation results with Llama-3.2-1B on heterogeneous GPU profiles report substantially lower latency and load deviation than Ly-PPO, PPO, and heuristics, though no code or significance tests are provided. The key transferable idea is the normalized KV cache memory-time consumption metric, which jointly captures memory intensity and active duration and could be reused in optimization formulations for LLM serving load balancing. The paper matters for LLM serving scheduling because it explicitly addresses delayed feedback and stateful resource occupation, but assumptions such as known output lengths and simulated wireless channels limit generality.
+
+### [Spatial LLM Workload Shifting Needs Foresight: Model Commitment for AI Data Center Operation under Power Grid Constraints](https://arxiv.org/abs/2609.09787)
+
+**2026-09-09** | Tsinghua University, Zhejiang University, China Datang Technology Innovation Co., Ltd. | M=6 P=7 I=5 *discuss*
+
+*Method:* Mixed-integer linear programming (MILP) jointly scheduling model replica loading/unloading (unit-commitment-style) and cross-site request routing with M/G/1-derived TTFT and TPOT SLO capacity constraints | *LLM role:* none
+
+> Du et al. propose a MILP framework that jointly schedules model replica loading/unloading and cross-site request routing under power constraints, treating replica loading as a unit-commitment-style intertemporal process and deriving per-replica serving capacity from prefill/decode SLO queueing approximations. On a three-datacenter case with real workload traces and electricity prices, MC achieves 100% service and 29% cost reduction, while ablations show that neglecting loading lead times or SLO constraints sharply degrades service. The key insight is that model loading lead times and latency SLO capacity bounds must be explicitly represented for feasible LLM serving scheduling. This matters for AI data center resource allocation because it provides a compact MILP template that can extend OR-based LLM serving models with power and latency constraints.
+
 
 #### 2026-09-10 (2 papers)
 

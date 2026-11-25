@@ -1,0 +1,2604 @@
+--- Page 1 ---
+OR for AI That Does OR: Routing LLMs up the
+Escalator inside the OSCAR Framework
+Jinzhi Bu, Haixin Tang
+Department of Logistics and Maritime Studies, The Hong Kong Polytechnic University, Hong Kong
+jinzhi.bu@polyu.edu.hk, haixin.tang@connect.polyu.hk
+Huanan Zhang
+Leeds School of Business, University of Colorado Boulder, Boulder, CO, 80309, USA
+Huanan.Zhang@colorado.edu
+Abstract. Problem definition: Large language models can translate business descriptions into optimization models, but executable
+code may misrepresent constraints or objectives. A solver can then return an optimal solution to the wrong problem. Even when the
+solution satisfies the intended operating rules, a better plan may exist. For organizations that repeatedly use optimization modeling,
+an LLM-based framework should produce accurate formulations at low cost and, ideally, run locally. We study how to verify
+improvements and allocate attempts across LLMs that differ in price and capability.
+Methodology/results: We develop OSCAR (Optimization modeling by Simulator, Coder, And Reviewer), which uses an offline
+Simulator certified against labeled decision examples to compare candidates and continues searching beyond feasibility. We model
+the search for the next certified improvement as sequential decisions under unobserved difficulty: which LLMs to call and when to
+stop. In a simplified known-prior setting, we give conditions under which cost-ordered escalation is optimal. For general menus, we
+derive a prior-free competitive guarantee. On five benchmark problems, OSCAR achieves 95% to 100% accuracy at the reported
+settings using two small open-weight LLMs, each deployable locally on a single GPU. Their single-attempt accuracies average 29%
+and 48%. In five runs per problem, Codex and Claude Code incur average token costs 3.1 and 5.8 times OSCAR’s, respectively.
+Managerial implications: Before upgrading to frontier models for optimization modeling, firms should assess what available
+models can achieve through verification and iterative improvement. OSCAR supports open-weight models locally or in the cloud,
+depending on budget and confidentiality requirements. Firms should maintain labeled decision examples of feasible and infeasible
+decisions to clarify plain-language operating rules. OSCAR follows these labels when an LLM’s interpretation conflicts with them.
+As LLM capabilities and prices change, OSCAR’s simple operating rules and adjustable settings help firms adapt their model
+choices and benefit from these advances.
+Key words: large language models, optimization modeling, AI agents, LLM routing, token cost, OR for AI
+1.
+Introduction
+Large language models (LLMs), on their own, are not designed to replace optimization solvers for
+exact numerical computation or large-scale search over combinatorial solution spaces. In optimiza-
+tion modeling, OR researchers use LLMs to translate business problems described in plain language
+into formal models and solver-ready code, leaving numerical computation and combinatorial search
+to solvers such as COPT or Gurobi. Changes in business rules or problem structures can create
+1
+arXiv:2610.00912v1  [cs.AI]  1 Oct 2026
+
+
+--- Page 2 ---
+a recurring need for optimization modeling. Errors in this translation can be difficult to detect. A
+model with a misread constraint or an incorrect objective may compile and solve to optimality, even
+though it represents a different problem.
+Generating more candidate formulations does not resolve this difficulty. Figure 1 illustrates three
+formulations of the same description with different feasible regions. A solution that is optimal for
+one need not be feasible or optimal for another. Their reported objective values are not directly
+comparable, and the apparently best solution may be infeasible in the real system. Improving on a
+single attempt requires a common basis for comparing the resulting solutions.
+Figure 1
+Three candidate formulations from the same problem description. Each of them (or none of them)
+may be correct.
+In the existing literature, some frameworks generate formulations without a post-execution
+validation-and-revision loop (Huang et al. 2025a, Liang et al. 2026). Others revise formulations in
+response to execution feedback, including code errors or failure to obtain a feasible solution (Xiao
+et al. 2024, AhmadiTeshnizi et al. 2024), or check them through further LLM reasoning (Fang et al.
+2026, Liu et al. 2026), solver certificates and domain checks (Ao et al. 2026), or an executable
+simulator (Song et al. 2026). OptMaster constructed by Lin et al. (2026) also uses a simulator
+during continued search over a directed acyclic graph (DAG). Yet a formulation that produces a
+feasible solution may exclude better solutions allowed by the problem description. Verification and
+validation of AI-generated models remain open research questions (Simchi-Levi et al. 2026).
+We develop OSCAR (Optimization modeling by Simulator, Coder, And Reviewer), a framework
+that compares successive candidates and continues searching after feasibility is attained. Like
+Song et al. (2026), OSCAR evaluates solutions with an executable offline Simulator. In their
+2
+
+
+--- Page 3 ---
+framework, a coding agent constructs the simulator and its tests from the problem description.
+OSCAR additionally uses labeled decision examples: operational decisions with independently
+known feasibility labels and, when available, objective values. We use these additional data to test
+and iteratively revise the Simulator until it passes certification. Only then do we begin generating
+formulations, using the certified Simulator as a common basis for comparing candidates and
+identifying improvements. Because further attempts incur token costs and models differ in price
+and capability, a routing policy chooses which models to call and decides when to stop.
+We study a single target instance and, as in much of the literature (Huang et al. 2025a,b, Jiang
+et al. 2025), assess a formulation by solution correctness: whether its solution is feasible and
+optimal for that instance in the real system. By contrast, formulation correctness requires the model
+to be correct for every instance consistent with the description. We leave this stronger requirement
+to future research (Section 6).
+1.1.
+Our Contributions
+The paper makes the following contributions.
+• The OSCAR framework for improvement beyond feasibility. We introduce OSCAR, which
+continues searching after a feasible solution is found. An offline Simulator compares candidate
+solutions so the framework can identify and retain improvements. The Coder writes and revises
+formulations, while the Reviewer draws on the problem description, Simulator feedback, and its own
+judgment to recommend changes. Once the Simulator is certified, the improvement loop requires
+no human intervention. OSCAR accommodates different tiers of LLMs, including inexpensive
+open models, models tailored to optimization, and highly capable general-purpose models. The
+framework allocates attempts according to their costs and capabilities.
+• The Escalator policy and its theoretical guarantees. We model an improvement window,
+the search for the next certified improvement, as sequential search under an unobserved difficulty,
+with given per-call success probabilities and costs. In a simplified setting with a known prior over
+difficulty, we establish conditions under which a cost-ordered escalation routing policy is optimal
+(Section 4.2). For a general menu without a prior, Algorithm 1 computes an Escalator schedule
+whose expected loss is within a constant factor of a clairvoyant’s (Section 4.3), where the factor
+depends only on success probabilities. Expected loss includes calling costs and a penalty for ending
+the window without improvement.
+• Numerical evidence. On five FrontierOR problems (Kong et al. 2026), our experiments show
+that two small and older LLMs produce correct solutions in 29% and 48% of single attempts on
+3
+
+
+--- Page 4 ---
+average. Each LLM can be deployed locally on a single GPU. Using these LLMs, OSCAR achieves
+95% to 100% accuracy at the reported settings across the five problems, close to the observed
+performance of two coding agents: Codex with GPT-6 Astra and Claude Code with Fable 5.1.
+However, the two coding agents’ average token costs per run are 3.1 and 5.8 times OSCAR’s,
+respectively. Resampling one-shot formulations through the same Simulator can match OSCAR’s
+accuracy, but costs 1.6 to 3.3 times as much on problems that a single attempt rarely solves.
+Therefore, the improvement loop is most useful on these harder problems.
+1.2.
+Managerial Insights
+• Evaluate available models before upgrading. Before upgrading to frontier models for opti-
+mization modeling, firms should assess what available models can achieve through verification and
+iterative improvement. Cost and confidentiality both matter when formulations include sensitive
+business rules and data. OSCAR allows firms to use open-weight models locally or in the cloud,
+depending on their budget and confidentiality requirements.
+• Clarify business requirements with labeled decision examples. Plain-language descriptions
+of business rules may be interpreted in different ways, leading to different judgments about whether
+a plan satisfies those rules. Labeled decision examples show which decisions satisfy or violate
+operating rules and help make their intended meaning explicit. Firms can make better use of
+optimization by maintaining these examples alongside their written descriptions. When an LLM’s
+interpretation of the description conflicts with the examples, OSCAR follows the examples’ known
+outcomes to build and test the Simulator.
+• Keep benefiting as LLMs improve. OSCAR follows simple rules for allocating attempts and
+restarting the search. These operations are controlled by a small set of adjustable settings. As LLM
+capabilities and prices change, firms can tune the settings and add new models to keep benefiting
+from improvements in LLMs.
+1.3.
+Related Literature
+LLMs for optimization modeling. Given the rapid growth of this literature, we review selected
+work on formulation generation, checking and iterative improvement. Research in this area studies
+both model training and the frameworks in which models operate. NL4Opt introduced a compe-
+tition and benchmark for translating natural-language descriptions into optimization formulations
+(Ramamonjison et al. 2023). ORLM, LLMOPT, SIRL, and DPLM fine-tune models for optimiza-
+tion (Huang et al. 2025a, Jiang et al. 2025, Chen et al. 2025, Zhou et al. 2026): ORLM uses
+4
+
+
+--- Page 5 ---
+synthetic modeling data, LLMOPT uses structured problem formulations, SIRL uses rewards from
+solver diagnostics, and DPLM addresses dynamic programming. In our paper, OSCAR can use
+specialized models as Coders for compatible problem classes, and our routing analysis allows a
+menu containing both specialized and general-purpose models.
+Another line of research develops agentic frameworks that coordinate LLMs for formulation
+generation and revision. Chain-of-Experts uses forward construction and backward reflection among
+specialized agents (Xiao et al. 2024). OptiMUS cycles through a formulator, a programmer, and
+an evaluator that executes code and reports errors (AhmadiTeshnizi et al. 2024). LEAN-LLM-
+OPT adds retrieval tools for large-scale problems (Liang et al. 2026). In Chain-of-Experts and
+OptiMUS, revision is driven mainly by execution feedback. Chain-of-Experts also responds when
+the generated model yields no feasible solution. AutoREM reuses structured memory distilled from
+failed reformulation trajectories to improve robust-optimization reformulation (Chen et al. 2026).
+Several frameworks also check formulations. LLMOPT uses an LLM to assess both the for-
+mulation and the code, then revises either when needed (Jiang et al. 2025). TriVAL uses LLM
+validators at the semantic, formulation, and code levels (Fang et al. 2026), and Opt-Verifier checks
+modeling structure and solution validity with an LLM (Liu et al. 2026). OptiRepair combines solver
+infeasibility certificates with rationality checks (Ao et al. 2026). ReLoop perturbs a formulation’s
+parameters and tests its objective response (Lian et al. 2026). For vehicle-routing problems, Luo
+et al. (2026) tests generated formulations with feasible and targeted constraint-violating probes to
+filter training data and supply rewards. The probes are labeled using a trusted Gurobi reference
+formulation, which OSCAR does not require. Abdul Rahman et al. (2026) constructs queries with a
+solver and asks an LLM to reason about them. In constraint programming, Song and Cohen (2026)
+asks an LLM to write a checker from the problem statement and finds that it often rejects correct
+solutions.
+NEMO in Song et al. (2026) and OptMaster in Lin et al. (2026) are particularly related designs.
+In Song et al. (2026), a coding agent writes both an executable simulator and unit tests from
+the same problem description and selected extraction. A simulator is admitted after passing their
+tests. A solution is accepted when the simulator confirms feasibility and agreement with the
+reported objective value. In Lin et al. (2026), OptMaster organizes attempts in a DAG, with solving,
+verification and summarization at each node. Like OSCAR, OptMaster uses a simulator to check
+feasibility and objective values. OptMaster does not focus on verifying the simulator. An LLM
+interprets the results to guide revisions and branch combinations, particularly when progress stalls.
+5
+
+
+--- Page 6 ---
+Passing checks need not end the search. For formulation tasks, an attempt budget and an LLM’s
+assessment of correctness determine when the search stops.
+Table 1 compares these frameworks, focusing on those that explicitly check formulations.
+Abdul Rahman et al. (2026) and Song and Cohen (2026) select among multiple candidate for-
+mulations. TriVAL and NEMO also consider multiple candidates within their procedures. Several
+frameworks report token use (Xiao et al. 2024, AhmadiTeshnizi et al. 2024, Fang et al. 2026, Liu
+et al. 2026, Ao et al. 2026, Lian et al. 2026). Like Song et al. (2026), we use an executable simulator
+to evaluate solutions. We additionally use externally supplied labeled decision examples to certify
+the Simulator before formulation generation, and keep the Simulator fixed during the search. Then
+we use it to compare candidates beyond the first feasible solution and allocate costly attempts to
+seek further improvements.
+Table 1
+Comparison of optimization modeling frameworks.
+Revision
+syntax
+repair
+formulation
+revision
+formulation
+checked by
+simulator
+validated by
+search
+behavior
+token
+cost
+Fine-tuned models
+ORLM (Huang et al. 2025a)
+none
+SIRL (Chen et al. 2025)
+none
+DPLM (Zhou et al. 2026)
+none
+Agentic frameworks
+Chain-of-Experts (Xiao et al. 2024)
+✓
+✓
+none
+reported
+OptiMUS (AhmadiTeshnizi et al. 2024)
+✓
+✓
+none
+reported
+LEAN-LLM-OPT (Liang et al. 2026)
+none
+Frameworks that check the formulation
+LLMOPT (Jiang et al. 2025)
+✓
+✓
+LLM
+stops after validation
+TriVAL (Fang et al. 2026)
+✓
+✓
+LLM
+stops after validation
+reported
+Opt-Verifier (Liu et al. 2026)
+✓
+✓
+LLM
+stops after one
+refinement pass
+reported
+OptiRepair (Ao et al. 2026)
+✓
+solver and
+domain checks
+stops after validation
+reported
+ReLoop (Lian et al. 2026)
+✓
+✓
+solver
+stops after validation
+reported
+NEMO (Song et al. 2026)
+✓
+✓
+simulator
+tests it wrote itself
+stops after validation
+OptMaster (Lin et al. 2026)
+✓
+✓
+simulator
+and LLM
+none
+DAG search
+guided by LLM
+capped
+OSCAR (this paper)
+✓
+✓
+simulator
+labeled decision
+examples given to it
+retains an incumbent
+and searches beyond
+feasibility
+managed
+Formulation checking excludes reviews during formulation generation and feedback on execution errors. “Capped” denotes an upper bound on the number
+of attempts. “Managed” denotes cost-aware allocation of attempts across LLMs.
+6
+
+
+--- Page 7 ---
+LLM routing and cascades. A separate literature reduces inference cost by matching queries
+to models. FrugalGPT learns a model cascade and confidence thresholds for accepting responses
+(Chen et al. 2024). RouteLLM learns routers from preference data (Ong et al. 2025). AutoMix
+uses few-shot self-verification scores to route queries, including through a partially observable
+Markov decision process (Aggarwal et al. 2024). These methods balance cost and response quality
+for individual queries. Our model concerns repeated attempts at the same problem under a shared
+latent difficulty, allowing repeated calls to the same models. Given success probabilities and prices,
+we compute a routing schedule and a competitive bound.
+Methodological foundations. Our analysis relates to two streams of research. The first concerns
+Bayesian sequential experimentation, particularly within the framework of partially observable
+Markov decision processes (see Monahan 1982 for a survey and Alizamir et al. 2013, Araman and
+Caldentey 2022 for related studies). Our known-prior model shares a similar updating-and-stopping
+structure: failed attempts update beliefs about a latent difficulty common to all calls, and we allocate
+repeated attempts across LLMs and determine when to stop. The second stream applies competitive
+analysis to online decisions, which has been widely adopted in revenue management (e.g., Ball and
+Queyranne 2009) and resource allocation (e.g., Goyal et al. 2025). These studies evaluate policies
+relative to benchmarks with an informational advantage. We adopt a similar approach for the prior-
+free routing problem, and compare the Escalator policy’s expected loss with that of a benchmark
+that observes the latent difficulty but not future call outcomes.
+2.
+The Simulator and Preliminary Observations
+Before presenting OSCAR, we explain how its Simulator compares formulations, describe how we
+build it, and report observations from preliminary testing.
+2.1.
+Comparing Formulations through a Simulator
+Moving beyond a one-shot formulation requires a way to compare candidates (Figure 1). In a fully
+automated framework, a human expert is unavailable for this task. An LLM arbiter faces much the
+same difficulty as the model that wrote the formulation: a constraint misread during drafting may
+also be misread during review. Further LLM reasoning can improve validation accuracy, but it adds
+cost and may still miss errors. Fang et al. (2026) notes that subtle constraint violations may escape
+its LLM validators.
+Comparing the formulations directly does not resolve this difficulty, because each evaluates
+objective values within its own feasible region. When two formulations yield different optimal
+7
+
+
+--- Page 8 ---
+solutions, a solution from one can be infeasible or suboptimal under the other. We therefore
+need a basis for comparing their solutions that is external to both formulations. Ideally, this
+comparison would reflect each solution’s feasibility and objective value in the real system. A feasible
+solution is preferred to an infeasible one, and feasible solutions are ranked by objective values.
+We consider single-objective problems throughout, so any two feasible solutions can be compared.
+Since candidate solutions cannot be tested in the real system, a Simulator evaluates them instead.
+It reports feasibility and, for a feasible solution, the objective value. For an infeasible solution,
+it is instructed to list every violated operating rule and explain each violation in plain language.
+Candidate solutions are evaluated and ranked by the Simulator and OSCAR retains the formulation
+producing the highest-ranked solution identified so far as the incumbent. The search continues even
+after a feasible solution is found, and stops only when the routing policy terminates the search and
+then returns the standing incumbent.
+The Simulator is an offline oracle implemented as deterministic code. Just as we ask an LLM to
+write solver code rather than solve the problem itself, we ask it to write the Simulator rather than
+judge individual formulations. Once built, the Simulator remains fixed. Its construction requires
+four inputs:
+• A full problem description: the scenario, the goal, the supporting data and the rules that govern
+the system.
+• The data of the target instance.
+• The syntax of the operational decisions implemented in the system. Ancillary modeling
+variables, such as the binary indicators of a big-𝑀reformulation, are not needed.
+• A small set of labeled decision examples in that syntax. Each example includes its feasibility
+status and, optionally, its objective value. Each infeasible example also includes a plain-language
+reason. Because the Simulator encodes rules rather than data, examples may come from other
+instances governed by the same rules. For example, in a facility planning problem, examples may be
+obtained from previous planning periods or similar facilities that have been built before. Optional
+partial decision examples, each respecting or violating one constraint, help cover constraints that
+are easy to miss.
+The first two inputs, the problem description and instance data, are standard in optimization model-
+ing. OSCAR also requires decision syntax and labeled decision examples. These additional inputs
+record what decisions a firm implements and which plans satisfy or violate its rules. Maintaining
+them alongside written descriptions helps clarify plain-language rules, as discussed in Section 1.2.
+8
+
+
+--- Page 9 ---
+The syntax defines a common solution format, while the examples support testing and certification
+of the Simulator.
+Construction proceeds iteratively. An LLM writes a candidate Simulator from the description
+and decision syntax, and we run it on every example. We check its feasibility classifications and,
+where a reference objective value is provided, its objective calculations. Failed cases and their
+plain-language reasons are returned to the LLM with the current code for revision. Because OSCAR
+uses the Simulator’s explanations as well as its classifications, a separate LLM scores each rejection
+message on whether a reader who cannot see the code can identify the rule violated, the location
+of the violation and its magnitude. The mean score must reach a certain threshold. We also make
+examples unreadable, for instance by emptying fields, and require the Simulator to label each altered
+example malformed. Here, certification means passing these construction checks. Certification
+occurs before any formulation is written (Appendix EC.1).
+Two considerations make Simulator construction more tractable than optimization modeling.
+First, a Simulator can check a given plan by running code that simulates the system’s dynamics and
+tests compliance with its operating rules. Writing this code is often more direct than expressing the
+same rules as optimization constraints, such as linear inequalities. For example, a routing Simulator
+can track vehicle loads and arrival times to check capacities and time windows. Second, LLMs also
+write ordinary code in a general-purpose language more reliably than solver-specific modeling code.
+Song et al. (2026) uses this rationale and reports a similar difference in first-attempt correctness
+between simulators and optimization models.
+Despite these advantages, constructing a Simulator that passes certification may require multiple
+attempts. In our experiments, a weaker model produces a Simulator that passes certification for
+some problems. For others, it exhausts its budget and a stronger model takes over. We therefore build
+the Simulator using the cost-ordered escalation of Section 4.4, as described in Appendix EC.1. On
+a few problems outside the benchmark study, Simulator construction required human help, mainly
+with data formatting (Appendix EC.1).
+2.2.
+Preliminary Observations
+The following observations come from preliminary tests used to guide OSCAR’s design, which are
+separate from the benchmark experiments in Section 5.
+Simulator feedback. A Reviewer who views the problem description and formulation code, together
+with a binary infeasibility report, may still face difficulty in locating the formulation error. In this
+case, additional explanations from the Simulator can help the Reviewer diagnose these errors. We
+9
+
+
+--- Page 10 ---
+compared reviews with and without this explanation using 24 broken formulations from our own
+runs, all from one instance of one problem. Each formulation was reviewed twice by Qwen3.5-
+Flash, once with the Simulator’s report and once without it. The Reviewer identified the true defect
+in 11 of the 24 cases without the report and in 21 with it. To examine whether diagnosis also led
+to repair, we tested one hard formulation in 50 review-and-repair runs of two rounds each. The
+share ending with a correct formulation rose from 4% without the report to 18% with it. These tests
+suggest that explanations can help both diagnosis and repair, though the evidence is limited to a
+small set of formulations. Song et al. (2026) reports a similar effect.
+Reverting when switching to a stronger Coder. Repairing a weaker model’s formulation requires
+a longer prompt that includes the flawed code and revision advice, increasing the cost per round.
+The flawed structure can also lead the stronger model to make superficial patches. In 50 tests, a one-
+shot formulation by Qwen3.6-Flash reached the optimum 23 times, compared with 19 times when
+Qwen3.5-Flash wrote the initial formulation and Qwen3.6-Flash refined it. The latter approach also
+used more tokens. This comparison motivates discarding a weaker Coder’s unsuccessful revisions
+before a stronger Coder takes over. The stronger Coder returns to the best formulation retained so
+far.
+Limits of repeated revision. Runs that reached the optimum typically did so within three to five
+revisions. Those that had not done so by then seldom succeeded later, even when allowed up to thirty
+revisions. Late revisions tended to make cosmetic changes, such as adding comments or renaming
+variables, and sometimes degraded the code. For example, splitting a constraint into equivalent
+pieces could slow the solver on large instances. These observations motivate periodically discarding
+revisions and returning to the best formulation retained so far after repeated revisions fail to yield
+improvement (Section 4.4).
+Structure construction and syntax repair. Organizing a description into a structured form before
+generating code is common practice and is the role of the structure constructor in Section 3.
+Independent calls to the structure constructor may end up with slightly different structures, and
+affect the final formulation’s quality to some extent, but an imperfect structure does not preclude a
+correct formulation after subsequent revision. Syntax errors are common in generated code. Feeding
+error messages back to the cheapest model on the menu resolved nearly all such errors in our tests,
+usually within two rounds.
+Cost of coding and reviewing. The Coder and Reviewer read prompts of similar length, but the
+Coder writes a complete program while the Reviewer writes a short diagnosis. We tracked token
+10
+
+
+--- Page 11 ---
+usage and cost during preliminary testing. A Reviewer call averaged 5,528 input tokens and 6,077
+output tokens at a cost of $0.007. A Coder call averaged 6,696 input tokens and 11,184 output
+tokens at a cost of $0.013, about 1.8 times as much. The output counts include thinking tokens. The
+choice of models for the two roles therefore affects the cost of a revision attempt, with an increase
+in the Coder’s tier costing more than an increase in the Reviewer’s tier.
+3.
+The OSCAR Framework
+OSCAR has three main components: the Simulator as introduced in Section 2.1, a Coder and a
+Reviewer. The Coder and Reviewer are selected from a menu of LLMs, which may be general-
+purpose models or models fine-tuned for optimization modeling. A model’s position on this menu,
+ordered by price, is its tier. Higher-tier models are usually stronger. We use tier when the position
+itself matters, as in the adjacent-tier restriction of Section 4. Figure 2 summarizes the preparations
+built once, the improvement loop and the outcome.
+Figure 2
+The OSCAR framework, with some implementation details omitted.
+11
+
+
+--- Page 12 ---
+Input and preparations. OSCAR begins with the four inputs of Section 2.1. The structure con-
+structor converts the plain-language description into a schema that lists every required parameter,
+specifying its data type, its dimensions (for example, one entry per customer), and a one-line
+description. Later calls receive both the schema and the original description. This step follows
+established practice (AhmadiTeshnizi et al. 2024, Liang et al. 2026). It uses a single call to the
+cheapest model on the menu and costs a fraction of a cent per run (Table EC.1). After the Simulator
+constructor builds and certifies the Simulator, a first Coder call produces the initial formulation in
+one shot. We use a strong model for the initial formulation. When the Coder switches to a stronger
+LLM, it discards unsuccessful revisions and resumes from the incumbent (Section 2.2). Starting
+with a weak model would leave it revising a weak model’s output even after this return. The initial
+formulation becomes the incumbent for the improvement loop, with no guarantee of correctness.
+The improvement loop. At the start of each pass, the routing policy either stops or selects the
+Reviewer and Coder tiers for the next attempt. We take this policy as given here and formalize
+its decisions in Section 4. The Reviewer receives the problem information, the formulation to be
+revised and the Simulator’s feedback on that formulation, then returns revision advice. Within a
+window, this formulation is either the latest draft or the incumbent retained at the start of the window
+(Section 4.4). The Coder uses the advice to produce a candidate formulation and its solver code.
+If the code fails to run, we repair it in a short loop, as described in Section 2.2. The Simulator then
+evaluates the resulting solution against the operating rules. An attempt that produces no candidate
+solution bypasses the Simulator. OSCAR reports this outcome as a possible sign that the formulation
+is over-constrained.
+Certification and termination. The Simulator’s report ranks each candidate solution against
+the incumbent’s solution. Every feasible solution ranks above every infeasible one, and feasible
+solutions are compared using objective values recomputed by the Simulator. Among infeasible
+solutions, the one that violates fewer operating rules ranks higher. A malformed solution is one the
+Simulator cannot read. It is treated as a syntax error and returned to the repair loop, so it is never
+ranked.
+OSCAR certifies an improvement when a candidate ranks strictly above the incumbent. That
+candidate replaces the incumbent and the loop continues. A candidate that does not improve the
+ranking leaves the incumbent unchanged, although the next attempt may continue to revise that
+candidate, subject to the reverting rule. The session ends when the routing policy stops or an
+12
+
+
+--- Page 13 ---
+external wall-clock or spending ceiling is reached (Section 4.4). OSCAR then returns the standing
+incumbent with its solution and objective value.
+Routing decisions. The routing policy determines which LLMs OSCAR calls as Reviewer and
+Coder, and when it stops. Using stronger LLMs may increase the chance of improving the incumbent,
+but also raises the cost per attempt. The routing policy must choose between them with limited
+knowledge of the difficulty of the current improvement and decide whether to continue after each
+failed attempt. As Section 4 shows, the stopping decision also depends on whether the incumbent
+is feasible. That section formalizes these decisions and derives the Escalator policy.
+4.
+Routing Control: The Escalator Policy
+In the framework introduced in Section 3, we have not yet specified which LLMs to call or when to
+stop. We now formulate these routing and stopping decisions and analyze the Escalator policy. We
+analyze one improvement window at a time. A certified improvement replaces the incumbent and
+opens the next window. We apply the same decision model to each window. It is therefore enough
+to study an arbitrary window.
+4.1.
+General Formulation of Sequential Improvement Search
+The overall improvement trajectory of an OSCAR session is hard to model directly for two reasons.
+First, a formulation contains interacting variables, constraints and objective terms. Problems also
+differ in the number and types of constraints they may require. Each revision may add, remove or
+modify several elements at once, correcting some errors while introducing others. These differences
+make it difficult to construct a common model of how formulations evolve and how revisions affect
+the resulting plans and the prospects for further improvement.
+Second, progress can take different forms. Before feasibility is reached, a revision may reduce
+the number of operating rules violated by the resulting plan. Afterward, progress is measured by
+the objective value recomputed by the Simulator. We simplify the analysis by studying the search
+for the next certified improvement, without modeling the full sequence of formulation changes
+or the magnitude of each gain. We define an improvement window as the segment between two
+consecutive certified improvements. An improvement is certified when the Simulator ranks the new
+solution above the incumbent according to the ordering defined in Section 3. Thus, reducing the
+number of violated rules counts as a certified improvement, just as improving the objective value
+does.
+Formally, each window begins with a fixed incumbent, and there is no limit on the number of
+LLM calls that can be made within that window. A window terminates when either the Simulator
+13
+
+
+--- Page 14 ---
+certifies an improvement or the controller chooses to stop. If an improvement is certified, the
+improved formulation becomes the incumbent for the next window; otherwise, the incumbent
+remains unchanged. In the single-window model, every certified improvement yields the same
+reward 𝐺> 0. The parameter 𝐺reflects how we weigh the risk of ultimately missing a correct
+formulation against the token cost.
+We distinguish two types of improvement windows according to the feasibility of the incumbent
+at the start of the window. A Type 1 window begins with an infeasible incumbent. If the underlying
+problem admits a feasible solution, that solution improves on the incumbent. A Type 2 window
+begins with a feasible incumbent, for which further improvement may not be possible.
+We make three simplifications to study a single improvement window. First, we take the total
+number of windows needed to reach the best formulation to be unaffected by within-window
+operations. This assumption is what permits treating 𝐺as a constant reward per window. Second,
+we model the difficulty of reaching a certified improvement as fixed within a window. In particular,
+our analysis does not distinguish whether a revision starts from the incumbent or from a formulation
+already revised within the window. Section 4.4 sets the implementation choice between continuing
+to revise the current formulation and reverting to the incumbent. Third, we defer the initial one-shot
+coding round to Section 4.4 and Appendix EC.4.1.
+Model primitives and dynamics. At the beginning of each improvement window, we assume there
+is a hidden state 𝜃∈Θ reflecting the difficulty of improving upon the incumbent. This state is fixed
+but remains unobservable to the controller throughout the window. Let D denote a discrete set
+of improvable states, and let 𝑜denote the non-improvable state. For Type 1 window, we assume
+Θ := D, whereas for Type 2 window, we assume Θ := D ∪{𝑜}. Let A = {1, . . . , 𝑚} denote the set
+of available configurations. A configuration is an ordered (Reviewer, Coder) pair of LLMs used in
+one revision attempt, and the two roles may be filled by models of different tiers. We restrict the
+menu to configurations whose Reviewer and Coder are of the same or adjacent tiers. The restriction
+is both reasonable and convenient.
+• Little to gain from distant pairs. A configuration’s cost is dominated by its more expensive
+component. Pairing a strong LLM with a much weaker counterpart therefore saves little. Under the
+policy we propose in Section 4.3, a strong model is reached only after weaker configurations have
+already failed, which signals a challenging window and calls for a capable counterpart.
+• Less to calibrate. With 𝐿LLM tiers, the restriction to pairs of the same or adjacent tiers gives
+3𝐿−2 configurations instead of 𝐿2, which is easier to tune in practice. It also reduces what must be
+14
+
+
+--- Page 15 ---
+measured before the policy can be run. With an unrestricted menu, configurations would first have
+to be ranked by cost and screened for dominance in success probability, which takes measurement.
+With this restriction, the cost ranking is known in advance. Raising the Coder’s tier costs more
+than raising the Reviewer’s tier by the same amount. We therefore order configurations first by the
+Coder’s tier and then by the Reviewer’s.
+Each configuration is treated as a single action with one combined price and one certified-
+improvement probability. At each decision epoch, the controller selects an action from U :=
+A ∪{stop}. Running configuration 𝑎∈A incurs cost 𝑐𝑎> 0. We index the configurations in
+nondecreasing order of cost, so that 𝑐1 ≤𝑐2 ≤· · · ≤𝑐𝑚. Conditional on state 𝜃∈D, a run of
+configuration 𝑎produces a certified improvement with probability 𝑞𝑎,𝜃∈(0,1) and otherwise fails.
+In state 𝑜, no improvement is available, so 𝑞𝑎,𝑜= 0 for every 𝑎∈A. Conditional on 𝜃, we assume
+call outcomes are independent across decision epochs. We further assume that an unsuccessful
+candidate has no residual value in the model. A successful call generates reward 𝐺and terminates
+the window, whereas a failed call generates no reward and leads to another routing decision.
+Choosing stop terminates the window without reward.
+Deterministic routing plans. Let Π denote the set of deterministic routing plans. Because a
+successful call terminates the window and all subsequent decisions are made only after failures,
+a routing plan is fully characterized by its actions along the all-failure path. We therefore write a
+routing plan as
+𝜋= (𝑎1, . . . , 𝑎𝑁;stop),
+𝑎𝑖∈A,
+𝑁∈{0,1, . . .} ∪{∞}.
+Each scheduled call 𝑎𝑖is made if and only if all preceding calls 𝑎1, 𝑎2, . . . , 𝑎𝑖−1 have failed, and a
+certified improvement terminates the plan immediately. For finite 𝑁, the plan stops if all 𝑁calls
+fail, with 𝑁= 0 representing immediate stopping. When 𝑁= ∞, calls are made without a terminal
+stop, so the plan continues after every failure.
+The analysis in Sections 4.2 and 4.3 will focus on a special class of routing policies, which we
+call Escalator policies. An Escalator policy follows a routing plan whose configuration indices are
+non-decreasing along the all-failure path. Within an improvement window, it may repeat or skip
+configurations but never moves backward through the cost-ordered menu.
+Statewise expected reward. For a plan 𝜋∈Π and state 𝜃∈Θ, define the survival probability
+immediately before call 𝑖as 𝑆𝑖,𝜃:= Î
+𝑘<𝑖(1−𝑞𝑎𝑘,𝜃). Thus, 𝑆𝑖,𝜃is the probability that call 𝑖is reached
+15
+
+
+--- Page 16 ---
+after all previous calls have failed. For a finite plan with 𝑁< ∞, define 𝑆𝑁+1,𝜃:= Î𝑁
+𝑘=1(1 −𝑞𝑎𝑘,𝜃),
+which is the probability that the plan terminates without an improvement. The expected net reward
+conditional on 𝜃is
+𝑉(𝜋| 𝜃) = 𝐺(1 −𝑆𝑁+1,𝜃) −
+𝑁
+∑︁
+𝑖=1
+𝑐𝑎𝑖𝑆𝑖,𝜃,
+𝜃∈D.
+(1)
+For an infinite plan, the same expression is interpreted by taking the limit as 𝑁→∞, namely
+𝑉(𝜋| 𝜃) = liminf
+𝑁→∞
+(
+𝐺 1 −𝑆𝑁+1,𝜃
+ −
+𝑁
+∑︁
+𝑖=1
+𝑐𝑎𝑖𝑆𝑖,𝜃
+)
+.
+For every 𝜃∈D, 𝑉(𝜋|𝜃) in the case of 𝑁= ∞is well defined because the finite configuration set
+and strictly positive success probabilities imply
+∞
+∑︁
+𝑖=1
+𝑐𝑎𝑖𝑆𝑖,𝜃≤
+𝑐𝑚
+min𝑎∈A 𝑞𝑎,𝜃
+< ∞.
+For the non-improvable state 𝜃= 𝑜, all calls fail with probability one, so any infinite plan incurs
+infinite expected cost and 𝑉(𝜋| 𝑜) = −∞.
+At this stage, we have not imposed a probability distribution on the hidden state 𝜃or other-
+wise specified how statewise expected reward should be aggregated. Consequently, the general
+formulation does not yet define an optimal routing plan. In Section 4.2, we assume a known prior
+distribution over 𝜃and formulate the resulting Bayesian routing problem as a Partially Observable
+Markov Decision Process (POMDP). In Section 4.3, we treat 𝜃as an unknown fixed parameter, and
+evaluate an Escalator policy against a clairvoyant who knows 𝜃, through competitive analysis.
+4.2.
+Exact Optimality in the Two-by-Two Case
+In this subsection, we specialize the general sequential improvement search in Section 4.1 to two
+configurations and a known prior over two improvable states, with an additional non-improvable
+state in Type 2 windows. We formulate the problem as an infinite-horizon POMDP and establish
+the Escalator structure of an optimal routing plan.
+Let A = {𝐴, 𝐵}, where 𝐴is the lower-cost configuration and 𝐵is the higher-cost configuration,
+with 0 < 𝑐𝐴< 𝑐𝐵. For Type 1 window, the hidden state is 𝜃∈Θ := {𝑒, ℎ}, and for Type 2 window, the
+hidden state is 𝜃∈Θ := {𝑒, ℎ, 𝑜}, where 𝑒and ℎindicate that the next improvement is, respectively,
+easy or hard to obtain, and 𝑜indicates that no further improvement over the opening incumbent is
+available. At the beginning of the window, the controller has a known prior 𝜇= (𝜇𝜃)𝜃∈Θ ∈𝚫(Θ) :=
+{x : Í
+𝜃∈Θ 𝑥𝜃= 1,𝑥𝜃> 0 for all 𝜃∈Θ}. As in Section 4.1, a call to configuration 𝑎∈{𝐴, 𝐵} succeeds
+16
+
+
+--- Page 17 ---
+with probability 𝑞𝑎,𝜃∈(0,1) when 𝜃∈{𝑒, ℎ}, while 𝑞𝑎,𝑜= 0. For Type 1 windows, we set 𝜇𝑜= 0
+and 𝛽𝑜= 0 for every posterior belief 𝛽whenever these coordinates appear below.
+Updating rule of posterior belief. Let 𝛽= (𝛽𝜃)𝜃∈Θ denote the posterior belief immediately before
+a decision. The posterior success probability of configuration 𝑎is
+𝑝𝑎(𝛽) :=
+∑︁
+𝜃∈Θ
+𝛽𝜃𝑞𝑎,𝜃= 𝛽𝑒𝑞𝑎,𝑒+ 𝛽ℎ𝑞𝑎,ℎ.
+(2)
+If the call to configuration 𝑎fails, let 𝐹𝑎denote the failure event and the current belief is updated
+from 𝛽to 𝑇𝑎(𝛽) according to the Bayes’ rule as follows:
+𝑇𝑎(𝛽)𝜃:=
+Pr(𝐹𝑎| 𝜃, 𝑎)𝛽𝜃
+Í
+𝜃′∈Θ Pr(𝐹𝑎| 𝜃′, 𝑎)𝛽𝜃′ = 𝛽𝜃(1 −𝑞𝑎,𝜃)
+1 −𝑝𝑎(𝛽) ,
+𝜃∈Θ.
+(3)
+No posterior following success is needed because success terminates the window. Therefore, after
+𝑛𝐴failed calls to 𝐴and 𝑛𝐵failed calls to 𝐵, the posterior belief can be expressed as:
+𝛽𝜃(𝑛𝐴, 𝑛𝐵) =
+𝜇𝜃(1 −𝑞𝐴,𝜃)𝑛𝐴(1 −𝑞𝐵,𝜃)𝑛𝐵
+∑︁
+𝜃′∈Θ
+𝜇𝜃′(1 −𝑞𝐴,𝜃′)𝑛𝐴(1 −𝑞𝐵,𝜃′)𝑛𝐵,
+𝜃∈Θ.
+(4)
+Optimal value function and Bellman equation. Let 𝐽∞(𝛽) denote the optimal expected net reward
+starting from belief 𝛽, also referred to as the optimal value function:
+𝐽∞(𝛽) := sup
+𝜋∈Π
+𝑉𝛽(𝜋) = sup
+𝜋∈Π
+∑︁
+𝜃∈Θ
+𝛽𝜃𝑉(𝜋| 𝜃).
+To compute 𝐽∞(𝛽), consider a finite-horizon problem with at most ¯𝑁< ∞calls. For each 𝑘=
+0, 1, . . . , ¯𝑁, let 𝐽𝑘(𝛽) denote the optimal expected net reward at belief 𝛽when there are 𝑘available
+calls to make. For any value function 𝑓, define the Bellman operator:
+(L𝑎𝑓)(𝛽) := −𝑐𝑎+ 𝐺𝑝𝑎(𝛽) +  1 −𝑝𝑎(𝛽) 𝑓 𝑇𝑎(𝛽),
+𝑎∈{𝐴, 𝐵}.
+(5)
+Then the functions {𝐽𝑘(𝛽) : 𝑘= 0,1, . . . , ¯𝑁} satisfy the following finite-horizon Bellman equation:
+𝐽0(𝛽) = 0 for any reachable belief 𝛽, and for 𝑘= 1,2, . . . , ¯𝑁and any reachable belief 𝛽,
+𝐽𝑘(𝛽) = max
+
+0, (L𝐴𝐽𝑘−1)(𝛽), (L𝐵𝐽𝑘−1)(𝛽)
+	
+.
+(6)
+The following lemma shows the convergence of {𝐽𝑘(𝛽) : 𝑘= 0,1, . . . , ¯𝑁} to 𝐽∞(𝛽), whose proof is
+deferred to Appendix EC.2.1.
+17
+
+
+--- Page 18 ---
+LEMMA 1. For any reachable belief 𝛽, lim𝑘→∞𝐽𝑘(𝛽) = 𝐽∞(𝛽), and 𝐽∞(𝛽) satisfies the following
+infinite-horizon Bellman equation: 𝐽∞(𝛽) = max{0, (L𝐴𝐽∞)(𝛽), (L𝐵𝐽∞)(𝛽)}.
+Structural conditions. For each configuration 𝑎∈{𝐴, 𝐵} and improvable state 𝜃∈{𝑒, ℎ}, define
+the cost-effectiveness ratio: 𝛾𝑎,𝜃:= 𝑐𝑎/𝑞𝑎,𝜃. Given state 𝜃and configuration 𝑎, 𝛾𝑎,𝜃is the expected
+total calling cost required to obtain an improvement. Thus, a smaller value of 𝛾𝑎,𝜃indicates greater
+cost efficiency. We impose the following structural conditions throughout this subsection.
+ASSUMPTION 1.
+(i) For each 𝑎∈{𝐴, 𝐵}, 𝑞𝑎,𝑒> 𝑞𝑎,ℎ;
+(ii) For each 𝜃∈{𝑒, ℎ}, 𝑞𝐵,𝜃≥𝑞𝐴,𝜃;
+(iii) The two inequalities 𝛾𝐵,𝑒< 𝛾𝐴,𝑒and 𝛾𝐵,ℎ> 𝛾𝐴,ℎdo not hold simultaneously.
+(iv) 𝐺≥𝛾𝐵,ℎ.
+Condition (i) orders the two improvable states by difficulty: every configuration has a higher
+success probability in state 𝑒than in state ℎ. Condition (ii) identifies 𝐵as the more capable config-
+uration, in the sense that it weakly dominates 𝐴in success probability in both states. Condition (iii)
+imposes a single-crossing restriction on the configurations’ cost-per-success rankings. Because a
+lower 𝛾𝑎,𝜃indicates greater cost efficiency, it rules out the reverse crossing in which 𝐵is more
+cost-efficient in the easy state while 𝐴is more cost-efficient in the hard state. Thus, if the ranking
+crosses, the permitted direction is that 𝐴is more cost-efficient in state 𝑒and 𝐵is more cost-efficient
+in state ℎ. This directional crossing provides the economic basis for one-way escalation from 𝐴to
+𝐵. Condition (iv) ensures that the reward is at least the expected total cost of calling 𝐵until success,
+even in the hard state. It is used in Theorem 1(i) to show that stopping is never strictly optimal in
+Type 1 windows.
+We first present a lemma that compares the two possible orderings of an 𝐴-call and a 𝐵-call and
+characterizes how the preferred ordering evolves as failures update the posterior belief.
+LEMMA 2 (Adjacent interchange). Fix a reachable posterior belief 𝛽and a bounded value
+function 𝑓. Consider the two call orders 𝐴𝐵and 𝐵𝐴, where the second call is made only if the first
+fails, and both orders use the same value function 𝑓if both calls fail. Then
+(L𝐴L𝐵𝑓)(𝛽) −(L𝐵L𝐴𝑓)(𝛽) = 𝑐𝐵𝑝𝐴(𝛽) −𝑐𝐴𝑝𝐵(𝛽) =
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃𝑞𝐴,𝜃𝑞𝐵,𝜃
+ 𝛾𝐵,𝜃−𝛾𝐴,𝜃
+.
+(7)
+Moreover, the sign of the difference in (7) is the sign of
+𝐷(𝜆) := 𝑞𝐴,𝑒𝑞𝐵,𝑒
+ 𝛾𝐵,𝑒−𝛾𝐴,𝑒
+ + 𝑞𝐴,ℎ𝑞𝐵,ℎ
+ 𝛾𝐵,ℎ−𝛾𝐴,ℎ
+ · 𝜆,
+(8)
+18
+
+
+--- Page 19 ---
+where 𝜆= 𝜆(𝛽) := 𝛽ℎ/𝛽𝑒. Under parts (i) and (iii) of Assumption 1, 𝜆strictly increases along any
+all-failure path, and 𝐷(𝜆) can change sign at most once, and only from nonnegative to nonpositive.
+Lemma 2 shows that 𝐴𝐵is weakly preferred to 𝐵𝐴if and only if 𝑐𝐴/𝑝𝐴(𝛽) ≤𝑐𝐵/𝑝𝐵(𝛽). Thus,
+the configuration with the lower cost per success under the current posterior should be placed
+first. The single-crossing result describes how this pairwise ordering evolves after failures. Under
+Assumption 1(i), a failed call to configuration 𝑎multiplies the posterior probability of the hard state
+relative to the easy state by (1 −𝑞𝑎,ℎ)/(1 −𝑞𝑎,𝑒) > 1. Hence, 𝜆increases along the all-failure path.
+In 𝐷(𝜆), the constant term reflects the configurations’ cost-effectiveness ranking in the easy state,
+whereas the coefficient of 𝜆reflects their ranking in the hard state. A change in 𝐷(𝜆) from negative
+to positive would require 𝐵to be more cost-effective in the easy state and 𝐴to be more cost-effective
+in the hard state. Assumption 1(iii) rules out precisely this reverse crossing. Therefore, as failures
+accumulate, the pairwise advantage of 𝐴𝐵over 𝐵𝐴can change sign at most once, and only from
+non-negative to non-positive. The proof of Lemma 2 is deferred to Appendix EC.2.2.
+The following lemma provides sufficient conditions under which replacing a routing plan’s
+terminal call to 𝐴with 𝐵does not decrease its expected value.
+LEMMA 3 (Terminal replacement). Suppose Assumption 1(ii) holds. Consider a finite routing
+plan whose last call is to 𝐴, reached at posterior belief 𝛽. If
+𝐺𝑝𝐴(𝛽) ≥𝑐𝐴
+and
+𝑐𝐵
+𝑝𝐵(𝛽) ≤
+𝑐𝐴
+𝑝𝐴(𝛽),
+then replacing the last call by 𝐵does not decrease the plan’s value.
+The intuition behind Lemma 3 is that the lower-cost configuration 𝐴may be useful early in the
+search as an inexpensive choice, but this does not apply to the final call because no future decision
+can benefit from the information generated by a failure. The first condition ensures that continuing
+with 𝐴is still worthwhile relative to stopping, whereas the second identifies a posterior at which
+𝐵’s greater capability is available at no higher cost per success. In this region, the higher price of
+𝐵is justified by its capability advantage under Assumption 1(ii). Hence, an optimal plan has no
+reason to end with 𝐴and replacing the terminal 𝐴-call by 𝐵cannot reduce its value. The proof of
+Lemma 3 is provided in Appendix EC.2.3.
+We now state the main result in this subsection.
+19
+
+
+--- Page 20 ---
+THEOREM 1 (Optimal routing within a window). Suppose Assumption 1(i)–(iii) hold. For
+any reachable belief 𝛽, 𝐽∞(𝛽) is attained by a deterministic routing plan of the form
+ 𝐴, . . . , 𝐴
+|    {z    }
+𝑛𝐴calls
+, 𝐵, . . . , 𝐵
+|   {z   }
+𝑛𝐵calls
+;stop,
+(9)
+where 𝑛𝐴, 𝑛𝐵∈N ∪{∞}, with 𝑛𝐵= 0 if 𝑛𝐴= ∞. Moreover, the following results hold:
+(i) For Type 1 window, under Assumption 1(iv), stopping before success is never strictly optimal.
+In other words, 𝑛𝐴= ∞or 𝑛𝐵= ∞. If, additionally, 𝛾𝐵,ℎ< 𝛾𝐴,ℎ, then 𝑛𝐴can be chosen to be finite;
+(ii) For Type 2 window, every optimal deterministic routing plan starting from prior 𝜇stops
+after at most ⌊𝐺(1 −𝜇𝑜)/(𝜇𝑜𝑐𝐴)⌋consecutive failures.
+The structure in (9) follows by combining the local comparison results in Lemmas 2 and 3
+with a finite-truncation argument using the convergence established in Lemma 1. Specifically,
+for each truncated problem with finitely many calls permitted, the single-crossing property in
+Lemma 2 allows an optimal sequence to be arranged as 𝐴𝑟𝐵𝑠𝐴𝑢. If the terminal 𝐴-block follows
+a non-empty 𝐵-block, the final 𝐴-call must be worthwhile relative to stopping, and 𝐵is no less
+cost-effective at that belief. Lemma 3 therefore permits replacing this call by 𝐵, while Lemma 2
+allows the replacement call to be moved leftward and merged with the preceding 𝐵-block. Repeating
+these operations eliminates the terminal 𝐴-block. The convergence in Lemma 1, together with a
+subsequence construction, then yields an Escalator plan attaining the infinite-horizon optimal value.
+More details can be found from Appendix EC.2.4.
+Parts (i) and (ii) further explain the different stopping behavior in the two window types. In
+a Type 1 window, the incumbent is infeasible and an improvement is available. Under Assump-
+tion 1(iv), calling 𝐵until success has non-negative expected net reward, so an optimal controller
+can continue until a certified improvement is obtained. In a Type 2 window, the incumbent is
+feasible, and repeated failures increase the posterior probability that no improvement is available.
+After sufficiently many failures, the expected reward from any continuation falls below even its
+calling cost, making stopping strictly optimal. Both proofs are given in Appendix EC.2.5.
+In the following corollary, we characterize the condition under which both blocks for 𝐴and 𝐵in
+the optimal Escalator policy stated in Theorem 1 can be chosen to be nonempty.
+COROLLARY 1 (Non-empty calls to both configurations). Suppose
+Assumption
+1(i)–(iii)
+hold and 𝐺𝑝𝐴(𝜇) −𝑐𝐴≥max{0, 𝐺(1 −𝜇𝑜) −𝑐𝐵}. Then the following statements hold:
+20
+
+
+--- Page 21 ---
+(i) For Type 1 window, if Assumption 1(iv) holds and 𝛾𝐵,ℎ< 𝛾𝐴,ℎ, an optimal Escalator plan can
+be chosen with 1 ≤𝑛𝐴< ∞and 𝑛𝐵= ∞;
+(ii) For Type 2 window, define 𝑛0 := min
+
+𝑛∈N+ : 𝐺𝑝𝐴(𝑇𝑛
+𝐴(𝜇)) ≤𝑐𝐴
+	
+, which is finite. If
+𝐺𝑝𝐵(𝑇𝑛0
+𝐴(𝜇)) −𝑐𝐵≥0, then an optimal Escalator plan can be chosen with 1 ≤𝑛𝐴, 𝑛𝐵< ∞.
+At the initial belief 𝜇, the common condition ensures that one call to 𝐴followed by stopping
+weakly dominates both immediate stopping and every 𝐵-only plan. In other words, an optimal plan
+can be chosen to begin with 𝐴. For a Type 1 window, under the additional conditions in part (i),
+Theorem 1(i) ensures that an optimal plan can be chosen with a finite 𝐴-block followed by an infinite
+𝐵-block. For a Type 2 window, we first prove that 𝑛0 is an optimal stopping point when only 𝐴is
+used. In fact, along the all-𝐴failure path, the expected net reward of one additional 𝐴-call followed
+by stopping if it fails, 𝐺𝑝𝐴(𝑇𝑛
+𝐴(𝜇)) −𝑐𝐴, is non-increasing in 𝑛and is non-positive at 𝑛= 𝑛0. This
+ensures the optimality of stopping after 𝑛0 failures if only 𝐴is used. Then the condition in part (ii)
+ensures that a 𝐵-call still has non-negative expected net reward at this stopping point. Thus, if an
+𝐴-only plan is optimal, appending one 𝐵-call to (𝐴𝑛0;stop) preserves optimality. This ensures an
+optimal Escalator plan has both blocks non-empty. The proof is provided in Appendix EC.2.6.
+4.3.
+A Competitive Guarantee in the General Case
+As shown in Subsection 4.2, with two configurations, two improvable states, and a known prior,
+an optimal policy has an Escalator structure. This motivates us to investigate whether a general
+low-to-high routing principle remains effective for an arbitrary finite menu of configurations.
+We study the general model of Section 4.1. In practice, the distribution of task difficulty may be
+unavailable, unstable, or difficult to estimate reliably. We therefore do not assume a prior distribution
+over the hidden state and instead seek a deterministic, prior-free Escalator policy that provides a
+uniform competitive guarantee against a state-aware clairvoyant benchmark. We first analyze Type 2
+windows, for which Θ = D ∪{𝑜}, and return to Type 1 windows at the end of this subsection.
+Clairvoyant benchmark and competitive ratio. To evaluate a prior-free routing policy, we com-
+pare it with a state-wise clairvoyant controller that observes the realized state 𝜃before making
+any calls. Define its optimal expected net reward by 𝑉CL(𝜃) := sup𝜋∈Π 𝑉(𝜋| 𝜃). For 𝜃∈D, define
+𝛾𝑎,𝜃:= 𝑐𝑎/𝑞𝑎,𝜃as in Section 4.2. This quantity is the expected total cost of repeatedly calling con-
+figuration 𝑎until success. Once 𝜃is known, a failure provides no additional information and leaves
+the controller facing the same decision problem. Therefore, the clairvoyant follows the same model
+argmin𝑎∈A 𝛾𝑎,𝜃until success when min𝑎∈A 𝛾𝑎,𝜃< 𝐺, and stops immediately otherwise, yielding
+𝑉CL(𝜃) =
+
+𝐺−min
+𝑎∈A 𝛾𝑎,𝜃
++
+,
+𝜃∈D,
+(10)
+21
+
+
+--- Page 22 ---
+while 𝑉CL(𝑜) = 0 for the non-improvable state. We measure the performance of a given routing
+policy 𝜋by its worst-case competitive ratio in expected loss
+CR(𝜋) := sup
+𝜃∈Θ
+𝐺−𝑉(𝜋| 𝜃)
+𝐺−𝑉CL(𝜃) .
+This criterion compares the policy’s expected loss 𝐺−𝑉(𝜋| 𝜃) with the clairvoyant’s minimum
+expected loss 𝐺−𝑉CL(𝜃). The supremum over 𝜃captures the worst-case state. In every state, the
+expected loss equals the expected calling cost plus 𝐺times the probability that the window ends
+without an improvement.
+The construction of an Escalator policy. We next construct an Escalator policy that does not
+know the hidden state 𝜃. The policy requires four pre-computed inputs: the configuration scores
+(𝑠∗
+𝑎)𝑎∈A, the geometric budget scales (𝐵𝑗)𝐽
+𝑗=1, the configuration-specific reach functions (𝑅𝑎)𝑎∈A,
+and their maximum 𝑅over all possible configurations. We first define these quantities below.
+To compare calls across configurations, we first express their effects on the probability of remain-
+ing unsuccessful on an additive scale. Conditional on state 𝜃∈Θ, the probability that a prescribed
+sequence of calls 𝑎1, . . . , 𝑎𝑛all fail is Î𝑛
+𝑖=1(1 −𝑞𝑎𝑖,𝜃). Hence,
+−log
+" 𝑛
+Ö
+𝑖=1
+(1 −𝑞𝑎𝑖,𝜃)
+#
+=
+𝑛
+∑︁
+𝑖=1
+−log(1 −𝑞𝑎𝑖,𝜃).
+Thus, −log(1 −𝑞𝑎,𝜃) is the contribution of one 𝑎-call to the cumulative failure probability on
+a logarithmic scale. These contributions depend on the unknown state. We therefore seek state-
+independent weights (𝑠𝑎)𝑎∈A that represent the relative contributions of different configurations,
+so that a sequence of calls can be summarized by its total weight Í𝑛
+𝑖=1 𝑠𝑎𝑖. Given the success
+probabilities 𝑞= (𝑞𝑎,𝜃)𝑎∈A,𝜃∈D, for any positive vector s = (𝑠𝑎)𝑎∈A normalized by 𝑠1 = 1, define
+𝜅𝑞(s) := max
+𝜃∈D max
+𝑎,𝑏∈A
+−log(1 −𝑞𝑎,𝜃)/(−log(1 −𝑞𝑏,𝜃))
+𝑠𝑎/𝑠𝑏
+= max
+𝜃∈D
+max𝑎∈A −log(1 −𝑞𝑎,𝜃)/𝑠𝑎
+min𝑎∈A −log(1 −𝑞𝑎,𝜃)/𝑠𝑎
+.
+(11)
+and s∗:= (𝑠∗
+𝑎)𝑎∈A ∈argmins=(𝑠𝑎)𝑎∈A: 𝑠1=1 𝜅𝑞(s). If the minimizer is not unique, we select one accord-
+ing to a fixed deterministic tie-breaking rule. The number of stages and the budget scale at each
+stage are defined by
+𝐽:= max
+
+0,
+
+log2(𝐺/𝑐1)
+	
+,
+𝐵𝑗:= 2𝑗𝑐1,
+𝑗= 1, . . . , 𝐽.
+For each configuration 𝑎∈A, define its reach function 𝑅𝑎(𝐵) and the upper-envelope reach function
+𝑅(𝐵) as follows:
+𝑅𝑎(𝐵) := 𝑠∗
+𝑎
+ 𝐵
+𝑐𝑎
+−1
+
+,
+𝑅(𝐵) := max
+𝑎∈A 𝑅𝑎(𝐵),
+∀𝐵≥𝑐1.
+22
+
+
+--- Page 23 ---
+Algorithm 1 requires the scores s∗, which depend on the success probabilities, as well as the call
+costs and reward 𝐺. Its purpose here is to establish the existence of an Escalator policy satisfying
+the guarantee in Theorem 2. Section 5 evaluates OSCAR’s accuracy and cost using the Escalator
+structure with directly tuned attempt counts.
+Algorithm 1 constructs such an Escalator policy. This policy constructs its routing plan by
+gradually increasing how much it is prepared to spend. It uses a positive weight 𝑠∗
+𝑎> 0 for each
+configuration, which helps compare the relative effectiveness of calls to different configurations
+across states. The variable 𝑢records the sum of these weights over calls already scheduled. At stage
+𝑗, 𝐵𝑗is set as the spending allowance for that stage, and the algorithm selects the configuration
+with the largest target 𝑅𝑎(𝐵𝑗) and adds enough calls to bring 𝑢to at least this target. Doubling 𝐵𝑗
+allows the policy to consider progressively larger spending levels. We stop adding stages when the
+budget 2𝐽+1𝑐1 in the next stage would exceed the reward 𝐺, yielding the definition of 𝐽.
+Algorithm 1 Escalator Policy for General Sequential Improvement Search
+Require: (𝑠∗
+𝑎)𝑎∈A, (𝐵𝑗)𝐽
+𝑗=1, (𝑅𝑎(·))𝑎∈A, and 𝑅(·).
+𝑢←0
+for 𝑗= 1, . . . , 𝐽do
+𝛼𝑗←max
+
+𝑎∈A : 𝑅𝑎(𝐵𝑗) = 𝑅(𝐵𝑗)
+	
+𝑛𝑗←
+&  𝑅(𝐵𝑗) −𝑢+
+𝑠∗𝛼𝑗
+'
+𝑢←𝑢+ 𝑛𝑗𝑠∗
+𝛼𝑗
+end for
+return 𝜋EP := 𝛼𝑛1
+1 𝛼𝑛2
+2 · · · 𝛼𝑛𝐽
+𝐽
+As established in the next proposition, this selection rule ensures that every configuration switch
+increases the call cost, yielding the Escalator structure. The proof is provided in Appendix EC.3.1.
+PROPOSITION 1 (Escalator structure). The configurations selected by Algorithm 1 satisfy
+𝛼1 ≤𝛼2 ≤· · · ≤𝛼𝐽.
+We now state the main result of this subsection.
+THEOREM 2 (Competitive ratio guarantee). The competitive ratio of the Escalator policy in
+Algorithm 1, denoted by 𝜋EP, is bounded as follows:
+CR(𝜋EP) ≤4ℎ(𝜅𝑞(s∗)) < 5.2𝜅𝑞(s∗),
+23
+
+
+--- Page 24 ---
+where ℎ(𝑥) := sup𝑧>0(1 + 𝑧−1)(1 −𝑒−𝑥𝑧) for 𝑥≥1.
+The competitive guarantee in Theorem 2 compares the policy’s expected loss with the clairvoy-
+ant’s expected loss and holds uniformly over the hidden state 𝜃. To see how the more explicit upper
+bound 5.2𝜅𝑞(s∗) is derived, for any 𝑥≥1, taking 𝑧↓0 in the definition of ℎ(𝑥) gives ℎ(𝑥) ≥𝑥. On
+the other hand, by changing the variable in the supremum, we get
+ℎ(𝑥) = sup
+𝑧>0
+(1 + 𝑥/𝑧) (1 −𝑒−𝑧) ≤𝑥sup
+𝑧>0
+(1 + 1/𝑧) (1 −𝑒−𝑧) = 𝑥ℎ(1),
+where the inequality follows from 𝑥≥1. Let 𝑔★:= ℎ(1). Since the derivative of (1 + 𝑧−1)(1 −𝑒−𝑧)
+with respect to 𝑧is (𝑒−𝑧(𝑧2+𝑧+1)−1)𝑧−2, the supremum is achieved at 𝑧0 satisfying 𝑒𝑧0 = 𝑧2
+0+𝑧0+1.
+Numerical evaluation gives 𝑧0 ≈1.793 and 𝑔★≈1.298. Consequently,
+CR(𝜋EP) ≤4ℎ 𝜅𝑞(s∗) ≤4𝑔★𝜅𝑞(s∗) < 5.2 𝜅𝑞(s∗).
+(12)
+Note that the upper bound 4ℎ(𝜅𝑞(s∗)) is non-decreasing in 𝜅𝑞(s∗). Its smallest possible value,
+4𝑔★≈5.194, is attained when 𝜅𝑞(s∗) = 1, meaning that −log(1 −𝑞𝑎,𝜃)/𝑠∗
+𝑎is identical across
+configurations for each fixed state 𝜃. For a general sequence of success probabilities (𝑞𝑎,𝜃)𝑎∈A,𝜃∈Θ,
+however, such equality need not be attainable simultaneously for all states. We choose s∗to minimize
+𝜅𝑞(s), thereby tightening the theoretical bound. The proof of Theorem 2 is in Appendix EC.3.2.
+For Type 1 windows, Section 4.2 provides the intuition for continuing the search until improve-
+ment. Suppose 𝐺is large enough that repeating the final configuration until improvement is
+worthwhile in every improvable state. It is easy to show that extending the last stair weakly reduces
+expected loss under this condition, so we omit the details. This observation is consistent with the
+analysis in Section 4.2 and supports the Type 1 continuation rule in Section 4.4.
+4.4.
+The Policy OSCAR Runs
+In this subsection, we use the escalation and stopping structure from Sections 4.2 and 4.3 to specify
+OSCAR’s routing policy. We retain the configurations’ cost ordering and tune the attempt counts
+directly in Section 5, without deriving them from estimated per-call costs, success probabilities or
+a prior over difficulty. We also incorporate the revision strategy motivated by Section 2.2.
+Which configuration. Each window progresses from cheaper to more expensive configurations,
+escalating when the current configuration exhausts its allotted attempts. As a rule of thumb, harder
+problems relative to the models’ capabilities call for more attempts per configuration.
+24
+
+
+--- Page 25 ---
+When to stop. After the menu is exhausted without improvement, Type 2 ends the session and
+Type 1 repeats the final configuration until an improvement is certified. Theorem 1 and the extension
+in Section 4.3 support this distinction under their stated conditions. A large external stopping limit
+can cap the Type 1 extension in practice. No run in Section 5 reached this limit.
+What to start from. The initial formulation uses a strong Coder (Section 3). Each window starts
+from the incumbent, with later attempts revising the latest draft. Following Section 2.2, the loop
+reverts to the incumbent when the Coder’s tier increases. During the Type 1 extension, it also returns
+to the incumbent after every 𝑟uncertified attempts, where 𝑟is the restart interval. We set 𝑟= 3 for
+the experiments in Section 5.
+See Appendix EC.4.1 for details of the experimental settings.
+5.
+Numerical Study
+We examine whether OSCAR improves the accuracy of small LLMs and whether its improvement
+loop, comprising the Reviewer and the Escalator, reduces the cost of obtaining accurate solutions.
+We use the Qwen3.5- and Qwen3.6-Flash models (both 35B-A3B, hereafter Qwen3.5/3.6) (Qwen
+Team 2026a,b). Each model has 35 billion parameters, of which 3 billion are active per token. The
+experiments use cloud APIs, although both models support local deployment on a single GPU. These
+inexpensive LLMs are not tuned for optimization modeling. Their limited one-shot performance
+allows us to assess the framework’s contribution. Appendix EC.4 provides the experimental details.
+5.1.
+Comparison with One-Shot and Frontier Coding Agents
+Problems and data. FrontierOR (Kong et al. 2026) contains 180 optimization problems drawn
+from papers in leading OR journals, each with a description, instances, a reference solution and
+a feasibility checker. We select one problem from each of the four classes (vehicle routing, graph
+optimization, packing and cutting stock, and scheduling) that contain more than fifteen problems,
+together with one quadratic optimization problem. We refer to them as Routing, Graph, Packing,
+Scheduling and Quadratic. Table 2 gives their benchmark IDs and formulation types. For each
+problem, we assess the generated formulations by checking their solutions on the smallest available
+instance.
+For Simulator construction, we supply roughly ten complete labeled decision examples per
+problem. These include benchmark reference solutions from other instances, feasible but suboptimal
+plans, and perturbed decisions that violate specific operating rules. The optimal reference solution
+for the target instance is excluded from these examples.
+25
+
+
+--- Page 26 ---
+We limit the study to five problems for two reasons. OSCAR requires additional inputs, including
+decision syntax and labeled decision examples, which need problem-specific preparation. All five
+problems required data processing before Simulator construction, mainly to map reported decisions
+to instance elements. Screening also revealed ambiguous descriptions, unstated checker input
+formats, and inconsistencies among problem descriptions, reference formulations and solutions,
+and feasibility checkers. We retained problems that could be evaluated without changing these
+benchmark components, and the five selected descriptions remain as released. The problem data,
+certified Simulators, labeled decision examples and code are available at https://github.
+com/Sandrone-lab/OSCAR.
+Table 2
+The five problems.
+Problem class FrontierOR class (problems)
+Problem ID
+Formulation
+Routing
+Vehicle routing & TSP (30)
+colombi2017
+MIP
+Graph
+Graph optimization (19)
+mehrotra1996
+IP
+Packing
+Packing / cutting stock (17)
+letelier2022
+Binary IP
+Scheduling
+Scheduling (17)
+elci2022
+Stochastic
+Quadratic
+Quadratic optimization (3)
+buchheim2018
+QP / MIQP
+Models and policy. The four configurations, written as (Reviewer, Coder) pairs in cost order, are
+(Qwen3.5, Qwen3.5), (Qwen3.6, Qwen3.5), (Qwen3.5, Qwen3.6) and (Qwen3.6, Qwen3.6). We
+use the policy of Section 4.4, with restart interval 𝑟= 3. We first test one attempt per configuration
+on all five problems, 𝑛= (1,1,1,1), abbreviated as 𝑛= 1. For Routing, accuracy is 72% at 𝑛= 1,
+so we also test a larger allocation, 𝑛= (1,1,3,3). We do not test this larger allocation on the other
+four problems, which already reach 95% to 100% accuracy at 𝑛= 1 (Table 3).
+Baselines and measures. A one-shot run consists of the first Coder call of an OSCAR session
+followed by syntax repair, with either model and without a Simulator or Reviewer. We also run
+two frontier coding agents, Codex with GPT-6 Astra and Claude Code with Fable 5.1, five times
+per problem. Each receives only the description and instance. This compares complete workflows,
+with OSCAR additionally using labeled decision examples and Simulator feedback. We limit the
+comparison to five runs per problem for two reasons. These agents are costly, and updates by the
+providers to their closed models may change their performance, making results from more extensive
+testing difficult to reproduce later. We use these runs primarily to compare the agents’ costs with
+OSCAR’s.
+We refer to the benchmark’s feasibility checker as the trusted checker to distinguish it from the
+Simulator. A run is correct if its final solution is feasible according to the trusted checker and
+26
+
+
+--- Page 27 ---
+reaches the reference optimum. We price model calls at list rates and include Simulator construction
+in OSCAR’s cost (Appendix EC.4.3).
+Table 3
+Runs reaching the reference optimum (%), with cost per run in US dollars in parentheses. For each
+problem, we run each one-shot model and tested OSCAR setting 100 times and each frontier agent five times.
+One-shot
+OSCAR
+Frontier coding agents
+Problem class Qwen3.5
+Qwen3.6
+𝑛= 1
+𝑛= (1,1,3,3)
+Codex with
+GPT-6 Astra
+Claude Code
+with Fable 5.1
+Routing
+7 ($0.02) 18 ($0.04) 72 ($0.17)
+95 ($0.28)
+5/5 ($0.65)
+5/5 ($1.23)
+Graph
+77 ($0.01) 89 ($0.01) 100 ($0.05)
+–
+5/5 ($0.50)
+5/5 ($0.65)
+Packing
+7 ($0.01) 12 ($0.02) 97 ($0.27)
+–
+5/5 ($0.64)
+5/5 ($1.43)
+Scheduling
+4 ($0.01) 35 ($0.04) 95 ($0.24)
+–
+5/5 ($0.46)
+5/5 ($1.13)
+Quadratic
+49 ($0.01) 84 ($0.01) 100 ($0.13)
+–
+5/5 ($0.74)
+5/5 ($1.20)
+Results. Averaged over the five problems, a single attempt reaches the reference optimum in
+48% of runs with Qwen3.6 and 29% with Qwen3.5. With one attempt per configuration, OSCAR
+reaches it in 72 to 100% of runs. Routing is the most difficult case: at 𝑛= 1, the models often remain
+at a feasible but suboptimal formulation. Allocating more attempts to the two more expensive
+configurations raises accuracy to 95% for an additional $0.11 per run, with each improvement
+certified by the Simulator.
+Averaging costs across the five problems, with Routing at 𝑛= (1,1,3,3), gives $0.193 per run
+for OSCAR, including Simulator construction, $0.600 for Codex and $1.127 for Claude Code. The
+agent costs are 3.1 and 5.8 times OSCAR’s cost, respectively. Appendix EC.4.3 reports details of
+the cost accounting.
+5.2.
+Contribution of the Improvement Loop
+To assess the improvement loop’s contribution to the results in Table 3, we retain the Simulator
+but remove the Reviewer, incumbent revision and routing. The resulting resampler draws one-shot
+formulations independently, retains the best solution accepted by the Simulator, and stops after
+𝑘consecutive draws without improvement. Each run is charged once for Simulator construction
+and the structure constructor, plus the measured Coder and syntax-repair costs of each draw. We
+estimate the resampler’s accuracy and expected cost from the one-shot experiments in Section 5.1,
+which comprise 100 runs per model and problem. No additional LLM calls are made. Table 4
+27
+
+
+--- Page 28 ---
+reports the smallest 𝑘whose estimated accuracy is within 1% of OSCAR’s most accurate tested
+setting, 𝑛= (1,1,3,3) on Routing and 𝑛= 1 elsewhere.
+Table 4
+Estimated cost of resampling to within 1% of OSCAR’s accuracy. Parentheses show cost ratios
+relative to OSCAR.
+OSCAR
+Resampling, Qwen3.5 Resampling, Qwen3.6
+Problem class Correct (%) Cost per run
+𝑘
+Cost per run
+𝑘
+Cost per run
+Routing
+95
+$0.28
+27
+$0.53 (1.9×)
+10
+$0.58 (2.1×)
+Graph
+100
+$0.05
+3
+$0.03 (0.7×)
+3
+$0.04 (0.8×)
+Packing
+97
+$0.27
+39
+$0.55 (2.0×)
+24
+$0.66 (2.5×)
+Scheduling
+95
+$0.24
+50
+$0.80 (3.3×)
+6
+$0.39 (1.6×)
+Quadratic
+100
+$0.13
+7
+$0.14 (1.0×)
+3
+$0.12 (0.9×)
+On Routing, Packing and Scheduling, where one-shot success is uncommon, resampling to match
+OSCAR’s accuracy costs 1.6 to 3.3 times as much. On Graph and Quadratic, where one-shot success
+is more frequent, resampling costs 0.7 to 1.0 times as much. These results suggest that verified
+resampling can be economical when one-shot success is common, while diagnosis and revision
+become more valuable when it is rare.
+6.
+Conclusion and Future Research Directions
+The OSCAR framework uses a certified Simulator to compare candidates and continues searching
+beyond feasibility through iterative improvement and cost-ordered escalation. Under the assump-
+tions of Section 4.2, an optimal policy has an Escalator structure in the setting with two configura-
+tions, two difficulty levels and a known prior. For general menus, Algorithm 1 constructs a schedule
+that follows the same Escalator structure and achieves a prior-free competitive guarantee.
+On five benchmark instances, OSCAR achieves 95% to 100% accuracy at the reported settings
+with two small LLMs. Its token costs are lower than those of Codex and Claude Code in our limited
+frontier-agent comparison. These findings support assessing available models with verification and
+iterative improvement before upgrading to frontier models for optimization modeling. Each of these
+LLMs can be deployed locally on a single GPU. Firms can choose local or cloud deployment to suit
+their cost and confidentiality requirements. Maintaining labeled decision examples alongside plain-
+language descriptions helps clarify business rules and supports Simulator construction. OSCAR’s
+28
+
+
+--- Page 29 ---
+simple operating rules and adjustable settings also help firms benefit as LLM capabilities and prices
+change.
+Three directions remain for future research. The first is to extend our focus from solution
+correctness on a single target instance to formulation correctness across all instances consistent
+with the problem description. This calls for a separate layer of the framework that develops and
+validates comprehensive verification procedures independently of formulation generation. A second
+direction is to improve computational performance. Formulation choices can substantially affect
+solver performance (Simchi-Levi et al. 2026). Future work could combine solve time with Simulator
+evaluations to guide the search toward formulations that are correct and efficient to solve. A third
+direction is to reduce manual data preparation. Future work could adapt the Simulator construction
+procedure to build and check data-reading routines, using tests that verify whether input data are
+interpreted correctly.
+References
+Abdul Rahman S, Andrade Cuellar SA, Raissov G, Raza M (2026) VeriSimpl: Robust optimization modeling from
+natural language using simplification-based verification. Proceedings of the 43rd International Conference on
+Machine Learning.
+Aggarwal P, Madaan A, Anand A, Potharaju SP, Mishra S, Zhou P, Gupta A, Rajagopal D, Kappaganthu K, Yang Y,
+Upadhyay S, Faruqui M, Mausam (2024) AutoMix: Automatically mixing language models. Advances in Neural
+Information Processing Systems (NeurIPS), volume 37, 131000–131034.
+AhmadiTeshnizi A, Gao W, Udell M (2024) OptiMUS: Scalable optimization modeling with (MI)LP solvers and large
+language models. International Conference on Machine Learning (ICML).
+Alizamir S, De V´ericourt F, Sun P (2013) Diagnostic accuracy under congestion. Management Science 59(1):157–171.
+Ao R, Simchi-Levi D, Wang X (2026) OptiRepair: Closed-loop diagnosis and repair of supply chain optimization
+models with LLM agents. arXiv preprint arXiv:2602.19439v2.
+Araman VF, Caldentey RA (2022) Diffusion approximations for a class of sequential experimentation problems.
+Management Science 68(8):5958–5979.
+Ball MO, Queyranne M (2009) Toward robust revenue management: Competitive analysis of online booking. Operations
+Research 57(4):950–963.
+Chen J, Jin S, Zhang G, Zhang J, Wang G, Qin H (2026) Automated reformulation of robust optimization via
+memory-augmented large language models. arXiv preprint arXiv:2605.11813 URL https://arxiv.org/
+abs/2605.11813.
+Chen L, Zaharia M, Zou J (2024) FrugalGPT: How to use large language models while reducing cost and improving
+performance. Transactions on Machine Learning Research.
+29
+
+
+--- Page 30 ---
+Chen Y, Xia J, Shao S, Ge D, Ye Y (2025) Solver-informed RL: Grounding large language models for authentic
+optimization modeling. Advances in Neural Information Processing Systems (NeurIPS).
+Fang Z, Wang J, Zhong J, Ong YS (2026) TriVAL: A tri-validation framework for faithful automatic optimization
+modeling. arXiv preprint arXiv:2605.23966v1.
+Goyal V, Iyengar G, Udwani R (2025) Asymptotically optimal competitive ratio for online allocation of reusable
+resources. Operations Research 73(4):1897–1915.
+Huang C, Tang Z, Hu S, Jiang R, Zheng X, Ge D, Wang B, Wang Z (2025a) ORLM: A customizable framework in
+training large models for automated optimization modeling. Operations Research 73(6):2986–3009.
+Huang X, Shen Q, Hu Y, Gao A, Wang B (2025b) LLMs for mathematical modeling: Towards bridging the gap
+between natural and mathematical languages. Findings of the Association for Computational Linguistics: NAACL
+2025, 2678–2710 (Association for Computational Linguistics), URL http://dx.doi.org/10.18653/
+v1/2025.findings-naacl.146.
+Jiang C, Shu X, Qian H, Lu X, Zhou J, Zhou A, Yu Y (2025) LLMOPT: Learning to define and solve general
+optimization problems from scratch. International Conference on Learning Representations (ICLR).
+Kong M, Jiang C, Qu A, Ouyang W, Zeng Z, Guo X, Li Z, Li J, Fan Y, Zheng X, et al. (2026) FrontierOR: Benchmarking
+LLMs’ capacity for efficient algorithm design in large-scale optimization. arXiv preprint arXiv:2605.25246.
+Lian JJ, Sun Y, Chen H, Zhang C, Qin H, Teo CP (2026) ReLoop: Structured modeling and behavioral verification for
+reliable LLM-based optimization. arXiv preprint arXiv:2602.15983v3.
+Liang K, Lu Y, Mao J, Sun S, Yang C, Zeng C, Jin X, Qin H, Zhu R, Teo CP (2026) Large-scale optimization model auto-
+formulation: Harnessing LLM flexibility via structured workflow. arXiv preprint arXiv:2601.09635v3 January
+31, 2026.
+Lin H, Gao Y, Zhang Y, Yuan K, Yan G, Chen S, Zhang L, E W (2026) OptMaster: A DAG-based framework
+for formulation and heuristic discovery in optimization. Proceedings of the 43rd International Conference on
+Machine Learning, URL https://openreview.net/forum?id=zvbuhAxwKy.
+Liu H, Wang J, Niu B, Han X, Xu Y, Ye M, Geng Z, Zhu F, Zhong T, Yuan M, Hao J (2026) Opt-Verifier: Unleashing
+the power of LLMs for optimization modeling via dual-side verification. Proceedings of the 43rd International
+Conference on Machine Learning (ICML).
+Luo X, He C, Geng D, Shi C, Mei Y (2026) Beyond objective equivalence: Constraint injection for LLM-based
+optimization modeling on vehicle routing problems. arXiv preprint arXiv:2606.04816 URL http://dx.doi.
+org/10.48550/arXiv.2606.04816.
+Monahan GE (1982) State of the art—a survey of partially observable markov decision processes: theory, models, and
+algorithms. Management science 28(1):1–16.
+Ong I, Almahairi A, Wu V, Chiang WL, Wu T, Gonzalez JE, Kadous MW, Stoica I (2025) RouteLLM: Learning to
+route LLMs with preference data. International Conference on Learning Representations (ICLR).
+30
+
+
+--- Page 31 ---
+Qwen Team (2026a) Qwen3.5-35B-A3B. Model card, Hugging Face, https://huggingface.co/Qwen/Qwen3.5-35B-A3B,
+accessed September 16, 2026.
+Qwen Team (2026b) Qwen3.6-35B-A3B: Agentic coding power, now open to all. Alibaba Cloud Community,
+https://www.alibabacloud.com/blog/qwen3-6-35b-a3b-agentic-coding-power-now-open-to-all 603043, accessed
+September 16, 2026.
+Ramamonjison R, Yu T, Li R, Li H, Carenini G, Ghaddar B, He S, Mostajabdaveh M, Banitalebi-Dehkordi A, Zhou
+Z, Zhang Y (2023) NL4Opt competition: Formulating optimization problems based on their natural language
+descriptions. Proceedings of the NeurIPS 2022 Competitions Track, volume 220 of Proceedings of Machine
+Learning Research, 189–203 (PMLR).
+Simchi-Levi D, Dai T, Menache I, Wu MX (2026) Democratizing optimization with generative AI. SSRN Working
+Paper 5511218 This version: May 22, 2026.
+Song Y, Cohen E (2026) CP-SynC: Multi-agent zero-shot constraint modeling in MiniZinc with synthesized checkers.
+arXiv preprint arXiv:2605.01675.
+Song Y, Vyas A, Wei Z, Khoshfetrat Pakazad S, Ohlsson H, Neubig G (2026) NEMO: Execution-aware optimization
+modeling via autonomous coding agents. Proceedings of the 43rd International Conference on Machine Learning.
+Xiao Z, Zhang D, Wu Y, Xu L, Wang YJ, Han X, Fu X, Zhong T, Zeng J, Song M, Chen G (2024) Chain-of-experts:
+When LLMs meet complex operations research problems. International Conference on Learning Representations
+(ICLR).
+Zhou C, Yang J, Xin L, Chen Y, He Z, Ge D (2026) Auto-formulating dynamic programming problems with large
+language models. arXiv preprint arXiv:2507.11737v2 April 1, 2026.
+31
+
+
+--- Page 32 ---
+E-Companion to “OR for AI That Does OR: Routing LLMs up the
+Escalator inside the OSCAR Framework”
+EC.1.
+Pseudocode for Simulator Construction and the OSCAR Framework
+Algorithms 2 and 3 describe Simulator construction and an OSCAR session. We first explain the optional
+partial decision examples and the checks on violation messages.
+Supplying partial decision examples
+Accepting complete feasible examples does not establish that every constraint is checked correctly, especially
+when no example approaches violating it. A partial decision example isolates a constraint in a fragment,
+such as a route or period, labeled as respecting or violating it. Pairs that differ in one respect are especially
+useful. A planner can supply fragments, or an LLM can draft them. Labels must be confirmed by the firm
+or derived from a perturbation of an existing labeled decision example, rather than accepted solely from
+the formulation models. During Simulator construction, partial examples carry a flag so that intentionally
+omitted decisions are not treated as errors. This flag is not used in OSCAR runs.
+Certifying violation messages
+Correct rejection labels alone do not provide enough feedback for revision. The Reviewer also needs an
+explanation that the Coder can act on.
+A separate LLM scores whether each message identifies the rule, location and magnitude without access
+to the code. The mean score must reach 𝑏. The scorer supplies replacement wording, which is returned
+to the writer instead of scores. These repairs may change wording only. Any repair that changes a label is
+discarded.
+Construction starts with the cheapest writer and advances after its round budget is exhausted. Some
+problems outside the benchmark study required human help during construction, mainly with formatting,
+suggesting an application of OSCAR to checking data-processing routines.
+Algorithm 2 Building the Simulator
+Require: description, target data, decision syntax, labeled decision examples and optional labeled partial
+decision examples, objective tolerance 𝜀, writer models in cost order with round budgets, and message-
+quality threshold 𝑏
+1: for each writer model in cost order do
+2:
+Ask it to write a Simulator from the description and decision syntax.
+3:
+repeat
+4:
+Repair errors that prevent execution.
+5:
+Check all examples for the correct feasible or infeasible label. Check a feasible example’s
+objective within 𝜀only if a value is reported.
+ec1
+
+
+--- Page 33 ---
+6:
+Empty each field in turn and randomly replace fields with values of the wrong type. Require
+malformed, while accepting harmless edits such as unused extra fields.
+7:
+Check only each marked fragment. Match its partial-feasible or partial-infeasible label,
+name the violated constraint when rejecting, and do not flag omitted parts.
+8:
+If a feasible example reports an objective, change that value by more than 2𝜀, leaving its decisions
+unchanged. Require inconsistent-objective. Otherwise skip this check.
+9:
+if every check passes then
+10:
+Have a separate LLM score rejection messages for rule, location and magnitude, and supply
+replacement wording.
+11:
+if the mean score is at least 𝑏then
+12:
+return the Simulator, fixed for subsequent OSCAR runs
+13:
+end if
+14:
+end if
+15:
+Ask the writer to revise the code using the failing cases and explanations. For message-only
+failures, supply replacement wording and preserve all labels.
+16:
+until this model’s round budget is reached
+17: end for
+18: return failure
+Algorithm 3 One OSCAR session
+Require: description, decision syntax, labeled decision examples, target instance, cost-ordered (Reviewer,
+Coder) pairs, attempts per pair, and restart interval 𝑟
+1: Preprocess the description into a parameter schema and build the Simulator by Algorithm 2.
+2: Ask a high-tier Coder for an initial formulation. Run, repair and evaluate it as below to initialize the
+incumbent and its feedback.
+3: repeat
+4:
+Begin a window with the incumbent as the starting formulation.
+5:
+for each pair in cost order and each attempt allowed at it do
+6:
+When the Coder’s tier increases, return to the incumbent.
+7:
+Give the Reviewer the starting formulation and its feedback, and obtain revision advice.
+8:
+Generate and run the revision. Repair execution errors with a low-tier LLM, escalating one tier
+after two failed rounds.
+9:
+A formulation returning no solution has the lowest rank and uses solver status as feedback,
+without a Simulator call. Otherwise evaluate the solution. Send malformed outputs back to repair
+without ranking them.
+10:
+if the candidate improves on the incumbent: a readable solution when the incumbent returns
+none, a feasible solution with a better objective, feasibility from an infeasible incumbent, or fewer
+violated rules while both are infeasible then
+ec2
+
+
+--- Page 34 ---
+11:
+Update the incumbent and immediately start a new window
+12:
+else
+13:
+Use this draft and its feedback for the next attempt
+14:
+end if
+15:
+end for
+16:
+If the menu ends without improvement in a Type 1 window (opened without a feasible solution),
+repeat the final pair until improvement, returning to the incumbent every 𝑟uncertified attempts.
+17: until a Type 2 window (opened feasible) exhausts its menu without improvement
+18: return the incumbent
+EC.2.
+Proofs of the Known-Prior Optimality Result (Section 4.2)
+EC.2.1.
+Proof of Lemma 1
+Recall that 𝐽𝑘(𝛽) is the maximum expected net reward from belief 𝛽with at most 𝑘additional calls permitted.
+We establish the following inequalities:
+0 ≤𝐽∞(𝛽) −𝐽𝑘(𝛽) ≤𝐺(1 −𝛽𝑜)
+
+1 −
+min
+𝑎∈A,𝜃∈D 𝑞𝑎,𝜃
+ 𝑘
+.
+(EC.1)
+Since 0 < 𝑞𝑎,𝜃< 1 for any 𝑎∈A and 𝜃∈D, the above inequality implies lim𝑘→∞𝐽𝑘(𝛽) = 𝐽∞(𝛽). By letting
+𝑘→∞in each side of the finite-horizon Bellman equation in (6), we have
+𝐽∞(𝛽) = lim
+𝑘→∞𝐽𝑘(𝛽) = lim
+𝑘→∞max
+
+0, (L𝐴𝐽𝑘−1)(𝛽), (L𝐵𝐽𝑘−1)(𝛽)
+	
+= max{0, (L𝐴𝐽∞)(𝛽), (L𝐵𝐽∞)(𝛽)},
+where the last identity follows because lim𝑘→∞𝐽𝑘−1(𝑇𝑎(𝛽)) = 𝐽∞(𝑇𝑎(𝛽)) implies lim𝑘→∞(L𝑎𝐽𝑘−1)(𝛽) =
+(L𝑎𝐽∞)(𝛽) for each 𝑎∈{𝐴, 𝐵}, and taking the maximum over finitely many terms preserves the convergence.
+To see the lower bound in (EC.1), note that every plan permitting at most 𝑘calls is feasible in the infinite-
+horizon problem, which gives 𝐽∞(𝛽) ≥𝐽𝑘(𝛽) by the definition of 𝐽∞(𝛽). For the upper bound, truncate any
+admissible infinite-horizon plan 𝜋after 𝑘calls and denote this truncated policy by 𝜋(𝑘). Then we have the
+following inequality for any belief 𝛽:
+𝑉𝛽(𝜋) −𝐽𝑘(𝛽) ≤𝑉𝛽(𝜋) −𝑉𝛽(𝜋(𝑘)) ≤𝐺(1 −𝛽𝑜)
+
+1 −
+min
+𝑎∈A,𝜃∈D 𝑞𝑎,𝜃
+ 𝑘
+.
+(EC.2)
+Here, the first inequality holds because from its definition, 𝐽𝑘(𝛽) is the maximum expected net reward with
+𝑘available calls, which is no less than the expected net reward of 𝜋(𝑘). The second inequality holds because
+any additional reward under 𝜋requires an improvable state 𝜃∈D and failure of the first 𝑘calls, an event
+with the following probability:
+∑︁
+𝜃∈D
+𝛽𝜃
+𝑘
+Ö
+𝑖=1
+(1 −𝑞𝑎𝑖,𝜃) ≤
+
+1 −
+min
+𝑎∈A,𝜃∈D 𝑞𝑎,𝜃
+ 𝑘
+·
+∑︁
+𝜃∈D
+𝛽𝜃= (1 −𝛽𝑜)
+
+1 −
+min
+𝑎∈A,𝜃∈D 𝑞𝑎,𝜃
+ 𝑘
+.
+On this event, continuing can yield at most one additional reward 𝐺and incurs nonnegative calling costs.
+Taking the supremum over all routing plans in (EC.2) gives the upper bound in (EC.1).
+Q.E.D.
+ec3
+
+
+--- Page 35 ---
+EC.2.2.
+Proof of Lemma 2
+For 𝑖, 𝑗∈{𝐴, 𝐵} with 𝑖≠𝑗, expanding the two Bellman operators gives
+(L𝑖L 𝑗𝑓)(𝛽) = −𝑐𝑖+ 𝐺𝑝𝑖(𝛽) + (1 −𝑝𝑖(𝛽))
+h
+−𝑐𝑗+ 𝐺𝑝𝑗(𝑇𝑖(𝛽)) + (1 −𝑝𝑗(𝑇𝑖(𝛽))) 𝑓(𝑇𝑗(𝑇𝑖(𝛽)))
+i
+= −𝑐𝑖−(1 −𝑝𝑖(𝛽))𝑐𝑗
+|                   {z                   }
+expected calling cost
++𝐺
+h
+𝑝𝑖(𝛽) + (1 −𝑝𝑖(𝛽))𝑝𝑗(𝑇𝑖(𝛽))
+i
+|                                       {z                                       }
+expected success reward
++ (1 −𝑝𝑖(𝛽))(1 −𝑝𝑗(𝑇𝑖(𝛽))) 𝑓(𝑇𝑗(𝑇𝑖(𝛽)))
+|                                                {z                                                }
+continuation value
+.
+(EC.3)
+We first show that the expected success reward and continuation-value components in the second and
+third terms of (EC.3) are invariant to the order of the two calls. By the posterior update rule,
+𝑝𝑖(𝛽) + (1 −𝑝𝑖(𝛽))𝑝𝑗(𝑇𝑖(𝛽)) =
+∑︁
+𝜃∈Θ
+𝛽𝜃
+
+𝑞𝑖,𝜃+ (1 −𝑞𝑖,𝜃)𝑞𝑗,𝜃
+
+=
+∑︁
+𝜃∈Θ
+𝛽𝜃
+
+1 −(1 −𝑞𝑖,𝜃)(1 −𝑞𝑗,𝜃)
+
+.
+Since the final expression is symmetric in 𝑖and 𝑗, the two orders generate the same expected success reward.
+Similarly, the probability that both calls fail is
+(1 −𝑝𝑖(𝛽))(1 −𝑝𝑗(𝑇𝑖(𝛽))) =
+∑︁
+𝜃∈Θ
+𝛽𝜃(1 −𝑞𝑖,𝜃)(1 −𝑞𝑗,𝜃),
+which is also symmetric in 𝑖and 𝑗. Conditional on both failures, the posterior belief is
+𝑇𝑗(𝑇𝑖(𝛽))𝜃=
+𝛽𝜃(1 −𝑞𝑖,𝜃)(1 −𝑞𝑗,𝜃)
+Í
+𝜃′∈Θ 𝛽𝜃′(1 −𝑞𝑖,𝜃′)(1 −𝑞𝑗,𝜃′) ,
+𝜃∈Θ.
+Hence, 𝑇𝑗(𝑇𝑖(𝛽)) = 𝑇𝑖(𝑇𝑗(𝛽)), and the continuation value in (EC.3) is also invariant to the order.
+It then only suffices to bound the expected calling-cost difference. In this case,
+(L𝐴L𝐵𝑓)(𝛽) −(L𝐵L𝐴𝑓)(𝛽) = [−𝑐𝐴−(1 −𝑝𝐴(𝛽))𝑐𝐵] −[−𝑐𝐵−(1 −𝑝𝐵(𝛽))𝑐𝐴]
+= 𝑐𝐵𝑝𝐴(𝛽) −𝑐𝐴𝑝𝐵(𝛽).
+Using 𝑝𝑎(𝛽) = Í
+𝜃∈Θ 𝛽𝜃𝑞𝑎,𝜃, 𝑞𝐴,𝑜= 𝑞𝐵,𝑜= 0, and 𝑐𝑎= 𝑞𝑎,𝜃𝛾𝑎,𝜃, we obtain
+𝑐𝐵𝑝𝐴(𝛽) −𝑐𝐴𝑝𝐵(𝛽) =
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃
+ 𝑐𝐵𝑞𝐴,𝜃−𝑐𝐴𝑞𝐵,𝜃
+ =
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃𝑞𝐴,𝜃𝑞𝐵,𝜃
+ 𝛾𝐵,𝜃−𝛾𝐴,𝜃
+,
+which proves (7).
+Since the prior has full support, every reachable posterior satisfies 𝛽𝑒> 0. Dividing the last expression in
+(7) by 𝛽𝑒yields 𝐷(𝜆), with 𝜆= 𝛽ℎ/𝛽𝑒. After a failed call to model 𝑎,
+𝜆(𝑇𝑎(𝛽)) = 𝜆(𝛽) 1 −𝑞𝑎,ℎ
+1 −𝑞𝑎,𝑒
+> 𝜆(𝛽),
+(EC.4)
+where the inequality follows from Assumption 1(i). Finally, Assumption 1(iii) excludes 𝛾𝐵,𝑒< 𝛾𝐴,𝑒and
+𝛾𝐵,ℎ> 𝛾𝐴,ℎfrom holding simultaneously. Thus, the affine function 𝐷(𝜆) cannot cross zero from negative
+to positive as 𝜆increases. Along an all-failure path, it can therefore cross zero at most once, and only from
+nonnegative to nonpositive.
+Q.E.D.
+ec4
+
+
+--- Page 36 ---
+EC.2.3.
+Proof of Lemma 3
+We note that Assumption 1(ii) implies 𝑝𝐵(𝛽) ≥𝑝𝐴(𝛽). Moreover, the two inequalities in the statement imply
+𝐺≥𝑐𝐴/𝑝𝐴(𝛽) ≥𝑐𝐵/𝑝𝐵(𝛽). Therefore,
+𝐺𝑝𝐵(𝛽) −𝑐𝐵= 𝑝𝐵(𝛽)
+
+𝐺−
+𝑐𝐵
+𝑝𝐵(𝛽)
+
+≥𝑝𝐴(𝛽)
+
+𝐺−
+𝑐𝐵
+𝑝𝐵(𝛽)
+
+≥𝐺𝑝𝐴(𝛽) −𝑐𝐴.
+Since the replaced call is terminal, no further cost is incurred. This completes the proof of Lemma 3.
+Q.E.D.
+EC.2.4.
+Proof of the Escalator Structure in Equation (9) of Theorem 1
+To prove equation (9), we first establish a counterpart result in a finite-horizon problem with at most 𝑘< ∞
+calls permitted in the remaining improvement window. Then we extend the result to the infinite-horizon
+problem with no restriction on the number of available calls.
+Step 1: analysis for the finite-horizon problem. For the fixed posterior belief 𝛽, suppose at most 𝑘calls are
+allowed to make, and denote the optimal deterministic routing policy by the following action sequence along
+its all-failure path:
+(𝑎1, . . . , 𝑎𝑛;stop),
+0 ≤𝑛≤𝑘.
+(EC.5)
+We will prove that the optimal policy can be chosen in the following form:
+ 𝐴, . . . , 𝐴
+|    {z    }
+𝑛𝐴calls
+, 𝐵, . . . , 𝐵
+|   {z   }
+𝑛𝐵calls
+;stop,
+0 ≤𝑛𝐴+ 𝑛𝐵≤𝑘.
+(EC.6)
+We first show that an optimal plan can be chosen to have the following form:
+ 𝐴, . . . , 𝐴
+|    {z    }
+𝑟calls
+, 𝐵, . . . , 𝐵
+|   {z   }
+𝑠calls
+, 𝐴, . . . , 𝐴
+|    {z    }
+𝑢calls
+;stop,
+0 ≤𝑟+ 𝑠+ 𝑢≤𝑘.
+(EC.7)
+For convenience, we use 𝐴𝑟𝐵𝑠𝐴𝑢to denote the form in (EC.7). For each call 𝑡on the all-failure path, let 𝛽𝑡
+denote the posterior belief immediately before call 𝑡, with 𝛽1 = 𝛽, and define
+𝜆𝑡:= 𝛽𝑡,ℎ
+𝛽𝑡,𝑒
+.
+By Lemma 2 and the optimality of the continuation, any adjacent transition must satisfy
+𝑎𝑡𝑎𝑡+1 = 𝐴𝐵=⇒𝐷(𝜆𝑡) ≥0,
+𝑎𝑡𝑎𝑡+1 = 𝐵𝐴=⇒𝐷(𝜆𝑡) ≤0.
+Along the all-failure path, by inequality (EC.4), 𝜆𝑡is strictly increasing. Moreover, by Assumption 1(iii),
+𝐷(𝜆) cannot change sign from negative to positive as 𝜆increases. Consequently, a 𝐵𝐴transition cannot
+precede a later 𝐴𝐵transition. To see this, suppose that such transitions occurred at positions 𝑖< 𝑗. If 𝐷(·) . 0,
+optimality would require 𝐷(𝜆𝑖) ≤0 and 𝐷(𝜆𝑗) ≥0, which contradicts the single-crossing property because
+𝜆𝑗> 𝜆𝑖. If 𝐷(·) ≡0, Lemma 2 implies that every adjacent interchange is value-neutral, so the calls can be
+ec5
+
+
+--- Page 37 ---
+reordered without changing the value. Because transitions in a binary action sequence alternate, the absence
+of a 𝐵𝐴transition followed by a later 𝐴𝐵transition implies that there exists a value-equivalent optimal
+continuation with at most three blocks, ordered 𝐴, 𝐵, and 𝐴. Hence, the optimal routing plan has the form
+in (EC.7).
+If 𝑠= 0, the sequence in (EC.7) reduces to 𝐴𝑟+𝑢, so the result follows with 𝑛𝐴= 𝑟+𝑢and 𝑛𝐵= 0. If 𝑢= 0,
+it already has the Escalator form 𝐴𝑟𝐵𝑠. It remains to eliminate the terminal 𝐴-block when 𝑠> 0 and 𝑢> 0.
+Consider the 𝐵𝐴transition between the 𝐵𝑠-block and the terminal 𝐴𝑢-block. The calls at positions 𝑟+ 𝑠
+and 𝑟+ 𝑠+ 1 form this 𝐵𝐴pair, and 𝛽𝑟+𝑠is the posterior belief immediately before the pair. Optimality and
+Lemma 2 imply 𝐷(𝜆𝑟+𝑠) ≤0. By inequality (EC.4), we further have
+𝐷 𝜆𝑡
+ ≤0,
+∀𝑡= 𝑟+ 𝑠, . . . ,𝑟+ 𝑠+ 𝑢.
+(EC.8)
+Since 𝛽𝑟+𝑠+𝑢is the posterior belief immediately before the last call to 𝐴, and this call is followed by stopping
+if it fails, we then have
+𝐺𝑝𝐴(𝛽𝑟+𝑠+𝑢) −𝑐𝐴≥0.
+(EC.9)
+Moreover, 𝐷(𝜆𝑟+𝑠+𝑢) ≤0 according to (EC.8). Since the difference in Lemma 2 satisfies 𝑐𝐵𝑝𝐴(𝛽𝑟+𝑠+𝑢) −
+𝑐𝐴𝑝𝐵(𝛽𝑟+𝑠+𝑢) = 𝛽𝑟+𝑠+𝑢,𝑒𝐷(𝜆𝑟+𝑠+𝑢), we obtain
+𝑐𝐵
+𝑝𝐵(𝛽𝑟+𝑠+𝑢) ≤
+𝑐𝐴
+𝑝𝐴(𝛽𝑟+𝑠+𝑢) .
+(EC.10)
+Therefore, the two conditions in Lemma 3 are satisfied. Hence, replacing the terminal call to 𝐴by a call
+to 𝐵does not decrease the expected value. Because the original policy is optimal, the modified policy
+𝐴𝑟𝐵𝑠𝐴𝑢−1𝐵is also optimal.
+We next move the newly introduced 𝐵-call in the last position leftward through the remaining 𝑢−1
+terminal 𝐴-calls. When this 𝐵-call is adjacent to the 𝑗th 𝐴-call in the terminal block, counted from the left,
+the sequence has the form
+𝐴𝑟𝐵𝑠𝐴𝑗−1(𝐴𝐵)𝐴𝑢−1−𝑗,
+𝑗= 𝑢−1, . . . ,1.
+The displayed 𝐴𝐵pair is reached after the failure sequence 𝐴𝑟𝐵𝑠𝐴𝑗−1, and hence at posterior 𝛽𝑟+𝑠+𝑗.
+Because this sequence is unchanged from the original plan, (EC.8) gives 𝐷(𝜆𝑟+𝑠+ 𝑗) ≤0. Lemma 2 therefore
+implies that replacing this 𝐴𝐵pair by 𝐵𝐴does not decrease the expected value. Since the current plan
+is already optimal, each such interchange must preserve the optimal value. Sequentially applying these
+interchanges for 𝑗= 𝑢−1, . . . , 1 transforms
+𝐴𝑟𝐵𝑠𝐴𝑢−1𝐵
+into
+𝐴𝑟𝐵𝑠+1𝐴𝑢−1.
+If the resulting terminal 𝐴-block is nonempty, the same argument can be applied again using the posterior
+beliefs along the new optimal plan. Repeating this procedure until the terminal 𝐴-block is empty yields the
+ec6
+
+
+--- Page 38 ---
+optimal sequence 𝐴𝑟𝐵𝑠+𝑢. Setting 𝑛𝐴= 𝑟and 𝑛𝐵= 𝑠+ 𝑢, and noting that 0 ≤𝑛𝐴+ 𝑛𝐵= 𝑟+ 𝑠+ 𝑢≤𝑘, proves
+(EC.6).
+Step 2: extension to the infinite-horizon problem. Fix a reachable belief 𝛽. From Step 1, for each problem
+with 𝑛≥1 available calls, we have an optimal plan in the following form:
+𝜋𝑛= (𝐴𝑟𝑛𝐵𝑠𝑛;stop),
+0 ≤𝑟𝑛+ 𝑠𝑛≤𝑛.
+We next consider two cases: 𝛽𝑜= 0 corresponding to Type 1 window, and 𝛽𝑜> 0, corresponding to Type 2
+window.
+Case 1: 𝛽𝑜= 0. For finite 𝑟, 𝑠≥0 and 𝜃∈{𝑒, ℎ}, the expected net reward is
+𝑉(𝐴𝑟𝐵𝑠;stop | 𝜃) = 𝐺[1 −(1 −𝑞𝐴,𝜃)𝑟(1 −𝑞𝐵,𝜃)𝑠] −𝑐𝐴
+𝑟−1
+∑︁
+𝑖=0
+(1 −𝑞𝐴,𝜃)𝑖−𝑐𝐵(1 −𝑞𝐴,𝜃)𝑟
+𝑠−1
+∑︁
+𝑖=0
+(1 −𝑞𝐵,𝜃)𝑖
+= (𝐺−𝛾𝐴,𝜃)
+
+1 −(1 −𝑞𝐴,𝜃)𝑟
++ (1 −𝑞𝐴,𝜃)𝑟(𝐺−𝛾𝐵,𝜃)
+
+1 −(1 −𝑞𝐵,𝜃)𝑠
+,
+(EC.11)
+where the second identity follows by applying the definition of 𝛾𝑎,𝜃and some simple algebra. We next
+construct a fixed admissible Escalator plan 𝜋∗and prove that 𝑉𝛽(𝜋∗) = 𝐽∞(𝛽).
+Suppose first that {𝑟𝑛} is unbounded. Choose an increasing sequence of indices {𝑛𝑗} such that 𝑟𝑛𝑗→∞,
+and define 𝜋∗:= 𝐴∞. Then 𝑉(𝜋∗| 𝜃) = 𝐺−𝑐𝐴
+Í∞
+𝑖=0(1 −𝑞𝐴,𝜃)𝑖= 𝐺−𝛾𝐴,𝜃. By applying (EC.11) to 𝜋𝑛𝑗=
+𝐴𝑟𝑛𝑗𝐵𝑠𝑛𝑗, we further have
+𝑉(𝜋𝑛𝑗| 𝜃) −𝑉(𝜋∗| 𝜃)
+ =
+(1 −𝑞𝐴,𝜃)𝑟𝑛𝑗 𝛾𝐴,𝜃−𝛾𝐵,𝜃−(𝐺−𝛾𝐵,𝜃)(1 −𝑞𝐵,𝜃)𝑠𝑛𝑗
+≤(1 −𝑞𝐴,𝜃)𝑟𝑛𝑗 |𝛾𝐴,𝜃−𝛾𝐵,𝜃| + |𝐺−𝛾𝐵,𝜃| −→0,
+𝑗→∞.
+Now suppose that {𝑟𝑛} is bounded. Since 𝑟𝑛is a nonnegative integer, there exists a finite integer 𝑟which
+occurs infinitely often. Choose an increasing sequence of indices {𝑛𝑗} such that 𝑟𝑛𝑗= 𝑟for every 𝑗. If {𝑠𝑛𝑗}
+is unbounded, pass to a further subsequence, retaining the notation {𝑛𝑗}, such that 𝑠𝑛𝑗→∞. Define the fixed
+plan 𝜋∗:= 𝐴𝑟𝐵∞. Then
+𝑉(𝜋∗| 𝜃) = −𝑐𝐴
+𝑟−1
+∑︁
+𝑖=0
+(1 −𝑞𝐴,𝜃)𝑖+ 𝐺−𝑐𝐵(1 −𝑞𝐴,𝜃)𝑟
+∞
+∑︁
+𝑖=0
+(1 −𝑞𝐵,𝜃)𝑖
+= 𝐺−𝛾𝐴,𝜃−(1 −𝑞𝐴,𝜃)𝑟(𝛾𝐵,𝜃−𝛾𝐴,𝜃).
+(EC.12)
+By applying (EC.11) to 𝜋𝑛𝑗, we further have
+𝑉(𝜋𝑛𝑗| 𝜃) −𝑉(𝜋∗| 𝜃)
+ = (1 −𝑞𝐴,𝜃)𝑟|𝐺−𝛾𝐵,𝜃|(1 −𝑞𝐵,𝜃)𝑠𝑛𝑗−→0,
+𝑗→∞.
+If instead {𝑠𝑛𝑗} is bounded, some finite integer 𝑠occurs infinitely often. Passing to that subsequence and
+retaining the notation {𝑛𝑗}, define 𝜋∗:= (𝐴𝑟𝐵𝑠;stop). Then 𝜋𝑛𝑗= 𝜋∗for every 𝑗, so 𝑉(𝜋𝑛𝑗| 𝜃) = 𝑉(𝜋∗| 𝜃).
+ec7
+
+
+--- Page 39 ---
+To conclude, in either case, we have constructed a fixed admissible Escalator plan 𝜋∗for the infinite-
+horizon problem and a subsequence with 𝑛𝑗→∞such that lim 𝑗→∞𝑉(𝜋𝑛𝑗| 𝜃) = 𝑉(𝜋∗| 𝜃) for 𝜃∈{𝑒, ℎ}.
+Since 𝛽𝑜= 0, it follows that
+𝑉𝛽(𝜋∗) =
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃𝑉(𝜋∗| 𝜃) = lim
+𝑗→∞
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃𝑉(𝜋𝑛𝑗| 𝜃) = lim
+𝑗→∞𝐽𝑛𝑗(𝛽) = 𝐽∞(𝛽),
+where the third identity follows from the optimality of 𝜋𝑛𝑗, and the last identity follows from Lemma 1.
+Therefore, 𝜋∗attains the infinite-horizon optimal value and has the claimed Escalator structure.
+Case 2: 𝛽𝑜> 0. Since every call fails in state 𝑜, all 𝑟𝑛+ 𝑠𝑛prescribed calls are made, and hence 𝑉(𝜋𝑛| 𝑜) =
+−(𝑐𝐴𝑟𝑛+ 𝑐𝐵𝑠𝑛). Using the statewise reward expression in the first identity of (EC.11) established in Case 1
+for 𝜃∈{𝑒, ℎ}, we obtain
+𝑉𝛽(𝜋𝑛) =
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃𝑉(𝜋𝑛| 𝜃) + 𝛽𝑜𝑉(𝜋𝑛| 𝑜)
+= 𝐺
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃
+
+1 −(1 −𝑞𝐴,𝜃)𝑟𝑛(1 −𝑞𝐵,𝜃)𝑠𝑛
+−𝑐𝐴
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃
+𝑟𝑛−1
+∑︁
+𝑖=0
+(1 −𝑞𝐴,𝜃)𝑖
+−𝑐𝐵
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃(1 −𝑞𝐴,𝜃)𝑟𝑛
+𝑠𝑛−1
+∑︁
+𝑖=0
+(1 −𝑞𝐵,𝜃)𝑖−𝛽𝑜(𝑐𝐴𝑟𝑛+ 𝑐𝐵𝑠𝑛)
+≤𝐺
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃
+
+1 −(1 −𝑞𝐴,𝜃)𝑟𝑛(1 −𝑞𝐵,𝜃)𝑠𝑛
+−𝛽𝑜(𝑐𝐴𝑟𝑛+ 𝑐𝐵𝑠𝑛)
+≤𝐺
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃−𝛽𝑜(𝑐𝐴𝑟𝑛+ 𝑐𝐵𝑠𝑛) ≤𝐺(1 −𝛽𝑜) −𝛽𝑜𝑐𝐴(𝑟𝑛+ 𝑠𝑛),
+where the last inequality uses 𝛽𝑒+ 𝛽ℎ= 1 −𝛽𝑜and 𝑐𝐵≥𝑐𝐴. Since 0 ≤𝐽𝑛(𝛽) = 𝑉𝛽(𝜋𝑛) from the optimality
+of 𝜋𝑛, we then have
+𝑟𝑛+ 𝑠𝑛≤𝐺(1 −𝛽𝑜)
+𝛽𝑜𝑐𝐴
+,
+𝑛≥1.
+(EC.13)
+Thus, both {𝑟𝑛} and {𝑠𝑛} are bounded over 𝑛. The same bounded-integer subsequence argument as in Case 1
+yields finite nonnegative integers 𝑟, 𝑠and a subsequence with 𝑛𝑗→∞such that
+𝜋𝑛𝑗= 𝜋∗:= (𝐴𝑟𝐵𝑠;stop)
+for every 𝑗.
+(EC.14)
+Therefore, we have the following equation:
+𝑉𝛽(𝜋∗) =
+∑︁
+𝜃∈{𝑒,ℎ,𝑜}
+𝛽𝜃𝑉(𝜋∗| 𝜃) = lim
+𝑗→∞
+∑︁
+𝜃∈{𝑒,ℎ,𝑜}
+𝛽𝜃𝑉(𝜋𝑛𝑗| 𝜃) = lim
+𝑗→∞𝐽𝑛𝑗(𝛽) = 𝐽∞(𝛽),
+where the second identity follows from (EC.14), the third identity follows from the optimality of 𝜋𝑛𝑗and
+the definition of 𝐽𝑛𝑗(𝛽), and the last identity follows from Lemma 1. Hence, the constructed Escalator plan
+𝜋∗= (𝐴𝑟𝐵𝑠;stop) attains the infinite-horizon optimal value. This completes the proof of (9) when 𝛽𝑜> 0.
+Q.E.D.
+ec8
+
+
+--- Page 40 ---
+EC.2.5.
+Proof of Parts (i) and (ii) in Theorem 1
+Proof of part (i). Since 𝜇𝑜= 0, Bayes’ rule implies 𝛽𝑜= 0 at every reachable belief 𝛽. Repeatedly calling 𝐵
+until success has the following expected net reward:
+𝑉𝛽(𝐵∞) = 𝐺−
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃· 𝑐𝐵
+∞
+∑︁
+𝑖=0
+(1 −𝑞𝐵,𝜃)𝑖= 𝐺−
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃𝛾𝐵,𝜃≥𝐺−𝛾𝐵,ℎ≥0,
+(EC.15)
+where the two inequalities follow from Assumption 1(i) and (iv), respectively. Since immediate stopping
+yields zero, stopping before success is never strictly optimal.
+By the structural result already established in Appendix EC.2.4, an optimal plan is either a finite Escalator
+plan (𝐴𝑟𝐵𝑠;stop) for finite 𝑟and 𝑠, 𝐴𝑟𝐵∞, or 𝐴∞. If the optimal plan is finite, replace its terminal stop
+by repeated calls to 𝐵until success. Conditional on reaching that stop, the additional expected net reward
+is nonnegative by inequality (EC.15) applied at the corresponding posterior. The extended plan therefore
+remains optimal and has the form 𝐴𝑟𝐵∞. Thus, an optimal plan can be chosen with 𝑛𝐴= ∞or 𝑛𝐵= ∞, with
+𝑛𝐴= ∞interpreted as 𝐴∞.
+Finally, suppose that 𝛾𝐵,ℎ< 𝛾𝐴,ℎ. Note that by the definition of the prior 𝜇, 𝜇ℎ> 0. Bayes’ rule then
+implies 𝛽ℎ> 0 at every reachable belief. For each finite non-negative integer 𝑟, by applying (EC.12) and
+(EC.15) modified to 𝐴, we have
+𝑉𝛽(𝐴𝑟𝐵∞) −𝑉𝛽(𝐴∞) =
+∑︁
+𝜃∈{𝑒,ℎ}
+𝛽𝜃(1 −𝑞𝐴,𝜃)𝑟(𝛾𝐴,𝜃−𝛾𝐵,𝜃)
+= (1 −𝑞𝐴,ℎ)𝑟
+
+𝛽ℎ(𝛾𝐴,ℎ−𝛾𝐵,ℎ) + 𝛽𝑒
+ 1 −𝑞𝐴,𝑒
+1 −𝑞𝐴,ℎ
+𝑟
+(𝛾𝐴,𝑒−𝛾𝐵,𝑒)
+
+.
+By Assumption 1(i), 0 < (1 −𝑞𝐴,𝑒)/(1 −𝑞𝐴,ℎ) < 1. The expression in brackets therefore converges to
+𝛽ℎ(𝛾𝐴,ℎ−𝛾𝐵,ℎ) > 0 as 𝑟→∞. Since (1 −𝑞𝐴,ℎ)𝑟> 0 for every finite 𝑟, the whole difference is strictly
+positive for all sufficiently large finite 𝑟. Since an optimal non-stopping Escalator plan exists by the preceding
+argument and 𝐴∞is not optimal, such a plan has the form 𝐴𝑟𝐵∞for finite 𝑟. Thus, 𝑛𝐴can be chosen to be
+finite.
+Proof of part (ii). Let 𝜋be any optimal deterministic plan, with 𝑁calls along its all-failure path. Since
+𝜇𝑜> 0, an infinite plan has value −∞and cannot be optimal. Thus, 𝑁is finite. Success is impossible in state
+𝑜, where all scheduled calling costs are incurred. Since immediate stopping yields zero,
+0 ≤𝑉𝜇(𝜋) ≤𝐺(1 −𝜇𝑜) −𝜇𝑜
+𝑁
+∑︁
+𝑖=1
+𝑐𝑎𝑖≤𝐺(1 −𝜇𝑜) −𝜇𝑜𝑐𝐴𝑁.
+Hence, 𝑁≤⌊𝐺(1 −𝜇𝑜)/(𝜇𝑜𝑐𝐴)⌋, as claimed.
+Q.E.D.
+EC.2.6.
+Proof of Corollary 1
+We first show that an optimal Escalator plan can be chosen to have 𝑛𝐴≥1. For any nonempty 𝐵-only plan,
+including 𝐵∞, the expected reward from certified improvement is at most 𝐺(1−𝜇𝑜), and the first call incurs
+cost 𝑐𝐵. Its expected net reward is therefore at most 𝐺(1 −𝜇𝑜) −𝑐𝐵. By assumption,
+𝑉𝜇(𝐴;stop) = 𝐺𝑝𝐴(𝜇) −𝑐𝐴≥max{0, 𝐺(1 −𝜇𝑜) −𝑐𝐵}.
+ec9
+
+
+--- Page 41 ---
+Thus, one call to 𝐴followed by stopping weakly dominates both immediate stopping and every 𝐵-only plan.
+By Theorem 1, an optimal Escalator plan exists. If its 𝐴-block is empty, replacing it by (𝐴;stop) preserves
+optimality. Hence, an optimal Escalator plan can be chosen to begin with 𝐴.
+Proof of part (i). Consider a Type 1 window and an optimal plan beginning with 𝐴. Its continuation after the
+first call fails must be optimal at 𝑇𝐴(𝜇). Under Assumption 1(iv) and 𝛾𝐵,ℎ< 𝛾𝐴,ℎ, Theorem 1(i), applied at
+𝑇𝐴(𝜇), implies that this continuation can be chosen as 𝐴𝑟𝐵∞for some finite 𝑟≥0. Combining it with the
+initial call to 𝐴gives the optimal plan 𝐴𝑟+1𝐵∞, proving part (i).
+Proof of part (ii). Consider a Type 2 window. By Theorem 1(ii), the optimal plan is finite. If it contains a
+call to 𝐵, the result directly holds. We next consider an optimal plan with only calls to 𝐴.
+We first show that (𝐴𝑛0;stop) is optimal. By the definition of 𝑝𝐴(𝛽) in equation (2) and the Bayesian
+update rule in equation (3),
+𝑝𝐴(𝑇𝐴(𝛽)) =
+∑︁
+𝜃∈Θ
+(𝑇𝐴(𝛽))𝜃𝑞𝐴,𝜃=
+Í
+𝜃∈Θ 𝛽𝜃(1 −𝑞𝐴,𝜃)𝑞𝐴,𝜃
+1 −𝑝𝐴(𝛽)
+=
+𝑝𝐴(𝛽) −Í
+𝜃∈Θ 𝛽𝜃𝑞2
+𝐴,𝜃
+1 −𝑝𝐴(𝛽)
+.
+Consequently, the difference in the posterior success probabilities has the following expression:
+𝑝𝐴(𝛽) −𝑝𝐴(𝑇𝐴(𝛽)) = 𝑝𝐴(𝛽) −
+𝑝𝐴(𝛽) −Í
+𝜃∈Θ 𝛽𝜃𝑞2
+𝐴,𝜃
+1 −𝑝𝐴(𝛽)
+=
+Í
+𝜃∈Θ 𝛽𝜃𝑞2
+𝐴,𝜃−(𝑝𝐴(𝛽))2
+1 −𝑝𝐴(𝛽)
+=
+Í
+𝜃∈Θ 𝛽𝜃(𝑞𝐴,𝜃−𝑝𝐴(𝛽))2
+1 −𝑝𝐴(𝛽)
+≥0,
+where the last equality uses Í
+𝜃∈Θ 𝛽𝜃= 1 and Í
+𝜃∈Θ 𝛽𝜃𝑞𝐴,𝜃= 𝑝𝐴(𝛽), and the inequality follows from 1 −
+𝑝𝐴(𝛽) > 0. Thus, 𝑝𝐴(𝑇𝐴(𝛽)) ≤𝑝𝐴(𝛽). By repeatedly applying this argument, we conclude that 𝑝𝐴(𝑇𝑛
+𝐴(𝜇))
+is non-increasing in 𝑛. Note that
+𝑝𝐴(𝑇𝑛
+𝐴(𝜇)) =
+Í
+𝜃∈{𝑒,ℎ} 𝜇𝜃𝑞𝐴,𝜃(1 −𝑞𝐴,𝜃)𝑛
+Í
+𝜃∈Θ 𝜇𝜃(1 −𝑞𝐴,𝜃)𝑛
+=
+Í
+𝜃∈{𝑒,ℎ} 𝜇𝜃𝑞𝐴,𝜃(1 −𝑞𝐴,𝜃)𝑛
+𝜇𝑜+ Í
+𝜃∈{𝑒,ℎ} 𝜇𝜃(1 −𝑞𝐴,𝜃)𝑛−→0.
+Since 𝜇𝑜> 0 for Type 2 window, 𝑛0 defined in part (ii) is finite. Then for every integer 𝑛≥0, appending one
+𝐴-call to (𝐴𝑛;stop) changes its expected net reward by
+𝑉𝜇(𝐴𝑛+1;stop) −𝑉𝜇(𝐴𝑛;stop) =
+"∑︁
+𝜃∈Θ
+𝜇𝜃(1 −𝑞𝐴,𝜃)𝑛
+#
+
+𝐺𝑝𝐴(𝑇𝑛
+𝐴(𝜇)) −𝑐𝐴
+
+.
+By the definition of 𝑛0 and the monotonicity established above, the second bracket in the RHS of the
+above equation is non-negative for 0 ≤𝑛< 𝑛0 and non-positive for 𝑛≥𝑛0. Consequently, the sequence
+𝑉𝜇(𝐴𝑛;stop) is non-decreasing up to 𝑛= 𝑛0 and non-increasing thereafter. Thus, (𝐴𝑛0;stop) is optimal
+among all finite 𝐴-only plans. Since an 𝐴-only plan is globally optimal in the case under consideration, we
+have 𝑉𝜇(𝐴𝑛0;stop) = 𝐽∞(𝜇).
+Finally, consider adding one call to 𝐵if 𝑛0 calls to 𝐴all fail. The resulting change in expected net reward
+is
+𝑉𝜇(𝐴𝑛0𝐵;stop) −𝑉𝜇(𝐴𝑛0;stop) =
+"∑︁
+𝜃∈Θ
+𝜇𝜃(1 −𝑞𝐴,𝜃)𝑛0
+#
+
+𝐺𝑝𝐵(𝑇𝑛0
+𝐴(𝜇)) −𝑐𝐵
+
+≥0,
+ec10
+
+
+--- Page 42 ---
+where the inequality follows from the condition in part (ii). Therefore, (𝐴𝑛0𝐵;stop) is also optimal. Since
+𝑛0 ≥1, both blocks are nonempty, which proves part (ii).
+Q.E.D.
+EC.3.
+Proofs of the Competitive Guarantee (Section 4.3)
+EC.3.1.
+Proof of Proposition 1
+The claim is immediate when 𝐽≤1. Otherwise, fix 1 ≤𝑗< 𝐽. By the maximizing property of the selected
+configurations,
+𝑅𝛼𝑗(𝐵𝑗) ≥𝑅𝛼𝑗+1(𝐵𝑗),
+𝑅𝛼𝑗+1(𝐵𝑗+1) ≥𝑅𝛼𝑗(𝐵𝑗+1).
+Applying the definition of 𝑅𝑎(𝐵) and dividing the above inequalities by 𝐵𝑗and 𝐵𝑗+1, respectively, we obtain
+𝑠∗
+𝛼𝑗
+ 1
+𝑐𝛼𝑗
+−1
+𝐵𝑗
+
+≥𝑠∗
+𝛼𝑗+1
+
+1
+𝑐𝛼𝑗+1
+−1
+𝐵𝑗
+
+,
+𝑠∗
+𝛼𝑗+1
+
+1
+𝑐𝛼𝑗+1
+−
+1
+𝐵𝑗+1
+
+≥𝑠∗
+𝛼𝑗
+ 1
+𝑐𝛼𝑗
+−
+1
+𝐵𝑗+1
+
+.
+(EC.16)
+Combining the above two inequalities, we have
+ 1
+𝐵𝑗
+−
+1
+𝐵𝑗+1
+ 
+𝑠∗
+𝛼𝑗+1 −𝑠∗
+𝛼𝑗
+
+≥0.
+Since 𝐵𝑗+1 > 𝐵𝑗, it follows that 𝑠∗
+𝛼𝑗+1 ≥𝑠∗
+𝛼𝑗. If 𝑠∗
+𝛼𝑗+1 = 𝑠∗
+𝛼𝑗, since s∗> 0 by its definition, the two inequalities
+in (EC.16) imply 𝑐𝛼𝑗≤𝑐𝛼𝑗+1 and 𝑐𝛼𝑗+1 ≤𝑐𝛼𝑗, respectively. Therefore, 𝑐𝛼𝑗= 𝑐𝛼𝑗+1 and 𝛼𝑗= 𝛼𝑗+1, which
+does not affect the escalator structure.
+Now consider 𝑠∗
+𝛼𝑗+1 > 𝑠∗
+𝛼𝑗. Since 𝑅𝛼𝑗(𝐵𝑗) ≥𝑅1(𝐵𝑗) = 2𝑗−1 > 0, from the definition of 𝑅𝛼𝑗(𝐵𝑗), we see
+that 𝐵𝑗> 𝑐𝛼𝑗. Suppose 𝑐𝛼𝑗+1 ≤𝑐𝛼𝑗. Then 𝐵𝑗> 𝑐𝛼𝑗+1 and
+𝑅𝛼𝑗+1(𝐵𝑗) = 𝑠∗
+𝛼𝑗+1
+ 𝐵𝑗
+𝑐𝛼𝑗+1
+−1
+
+> 𝑠∗
+𝛼𝑗
+ 𝐵𝑗
+𝑐𝛼𝑗
+−1
+
+= 𝑅𝛼𝑗(𝐵𝑗),
+leading to contradiction with the optimality of 𝛼𝑗in maximizing 𝑅𝑎(𝐵𝑗) over 𝑎∈A. Therefore, 𝑐𝛼𝑗+1 > 𝑐𝛼𝑗,
+and the cost ranking implies 𝛼𝑗+1 > 𝛼𝑗. Since the analysis applies to any 𝑗= 1,2, . . . , 𝐽−1, the returned
+routing plan is an Escalator policy.
+Q.E.D.
+EC.3.2.
+Proof of Theorem 2
+Fix 𝜃∈D and define
+𝜏𝜃:= min
+𝑎∈A
+−log(1 −𝑞𝑎,𝜃)
+𝑠∗𝑎
+> 0.
+Recall that −log(1−𝑞𝑎,𝜃) is the additive contribution of one 𝑎-call to the negative logarithm of the all-failure
+probability. Thus, 𝜏𝜃is the smallest such contribution per unit weight across configurations in state 𝜃. It
+provides a common conservative rate for the auxiliary model constructed below. By the definition of 𝜅𝑞(s∗),
+we have
+𝜏𝜃𝑠∗
+𝑎≤−log(1 −𝑞𝑎,𝜃) ≤𝜅𝑞(s∗)𝜏𝜃𝑠∗
+𝑎,
+𝑎∈A.
+(EC.17)
+We construct an auxiliary problem with success probabilities e𝑞𝑎,𝜃:= 1 −𝑒−𝜏𝜃𝑠∗
+𝑎for 𝑎∈A and 𝜃∈D,
+while still assuming conditional independence across calls. This replaces each configuration’s logarithmic
+ec11
+
+
+--- Page 43 ---
+contribution by 𝜏𝜃times its weight, so the contribution per unit weight is identical across configurations. In
+particular, for any prescribed sequence 𝑎1, . . . , 𝑎𝑛with total weight 𝑢= Í𝑛
+𝑖=1 𝑠∗
+𝑎𝑖,
+𝑛
+Ö
+𝑖=1
+(1 −e𝑞𝑎𝑖,𝜃) = exp
+ 
+−𝜏𝜃
+𝑛
+∑︁
+𝑖=1
+𝑠∗
+𝑎𝑖
+!
+= 𝑒−𝜏𝜃𝑢.
+Thus, the auxiliary all-failure probability depends only on the cumulative weight, rather than on the particular
+configurations used. This exponential form allows us to represent success through a single random weight
+threshold later in the proof. Let e𝑉(𝜋EP | 𝜃) denote the expected net reward of the same Escalator policy in
+Algorithm 1 when each success probability 𝑞𝑎,𝜃is replaced by e𝑞𝑎,𝜃. The reward 𝐺, the call costs, and the
+rule of stopping at the first success remain the same. We then make the following observation:
+𝐺−𝑉(𝜋EP | 𝜃) ≤𝐺−e𝑉(𝜋EP | 𝜃),
+∀𝜃∈D.
+(EC.18)
+To see (EC.18), note that the first inequality in (EC.17) gives
+1 −𝑞𝑎,𝜃≤𝑒−𝜏𝜃𝑠∗
+𝑎= 1 −e𝑞𝑎,𝜃.
+(EC.19)
+By applying the expression of 𝑉(· | 𝜃) in equation (1), we obtain
+𝐺−𝑉(𝜋EP | 𝜃) = 𝐺
+𝐽
+Ö
+𝑗=1
+(1 −𝑞𝛼𝑗,𝜃)𝑛𝑗+
+𝐽
+∑︁
+𝑗=1
+𝑐𝛼𝑗
+𝑛𝑗
+∑︁
+ℓ=1
+" 𝑗−1
+Ö
+𝑘=1
+(1 −𝑞𝛼𝑘,𝜃)𝑛𝑘
+#
+(1 −𝑞𝛼𝑗,𝜃)ℓ−1,
+which increases in 1 −𝑞𝑎,𝜃. This, combined with (EC.19), implies (EC.18).
+Before proceeding to bound 𝐺−e𝑉(𝜋EP|𝜃), we introduce Φ(𝑢) and Ψ(𝑢). For every 𝑢≥0, let
+Φ(𝑢) := min
+𝑎∈A 𝑐𝑎
+
+1 + 𝑢
+𝑠∗𝑎
+
+.
+For a fixed configuration 𝑎, the expression 𝑐𝑎(1 + 𝑢/𝑠∗
+𝑎) is an upper bound on the total cost of the ⌈𝑢/𝑠∗
+𝑎⌉
+calls needed to attain a total weight of at least 𝑢. When 𝐽= 0, define Ψ(𝑢) := 𝐺for all 𝑢≥0, and when 𝐽≥1,
+define
+Ψ(𝑢) :=
+𝐽
+∑︁
+𝑗=1
+𝑐𝛼𝑗
+𝑛𝑗
+∑︁
+ℓ=1
+1
+( 𝑗−1
+∑︁
+𝑘=1
+𝑛𝑘𝑠∗
+𝛼𝑘+ (ℓ−1)𝑠∗
+𝛼𝑗≤𝑢
+)
++ 𝐺1{𝑢≥𝑅(𝐵𝐽)},
+𝑢≥0.
+The double sum includes the cost of each scheduled call whose starting cumulative weight is at most 𝑢. The
+last term assigns a loss of 𝐺once 𝑢reaches the final target 𝑅(𝐵𝐽); it is used to bound the reward lost when
+the plan fails.
+We next relate Ψ to the auxiliary expected net reward. Let 𝑈be an exponential random variable with
+mean 1/𝜏𝜃and we establish the following inequality:
+𝐺−e𝑉(𝜋EP | 𝜃) ≤E[Ψ(𝑈)].
+(EC.20)
+To understand the above inequality intuitively, since Pr(𝑈> 𝑢) = 𝑒−𝜏𝜃𝑢equals the auxiliary probability
+that calls with total weight 𝑢all fail, 𝑈can be interpreted as a random weight threshold for success. A
+ec12
+
+
+--- Page 44 ---
+scheduled call is reached when its starting cumulative weight is below 𝑈, so the double sum in Ψ(𝑈)
+records the corresponding calling cost. The term 𝐺1{𝑈≥𝑅(𝐵𝐽)} upper-bounds the reward lost when the
+plan terminates without success. Hence, Ψ(𝑈) upper-bounds the realized loss, consisting of calling cost
+plus forgone reward. Taking expectations gives (EC.20). To formally prove (EC.20), when 𝐽= 0, both sides
+equal 𝐺, so (EC.20) naturally holds. When 𝐽≥1, under the auxiliary success probabilities, the probability
+of reaching the ℓth call in stage 𝑗is exp(−𝜏𝜃[Í𝑗−1
+𝑘=1 𝑛𝑘𝑠∗
+𝛼𝑘+ (ℓ−1)𝑠∗
+𝛼𝑗]). Therefore, we have
+𝐺−e𝑉(𝜋EP | 𝜃) =
+𝐽
+∑︁
+𝑗=1
+𝑐𝛼𝑗
+𝑛𝑗
+∑︁
+ℓ=1
+exp
+ 
+−𝜏𝜃
+" 𝑗−1
+∑︁
+𝑘=1
+𝑛𝑘𝑠∗
+𝛼𝑘+ (ℓ−1)𝑠∗
+𝛼𝑗
+#!
++ 𝐺exp©­
+«
+−𝜏𝜃
+𝐽
+∑︁
+𝑗=1
+𝑛𝑗𝑠∗
+𝛼𝑗
+ª®
+¬
+≤
+𝐽
+∑︁
+𝑗=1
+𝑐𝛼𝑗
+𝑛𝑗
+∑︁
+ℓ=1
+P
+ 𝑗−1
+∑︁
+𝑘=1
+𝑛𝑘𝑠∗
+𝛼𝑘+ (ℓ−1)𝑠∗
+𝛼𝑗≤𝑈
+!
++ 𝐺exp©­
+«
+−𝜏𝜃
+𝐽
+∑︁
+𝑗=1
+𝑛𝑗𝑠∗
+𝛼𝑗
+ª®
+¬
+≤
+𝐽
+∑︁
+𝑗=1
+𝑐𝛼𝑗
+𝑛𝑗
+∑︁
+ℓ=1
+P
+ 𝑗−1
+∑︁
+𝑘=1
+𝑛𝑘𝑠∗
+𝛼𝑘+ (ℓ−1)𝑠∗
+𝛼𝑗≤𝑈
+!
++ E[𝐺1{𝑈≥𝑅(𝐵𝐽)}]
+= E[Ψ(𝑈)],
+where the first inequality follows by applying expression of the cumulative distribution function of 𝑈, and
+the second inequality follows from Í𝐽
+𝑗=1 𝑛𝑗𝑠∗
+𝛼𝑗≥𝑅(𝐵𝐽), as guaranteed by the updating rule. This completes
+the proof of inequality (EC.20).
+We now prove that
+Ψ(𝑢) ≤4min{Φ(𝑢),𝐺},
+𝑢≥0.
+(EC.21)
+Since Φ(𝑢) ≥𝑐1, when 𝐽= 0, we have 𝐺< 2𝑐1 and Ψ(𝑢) = 𝐺≤2min{Φ(𝑢),𝐺}. Now suppose 𝐽≥1, so that
+𝐵𝐽≤𝐺< 2𝐵𝐽from the definition of 𝐽and 𝐵𝐽. Note that when 𝑛𝑗> 0, the ceiling rule and the nonnegativity
+of the weight accumulated before stage 𝑗give
+𝑛𝑗𝑐𝛼𝑗≤𝑐𝛼𝑗
+ 
+1 + 𝑅(𝐵𝑗)
+𝑠∗𝛼𝑗
+!
+= 𝑐𝛼𝑗
+ 
+1 +
+𝑅𝛼𝑗(𝐵𝑗)
+𝑠∗𝛼𝑗
+!
+= 𝑐𝛼𝑗
+ 
+1 +
+𝑠∗
+𝛼𝑗(𝐵𝑗/𝑐𝛼𝑗−1)
+𝑠∗𝛼𝑗
+!
+= 𝐵𝑗.
+The same bound is immediate when 𝑛𝑗= 0. Consequently,
+𝑗
+∑︁
+𝑘=1
+𝑛𝑘𝑐𝛼𝑘≤
+𝑗
+∑︁
+𝑘=1
+𝐵𝑘= 2𝐵𝑗−2𝑐1 < 2𝐵𝑗,
+𝑗= 1, . . . , 𝐽.
+(EC.22)
+Also, the definitions of 𝑅(·) and Φ(·) imply the following relationship:
+𝑢≥𝑅(𝐵) ⇐⇒𝑢≥max
+𝑎∈A 𝑠∗
+𝑎
+ 𝐵
+𝑐𝑎
+−1
+
+⇐⇒𝑐𝑎
+
+1 + 𝑢
+𝑠∗𝑎
+
+≥𝐵, ∀𝑎∈A ⇐⇒Φ(𝑢) ≥𝐵.
+(EC.23)
+We distinguish two cases according to the value of Φ(𝑢).
+ec13
+
+
+--- Page 45 ---
+• If Φ(𝑢) < 𝐵𝐽, then Φ(𝑢) ≥𝑐1 and the doubling of the budgets ensure that there exists 𝑗∈{1, . . . , 𝐽}
+such that 𝐵𝑗/2 = 𝐵𝑗−1 ≤Φ(𝑢) < 𝐵𝑗. By (EC.23), 𝑢< 𝑅(𝐵𝑗) ≤𝑅(𝐵𝐽), so the 𝐺term in Ψ(𝑢) vanishes. The
+cumulative weight at the end of stage 𝑗is at least 𝑅(𝐵𝑗) > 𝑢, so no call in a later stage is included in Ψ(𝑢).
+Using (EC.22) and Φ(𝑢) < 𝐵𝐽≤𝐺, we obtain
+Ψ(𝑢) ≤
+𝑗
+∑︁
+𝑘=1
+𝑛𝑘𝑐𝛼𝑘< 2𝐵𝑗≤4Φ(𝑢) = 4min{Φ(𝑢),𝐺}.
+• If Φ(𝑢) ≥𝐵𝐽, then both Φ(𝑢) and 𝐺are at least 𝐵𝐽. Bounding Ψ(𝑢) by the total scheduled cost plus 𝐺
+gives
+Ψ(𝑢) ≤
+𝐽
+∑︁
+𝑗=1
+𝑛𝑗𝑐𝛼𝑗+ 𝐺< 2𝐵𝐽+ 𝐺< 4𝐵𝐽≤4min{Φ(𝑢),𝐺}.
+This completes the proof of (EC.21).
+We now establish the following upper bound on E[Φ(𝑈)]:
+E[Φ(𝑈)] ≤ℎ 𝜅𝑞(s∗) min
+𝑎∈A 𝛾𝑎,𝜃.
+(EC.24)
+For every 𝑎∈A, the definition of Φ gives E[Φ(𝑈)] ≤𝑐𝑎(1 + E[𝑈]/𝑠∗
+𝑎) = 𝑐𝑎(1 + 1/(𝜏𝜃𝑠∗
+𝑎)). The second
+inequality in (EC.17) implies 𝑞𝑎,𝜃≤1 −𝑒−𝜅𝑞(s∗)𝜏𝜃𝑠∗𝑎. Recalling 𝛾𝑎,𝜃= 𝑐𝑎/𝑞𝑎,𝜃, we obtain
+E[Φ(𝑈)] ≤𝛾𝑎,𝜃𝑞𝑎,𝜃
+
+1 +
+1
+𝜏𝜃𝑠∗𝑎
+
+≤𝛾𝑎,𝜃
+
+1 −𝑒−𝜅𝑞(s∗)𝜏𝜃𝑠∗
+𝑎
+ 
+1 +
+1
+𝜏𝜃𝑠∗𝑎
+
+≤𝛾𝑎,𝜃ℎ 𝜅𝑞(s∗),
+where the last inequality follows by applying the definition of ℎ(·) and using the fact that 𝜅𝑞(s∗) ≥1. Since
+this bound holds for every configuration, inequality (EC.24) holds.
+We can now combine these inequalities to bound 𝐺−𝑉(𝜋EP|𝜃) for any 𝜃∈D. Using (EC.18), (EC.20),
+(EC.21), and (EC.24), we obtain
+𝐺−𝑉(𝜋EP | 𝜃) ≤𝐺−e𝑉(𝜋EP | 𝜃) ≤E[Ψ(𝑈)] ≤4E[min{Φ(𝑈),𝐺}] ≤4min{E[Φ(𝑈)],𝐺}
+≤4min
+
+ℎ 𝜅𝑞(s∗) min
+𝑎∈A 𝛾𝑎,𝜃,𝐺
+
+≤4ℎ 𝜅𝑞(s∗) min
+
+min
+𝑎∈A 𝛾𝑎,𝜃,𝐺
+
+= 4ℎ 𝜅𝑞(s∗)  𝐺−𝑉CL(𝜃),
+where the fourth inequality holds because the random minimum is bounded above by both Φ(𝑈) and 𝐺, the
+last inequality holds because ℎ(𝜅𝑞(s∗)) ≥1, and the final equality follows from equation (10).
+It remains to consider the non-improvable state 𝑜. All scheduled calls fail in this state, so 𝑉(𝜋EP | 𝑜) =
+−Í𝐽
+𝑗=1 𝑛𝑗𝑐𝛼𝑗. When 𝐽≥1, (EC.22) and 𝐵𝐽≤𝐺imply Í𝐽
+𝑗=1 𝑛𝑗𝑐𝛼𝑗≤2𝐵𝐽< 2𝐺. The same inequality holds
+when 𝐽= 0, since the sum is zero. As 𝑉CL(𝑜) = 0, we conclude that
+𝐺−𝑉(𝜋EP | 𝑜) = 𝐺+
+𝐽
+∑︁
+𝑗=1
+𝑛𝑗𝑐𝛼𝑗< 3𝐺≤4ℎ 𝜅𝑞(s∗)  𝐺−𝑉CL(𝑜).
+The desired comparison thus holds for every 𝜃∈Θ. Dividing by the positive quantity 𝐺−𝑉CL(𝜃) and
+taking the supremum over 𝜃yields CR(𝜋EP) ≤4ℎ 𝜅𝑞(s∗), which proves the theorem.
+Q.E.D.
+ec14
+
+
+--- Page 46 ---
+EC.4.
+Details of Numerical Study (Section 5)
+EC.4.1.
+Models, Menu and Settings
+We access the Qwen LLMs described in Section 5 through Alibaba Cloud Model Studio as
+qwen3.5-flash and qwen3.6-flash (Qwen Team 2026a,b). Both run with thinking enabled. Think-
+ing tokens account for about four fifths of output tokens and are billed as output in all reported costs.
+The configuration menu and attempt counts follow Section 5.1, with restart interval 𝑟= 3 in Type 1
+windows. Qwen3.5-Flash constructs the parameter schema and handles the first two syntax-repair rounds.
+Qwen3.6-Flash writes the initial formulation and handles subsequent repair rounds. An attempt is abandoned
+if the same error recurs three times. COPT runs on one thread with a memory cap per solve.
+EC.4.2.
+Baselines
+Each one-shot repetition uses OSCAR’s initial Coder prompts, followed by syntax repair, and returns the
+first runnable program’s output. It has no Simulator, Reviewer or second formulation. Unlike OSCAR, both
+one-shot models use Qwen3.5-Flash for at most ten repair rounds, so only the initial Coder model varies. A
+program that still fails counts as a failed repetition. The structure constructor is called and charged for every
+repetition. We run 100 repetitions per model and problem.
+For each problem, we run five independent agents with Claude Code using Fable 5.1 and five with Codex
+using GPT-6 Astra. Each receives only the description and instance and must write and run a COPT program
+that returns a solution in the required format. The agents cannot access the trusted checker, reference solution,
+Simulator or feedback. We grade their final solutions with the trusted checker and report the outcomes in
+Table 3. As discussed in Section 5.1, these runs primarily compare costs. In earlier testing, Fable 5.0 failed
+on one problem because of a syntax error, which Fable 5.1 did not repeat.
+EC.4.3.
+Cost Accounting
+We use each model and platform’s list rates. At Alibaba Cloud’s Beijing endpoint, prices per million input
+and output tokens are 0.2 and 2 RMB for Qwen3.5-Flash, and 1.2 and 7.2 RMB for Qwen3.6-Flash. We
+convert at 6.91 RMB per dollar, the rounded average of daily Federal Reserve H.10 rates from September 12,
+2025 through September 11, 2026. Fable 5.1 and GPT-6 Astra use their providers’ dollar rates. Cached input
+is charged at each provider’s cached-input rate. GPT-6 Astra’s rates per million tokens are $10 for uncached
+input, $1 for cached input, $12.50 for cache writes and $50 for output. Agent costs use token counts reported
+in their transcripts.
+Each Simulator is built once per problem, but every run is charged its full build cost to represent a run from
+scratch. The repeated runs therefore evaluate OSCAR conditional on the constructed Simulator. Table EC.1
+gives the cost components. The stronger Coder is the largest recurring expense, consistent with Section 2.2.
+Although a weaker-model Reviewer call costs more than a Coder call, upgrading the Coder costs more than
+upgrading the Reviewer, preserving the configuration cost order.
+ec15
+
+
+--- Page 47 ---
+Table EC.1
+Mean cost in dollars (model calls) per OSCAR run at 𝑛= 1 unless indicated otherwise. Initial
+formulation includes its syntax repair. Loop costs include the Type 1 extension. Totals may differ from
+component sums because of rounding.
+Component
+Model
+Routing
+𝑛= 1
+Routing
+𝑛= (1,1,3,3)
+Graph
+Packing
+Scheduling
+Quadratic
+Simulator build
+both
+0.025 (9.0)
+0.025 (9.0)
+0.007 (3.0)
+0.084 (16.0) 0.075 (11.0) 0.062 (14.0)
+Structure
+Qwen3.5
+0.002 (1.0)
+0.002 (1.0)
+0.001 (1.0)
+0.002 (1.0)
+0.002 (1.0)
+0.001 (1.0)
+Initial formulation both
+0.052 (4.4)
+0.043 (4.0)
+0.007 (1.9)
+0.033 (4.2)
+0.051 (3.8)
+0.020 (3.6)
+Reviewer
+Qwen3.5
+0.010 (3.5)
+0.021 (7.1)
+0.005 (2.1)
+0.011 (3.8)
+0.009 (3.4)
+0.007 (2.2)
+Reviewer
+Qwen3.6
+0.023 (2.7)
+0.046 (5.1)
+0.008 (2.0)
+0.048 (6.0)
+0.025 (3.4)
+0.014 (2.1)
+Coder
+Qwen3.5
+0.007 (3.8)
+0.008 (4.7)
+0.002 (2.1)
+0.006 (3.9)
+0.005 (3.5)
+0.003 (2.2)
+Coder
+Qwen3.6
+0.034 (2.3)
+0.108 (7.4)
+0.014 (2.0)
+0.065 (5.8)
+0.044 (3.2)
+0.018 (2.0)
+Syntax repair
+both
+0.016 (4.1)
+0.026 (6.2)
+0.003 (1.1)
+0.018 (5.1)
+0.028 (6.6)
+0.009 (2.6)
+Total
+0.168 (30.9)
+0.279 (44.4)
+0.048 (15.3) 0.267 (45.8) 0.240 (35.9) 0.134 (29.7)
+ec16

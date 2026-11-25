@@ -1,0 +1,1780 @@
+--- Page 1 ---
+TauLang: A Language and Compiler for Space-Time
+Programming on Statically Scheduled Accelerators
+Xuxiao Yang1, Junchi Wu1, Yuqi Peng2, Feiyang Wu1, Zhuoran Li1, Wei Kong2, Shuo Tao2, Dongyi
+Fan2, Yiming Zhang2, Keqin Luo2, Xingrui Gao2, Hao Zhang 2, Xuehai Qian2, Youwei Zhuo1
+1School of Integrated Circuits, Peking University Beijing China
+2Tsinghua University Beijing China
+{valinor, 2501111908}@stu.pku.edu.cn, pyq24@mails.tsinghua.edu.cn, {fywu25, zhuoranli}@stu.pku.edu.cn, {kongw24,
+taos23, fdy24, zym24, luokq24, gxr24, hao-zhang}@mails.tsinghua.edu.cn, xuehaiq@tsinghua.edu.cn,
+youwei@pku.edu.cn
+Abstract
+Statically scheduled accelerators such as Groq’s Tensor Stream-
+ing Processor (TSP) achieve low-latency large language model
+inference by stripping dynamic synchronization hardware
+from the chip. With no caches, arbiters, or hardware sched-
+ulers, the compiler must fix the exact slice and issue cycle
+of every operation, so when an operation runs is a condi-
+tion for correctness. Existing kernel languages cannot target
+such machines because they rely on hardware to resolve
+cycle timing and instead encode schedules implicitly in code
+structure.
+We present TauLang, a kernel language and compiler that
+makes time a first-class citizen of the program. The pro-
+grammer schedules operations, loops, and composed ker-
+nels with parameterized explicit times, so exploring sched-
+ules means changing parameter values rather than rewriting
+code. TauLang validates explicit times algebraically in TauIR,
+its timed intermediate representation. It then solves tensor
+placement and cycle scheduling jointly in an integer linear
+program, using explicit times to group connected operations
+into timing clusters that prune the search space. On a cycle-
+accurate model of a TSP-like machine, joint search achieves
+a 1.40× latency speedup across ten kernels over a space-first
+flow. A few explicit time pins keep latency within one cy-
+cle of the untimed schedules and scale joint search to 1,636
+GEMM blocks, whereas untimed search finds no schedule at
+32.
+1
+Introduction
+Statically scheduled accelerators, pioneered by Groq’s Tensor
+Streaming Processor (TSP) [1, 2], have emerged as a com-
+pelling architecture for low-latency large language model
+inference. Reflecting this demand for fast token generation,
+Nvidia recently acquired Groq’s assets for $20 billion [9] and
+introduced a rack-scale system built on the TSP execution
+model [3]. To achieve such low, deterministic latency, this
+execution model strips out the dynamic control hardware of
+conventional accelerators, eliminating caches, local register
+files, interconnect arbiters, and hardware schedulers [36].
+However, the simplicity of the hardware makes compi-
+lation harder. With no stall signals or runtime handshakes,
+...
+...
+...
+...
+...
+...
+...
+...
+...
+...
+...
+...
+Matrix
+Unit
+MXM
+Net
+SXM
+Load/Store Unit
+MEM
+VXM
+Load/Store Unit
+MEM
+Net
+SXM
+Matrix
+Unit
+MXM
+Data flow
+Instruction control and dispatch
+(a)
+load
+MEM
+ALU
+MEM
+MEM
+load
+ALU
+MEM
+MEM
+MEM
+add
+MEM
+MEM W1
+MEM W0
+VXM
+MEM E0
+a2
+a1
+b1
+c0
+a1
+a0
+b0
+Instruction
+Current input
+Future output
+(b)
+Instruction flow
+Figure 1. (a) Instructions flow vertically while data streams
+horizontally across slices. (b) Staggered loads make data
+𝑎0,𝑏0 and the add instruction meet at VXM in the same cycle.
+instructions flow vertically up each slice while data streams
+move horizontally across functional units at a fixed rate of
+one slice per cycle, without waiting (Figure 1a). Thus, the
+compiler must statically decide the exact slice and issue cy-
+cle of every operation so that each instruction and its input
+streams meet at the target unit in the exact same cycle (Fig-
+ure 1b), while avoiding conflicts on shared stream register
+(SR) tracks and memory banks. Because the hardware de-
+tects no timing or resource violations, missing a rendezvous
+by even one cycle or slice silently produces wrong results,
+which makes when an operation runs a condition for cor-
+rectness rather than a performance parameter. Moreover, a
+single chip contains dozens of slices, so the compiler must
+coordinate these cycle-exact schedules across all slices and
+functional units simultaneously.
+Existing approaches to this challenge fall between two
+extremes. On one hand, expert engineers can hand-craft low-
+level instruction schedules [1, 36], but doing so demands
+painstaking cycle-level control and months of effort. For ex-
+ample, after Groq initially brought up Llama-2 70B at 100 to-
+kens/s, its engineers spent three months optimizing low-level
+schedules on the same hardware to reach 300 tokens/s [13].
+On the other hand, a compiler that schedules high-level code
+automatically faces a vast joint space of slice placements
+and issue cycles. Fixing placement first shrinks this space
+but yields slower schedules, whereas in our experiments, an
+unconstrained solver finds no schedule for a 32-block GEMM
+within the time budget. A natural middle ground is a kernel
+1
+arXiv:2611.06079v3  [cs.PL]  9 Nov 2026
+
+
+--- Page 2 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+language that lets the programmer express high-level sched-
+uling decisions while the compiler checks and completes the
+low-level schedule.
+However, neither GPU kernel languages [37, 39] nor spa-
+tial compilers [23–25] can serve as this middle ground, be-
+cause they assume that hardware synchronizes timing at run-
+time. Even compilers for spatial meshes and coarse-grained
+reconfigurable arrays (CGRAs) that plan placement and mod-
+ulo cycles statically [23–25] rely on scratchpads, FIFOs, and
+router flow control to buffer early arrivals [12, 34], so a
+one-cycle mismatch costs only throughput. Under this as-
+sumption, existing kernel languages are time-blind and in-
+stead express schedules indirectly through code structure,
+such as pipeline stage counts and explicit barriers (Figure 2).
+This structural approach neither expresses cycle-exact ren-
+dezvous nor separates the schedule from the abstract syntax
+tree (AST), so the programmer must rewrite the kernel to
+change its schedule.
+Our key insight is to decouple a program’s schedule from
+its code structure by making time a first-class citizen of
+the kernel language. Because cycle timing determines cor-
+rectness on a statically scheduled accelerator, the language
+should let the programmer express cycle times directly and
+the compiler check them statically (Figure 3). Programmers
+write explicit times as affine cycle expressions over loop in-
+dices and kernel parameters, and pinning a kernel call to an
+invocation time offsets every explicit time in the callee. Ex-
+ploring schedules across a composed program thus requires
+only changing parameter values rather than rewriting the
+kernel. Pins also keep the compiler’s joint search over the
+remaining schedule tractable. Because streams advance one
+slice per cycle, pinning the cycle gap between a stream’s
+producer and consumer fixes the hop count between their
+slices, which prunes the memory placements that the solver
+must explore.
+We present TauLang, a kernel language and compiler for
+statically scheduled accelerators. TauLang extends a tile-
+style Python DSL with explicit times relative to symbolic
+times, which mark the start of the current kernel (tau.T) or
+the start or end of an operation, loop, or call (tau.start,
+tau.end). A pin (.at) fixes the issue time of an operation
+or the invocation time of a call, while tau.domain maps
+each loop iteration to its start cycle. The compiler lowers
+explicit times into TauIR attributes in MLIR [21] and runs
+affine time validation to catch timing conflicts algebraically
+before search. It then solves spatial placement and cycle
+scheduling jointly as an integer linear program (ILP), using
+stream dependences and explicit times to group connected
+operations into timing clusters that prune the search.
+We evaluate TauLang on a TSP-like machine using a cycle-
+accurate simulator validated against our SystemVerilog RTL
+implementation. Across ten kernels from BLAS, PolyBench,
+ResNet, and Transformer layers at three sizes each, joint
+search achieves a 1.40× geometric-mean latency speedup
+(up to 2.22×) over the space-first flow, which fixes placement
+before scheduling greedily. Adding one to three pins per
+kernel matches untimed latency within one cycle and cuts
+compile time by 1.72×. Pins also scale joint search to 1,636
+GEMM blocks and 128 residual blocks, whereas untimed
+search finds no schedule at 32 and 8. Sweeping two schedule
+parameters of a flow-matching kernel yields eight Pareto-
+optimal schedules among those compiled, which trade up to
+237 cycles of first-item latency for 498 cycles of whole-output
+time.
+This paper makes three contributions.
+• A time-first kernel language. We design TauLang,
+to our knowledge the first kernel language that treats
+cycle time as a first-class, parameterized, and compos-
+able construct (§4).
+• A timed intermediate representation. We define
+TauIR, an IR that carries symbolic timing attributes
+and validates them algebraically before scheduling
+(§5).
+• Time-guided joint space-time scheduling. We for-
+mulate placement and scheduling as a joint ILP that
+uses explicit times to group operations into timing
+clusters and prune the search space (§6).
+2
+Background and Motivating Examples
+2.1
+The TSP Execution Model
+Groq’s TSP [1, 2] is the most widely deployed statically sched-
+uled accelerator, so we use it as our target architecture. On
+the row of slices in Figure 1a, instructions step vertically up
+each slice across its lanes while values travel east or west on
+SR tracks at one slice per cycle. Memory slices (MEM) store
+tensors in SRAM banks, vector (VXM) and switch (SXM) slices
+perform arithmetic and lane permutations, and matrix slices
+(MXM) hold weights across two planes so one plane can in-
+stall weights while the other computes. Because execution
+and stream propagation are deterministic, a consumer sees a
+producer’s output at a fixed cycle. An operation samples its
+operands 𝑑skew cycles after it issues and writes its result to
+an SR 𝑑func cycles after it issues. Let 𝛿be the hop count from
+producer 𝑃to consumer 𝐶. 𝐶receives 𝑃’s value if and only if
+𝑡issue(𝑃) + 𝑑func(𝑃) + 1 + 𝛿= 𝑡issue(𝐶) + 𝑑skew(𝐶).
+(1)
+Figure 1b illustrates this rendezvous for 𝑐= 𝑎+𝑏, where MEM
+W1 is one slice farther from VXM than MEM W0 and therefore
+issues its load of 𝑎one cycle earlier so that 𝑎0 and 𝑏0 reach
+add on VXM in the same cycle. Furthermore, at most one
+producer may write a given SR track at any slice and cycle,
+and each memory bank serves at most one access per cycle.
+The hardware detects neither violation and silently produces
+wrong values instead.
+2
+
+
+--- Page 3 ---
+TauLang: A Language and Compiler for Space-Time Programming on Statically Scheduled Accelerators
+@tilelang.jit
+def matmul(A_tiles, B_tiles, C_tile, num_k_tiles):
+    for ko in T.Pipelined(num_k_tiles, num_stages=2):
+        T.barrier_wait(compute_is_done, (ko + 1) % 2)
+        T.tma_copy(A_tiles[ko], A_shared, barrier=data_is_ready)
+        T.tma_copy(B_tiles[ko], B_shared, barrier=data_is_ready)
+        T.barrier_wait(data_is_ready, ko % 2)
+        T.gemm(A_shared, B_shared, C_local)
+        T.barrier_arrive(compute_is_done)
+1
+2
+2
+2
+Figure 2. A pipelined GEMM in TileLang. The schedule is
+encoded in code structure via stage counts (➊) and runtime
+barriers (➋).
+2.2
+Schedules in Existing Kernel Languages
+Because the best schedule of a kernel varies across workloads,
+the programmer needs fine-grained control over when each
+operation executes. On a statically scheduled machine, this
+schedule also determines correctness, as every operand must
+arrive at the exact slice and cycle its instruction expects.
+We examine how TileLang [39] expresses the schedule of a
+GEMM and why that schedule does not carry over to the
+TSP.
+TileLang describes a kernel as an iteration domain whose
+body applies tile operators such as load, store, and matrix
+multiply to whole tiles [39]. In the pipelined GEMM in Fig-
+ure 2, T.Pipelined specifies a stage count ➊to overlap iter-
+ations through multi-buffered copies, while runtime barriers
+synchronize stages ➋as each multiply waits for its copies
+and each pair of copies waits for the previous multiply.1
+Thus, the loop runs at whatever pace the copies and bar-
+riers deliver at runtime. Both constructs rely on hardware
+synchronization, where copies signal completion and barri-
+ers stall waiting warps. On the TSP, nothing waits, because
+a consumer receives a value only in the cycle required by
+Equation 1.
+As this GEMM shows, existing kernel languages share
+two limitations. First, they cannot express cycle timing, so
+the programmer cannot specify even the initiation interval
+of a loop. Second, the control they do expose is coarse and
+written in the structure of the code, so another schedule is
+another program. For instance, alongside the kernel in Fig-
+ure 2, TileLang provides a separate program to swap which
+warp group copies tiles and which performs matrix multipli-
+cation. Both limitations arise because time is not a first-class
+citizen of these languages. TauLang addresses both by keep-
+ing the loops and tile operators of a tile-style language and
+adding explicit times, cycle counts written over ordinary ker-
+nel parameters, so another schedule is simply another set
+of parameter values on the same program. Sections 2.3–2.5
+preview through concrete examples how explicit times pa-
+rameterize schedules, enable static timing checks, and prune
+placement and scheduling.
+1The code listings in this section omit type annotations, explicit casts, and
+routine implementation details.
+@jit
+def tile(A, B, S, k, M, KB, II, H):
+    for i in tau.domain(M, at=lambda i: tau.T + i * II):
+        a = load(A, addr=i * KB + k)
+        d = tau.dot(a, B[k]).at(tau.start(a) + H + DOT)
+        store(S, load(S, addr=i) + d, addr=i)
+@jit
+def matmul(A, B, S, C, M, KB, P, II, L, H):
+    tiles = tau.domain(KB, at=lambda k: tau.T + k * P)
+    for k in tiles:
+        tile(A, B, S, k, M, KB, II, H).at(tiles[k] + L)
+    for i in tau.domain(M, at=lambda i: tau.end(tiles) + i * II):
+        store(C, load(S, addr=i), addr=i)
+1
+2
+Figure 3. A tiled GEMM in TauLang. Explicit times start
+rows every II cycles (➊) and tiles every 𝑃cycles (➋).
+rows
+install
+B0
+0 1 2 3
+B1
+0 1 2 3
+B2
+0 1 2 3
+21
+(a) P = 7, II = 1
+rows
+install
+B0
+0 1 2 3
+B1
+0 1 2 3
+B2
+0 1 2 3
+15
+(b) P = 4, II = 1
+0
+3
+6
+9
+12
+15
+18
+21
+24
+27
+cycles after tau.T of matmul
+rows
+install
+B0
+0
+1
+2
+3
+B1
+0
+1
+2
+3
+B2
+0
+1
+2
+3
+26
+(c) P = 8, II = 2
+Figure 4. Three schedules of the GEMM in Figure 3, set by
+the tile stride 𝑃and the row interval II.
+2.3
+Explicit Times in a Tiled GEMM
+Figure 3 writes the same tiled GEMM in TauLang, where
+matmul calls tile on each block along 𝐾to install weights
+on an MXM plane and stream rows of 𝐴. Rather than encoding
+the schedule in stage counts and barriers, TauLang states
+loop strides directly in cycles with tau.domain and fixes
+selected stage offsets with .at. Inside tile, the row domain
+(➊) starts a new row of 𝐴every II cycles, and .at pins the
+accumulation at 𝐻+ DOT cycles after load(A), where 𝐻is
+the hop count from load(A) to the matrix unit. In matmul,
+the tiles domain (➋) starts a new block of 𝐵every 𝑃cycles
+and leaves 𝐿cycles to install weights before calling tile.
+The final loop drains the partial sums 𝑆to 𝐶once the last
+tile finishes.
+Because 𝑃and II are ordinary kernel parameters, exploring
+schedules reduces to changing parameter values on the same
+code (Figure 4). A large tile stride runs the three tiles sequen-
+tially, waiting for one tile’s rows to finish before installing
+the next weight block (Figure 4a). Shortening 𝑃pipelines ad-
+jacent tiles across the two MXM planes so each weight install
+overlaps the previous tile’s rows (Figure 4b), while raising II
+spaces rows apart to free cycles for another kernel running
+3
+
+
+--- Page 4 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+@jit
+def attention_block(Q, K, V, S, M, E, Z, O):
+    ... # Pass 1: QK^T scores S and row max M
+    for k in range(KT): # Pass 2: softmax E and sum Z
+        sm = tau.domain(R, at=lambda r:
+            tau.T + EXP_START + k*EXP_TILE_II + r*EXP_ROW_II)
+        for r in sm:
+            x = sub_f32(load(S, addr=k * R + r), load(M, addr=r))
+            e = exp_f32(x).at(sm[r] + EXP)
+            store(E, e, addr=k * R + r)
+            z = add_f32(load(Z, addr=r), tile_sum_f16(e))
+            store(Z, z, addr=r)
+    ... # Pass 3: normalize E by Z and P*V into O
+1
+2
+Figure 5. The softmax pass of a three-pass tiled attention
+kernel in TauLang. The pass starts EXP_START cycles after
+tau.T, its key tiles start EXP_TILE_II cycles apart and its
+rows EXP_ROW_II apart (➊), and exp_f32 issues EXP cycles
+after its row starts (➋).
+alongside (Figure 4c). Section 8.6 sweeps two such param-
+eters on a flow-matching kernel to trade first-item latency
+against whole-output time.
+2.4
+Checking Explicit Times
+Because explicit times directly control when operations issue,
+an invalid schedule can violate data dependences. Suppose
+the programmer extends the GEMM across column blocks
+of 𝐵and starts the final loop early to overlap it with the tile
+walk. If the final loop drains columns faster than the walk
+finishes accumulating them, later columns read elements of
+𝑆before their last write. Whereas a GPU barrier would stall
+such a read until the write completes, the TSP reads the stale
+partial sum from SRAM and silently corrupts 𝐶. TauLang
+rejects the program before scheduling with a read-before-
+write error on 𝑆that cites the offending source lines, and
+accepts it once each column of the final loop starts after its
+tile walk finishes (§5.2).
+2.5
+Pinning One Stage in Attention
+Pins are optional, so in a loop body where multiple streams
+reconverge, the programmer pins only the stages of interest.
+Figure 5 shows such a body in the softmax pass of a three-
+pass attention kernel, after pass 1 has computed the scores
+𝑆and the row maxima 𝑀. The pass iterates over the KT
+key tiles in a plain range loop, while the inner tau.domain
+schedules both loops by incorporating the outer index 𝑘into
+its time map (➊). Each row computes 𝑒= exp(𝑆−𝑀), stores
+it to 𝐸, and adds its cross-lane sum tile_sum_f16(e) to the
+running denominator in 𝑍. By Equation 1, the scores and
+the row maximum must reach sub_f32 in the same cycle,
+as must the row sum and the denominator loaded from 𝑍at
+add_f32.
+The .at call (➋) pins exp_f32 EXP cycles after its row
+starts. Because the time map fixes the row start, the pin
+fixes every cycle gap along the path from the loads of 𝑆and
+𝑀through sub_f32 to exp_f32. Beyond fixing that timing,
+the pin turns the path into one timing cluster whose cycle
+gaps and hop counts the solver no longer searches, which is
+how pins cut compile time in §8.4. The reduction tail after
+exp_f32 carries no explicit time, and the compiler places
+and schedules the row sum, the load of 𝑍, and add_f32 so
+that their operands arrive in the same cycle.
+3
+Overview
+Scheduled TauIR
+MXM.W0 : LW [ t_issue = t0, ... ]
+VXM.0 : add [ t_issue = t1, ... ]
+MEM.W1 : load [ t_issue = t2, ... ]
+MXM.E0 : ACC [ t_issue = t3, ... ]
+MEM.E1 : store [ t_issue = t4, ... ]
+MEM.E2 : store [ t_issue = t5, ... ]
+§4
+TauLang DSL
+tau.T
+tau.domain(axes, at=f)
+tau.start(x), tau.end(x)
+x.at(p)
+k(...).at(p)
+# fix the invocation origin
+# start and completion times
+# iteration start time given by f
+# fix the operation's issue time
+# invocation time
+placement and schedule
+§6
+Time-Guided Cluster Scheduling
+Captured TauIR
+call compute_tile(...)        
+for r in [0,N]                      
+store A[r]                           
+§5
+{ invocation_time : tau.T  }
+{ start_time : tau.T + r × II  }
+{ issue_time : tau.T + r × II + L  }
+IR builder pass
+Validation Passes
+Space-First Scheduling
+or
+Figure 6. The TauLang workflow, from the DSL to the sched-
+uled TauIR. Each explicit time remains an attribute of the call,
+loop, or operation it schedules until placement and schedul-
+ing assign slices and issue cycles.
+Figure 6 shows how TauLang compiles a kernel written
+with explicit timing constructs (§4) into one timestamped
+program per slice. An IR builder pass first captures the ker-
+nel into TauIR (§5). As the captured TauIR box illustrates,
+each call carries an invocation_time, each timed loop car-
+ries a start_time, and each pinned operation carries an
+issue_time. Before any slice or cycle is assigned, validation
+passes check these attributes algebraically for timing errors
+that are independent of placement, such as the overlapped
+final loop of §2.4.
+Placement and scheduling then run in one of two flows
+(§6) to assign slices and issue cycles for all operations while
+satisfying Equation 1 and every explicit time. The cluster
+flow, our third contribution, formulates joint search as an ILP
+that decides where each tensor buffer resides in memory and
+when every operation issues. To keep this search tractable,
+the flow first merges operations whose cycle gaps are fixed
+into timing clusters. The space-first flow serves as a fast
+4
+
+
+--- Page 5 ---
+TauLang: A Language and Compiler for Space-Time Programming on Statically Scheduled Accelerators
+baseline that assigns slices using deterministic rules and
+then schedules issue cycles greedily. Both flows emit the
+scheduled TauIR at the bottom of the figure, which lists
+each operation on its assigned slice with its issue cycle. Code
+generation then assembles the scheduled TauIR into per-slice
+instruction streams (§7).
+4
+The TauLang Language
+As previewed in §2.3 and §2.5, TauLang extends a tile-style
+Python DSL with explicit times, which the programmer spec-
+ifies where timing matters while the compiler schedules the
+rest. Every explicit time is an affine cycle offset from a sym-
+bolic root over the enclosing loop indices and compile-time
+kernel parameters. Symbolic times supply the roots, pins
+attach a time to an operation or a call, and iteration domains
+attach a time map to a loop.
+4.1
+Symbolic Times
+Absolute cycle numbers from the start of the program would
+break modularity whenever a sub-kernel is reused or pre-
+ceded by other stages. Instead, every explicit time is an offset
+from one of three symbolic times, tau.T, tau.start, and
+tau.end. tau.T denotes the start of the current kernel invo-
+cation. tau.start(x) and tau.end(x) return the symbolic
+time at which an operation, iteration domain, or kernel invo-
+cation x starts or ends. A time measured from tau.start(x)
+or tau.end(x) constrains only the cycle distance from event
+x while leaving the exact cycle of x for the compiler to choose,
+as the accumulation pin and the final loop of Figure 3 do.
+4.2
+Pinning a Time
+A pin, written with the .at method, fixes the time at which
+one operation or kernel invocation executes. Written on a
+value, x.at(p) states that the operation producing 𝑥issues
+at time 𝑝, while its result reaches its consumers after the
+delays of Equation 1. The compiler chooses the issue cycle
+of an operation without .at, subject to the time map of
+an enclosing domain. A pin’s time expression may include
+architectural latency constants queried via arch_int, such
+as DOT in the accumulation pin of Figure 3.
+Written on a call, k(...).at(p) sets the tau.T of callee
+𝑘to the caller’s time 𝑝, which serves as the call’s invocation
+time and shifts every explicit time in the callee by 𝑝. The
+tau.T of the entry kernel is the start of the program. If
+a callee contains no explicit times, its body starts at the
+invocation time.
+4.3
+Iteration Domains
+tau.domain schedules a loop by declaring an iteration space
+together with a time map (at=lambda ...) from loop indices
+to the start of each iteration. In polyhedral terms, a time
+map defines an affine schedule from the iteration space to
+cycle time [10], where the coefficient of a loop index sets the
+initiation interval along that axis in modulo scheduling [35].
+The earliest unpinned operation of each iteration initiates
+the iteration at the exact cycle specified by the time map, and
+every other unpinned operation in the loop body issues at
+or after that cycle. An unpinned call takes its iteration start
+as its invocation time. Binding a domain to a name, such as
+tiles in Figure 3, lets the program refer to its iteration starts,
+so tiles[k] is the start of iteration 𝑘and tau.end(tiles)
+is the end of the domain. When a domain is written without
+at, it declares only the bounds and the compiler chooses the
+initiation interval of the loop.
+Because a time map can reference any enclosing loop
+index, a domain nested inside an untimed range loop can
+incorporate the outer index into its schedule. In the softmax
+pass of Figure 5, the term k*EXP_TILE_II in the time map
+(➊) starts each key tile’s domain EXP_TILE_II cycles after
+the previous one, which schedules the outer loop without a
+separate time map.
+5
+TauIR
+The compiler lowers explicit times from the DSL into at-
+tributes of TauIR, the intermediate representation of TauLang.
+This section describes how TauIR composes and lowers these
+timing attributes onto a shared timeline and how affine time
+validation rejects inconsistent schedules before placement
+and scheduling.
+5.1
+Timing Attributes
+TauIR represents each explicit time as one of three sym-
+bolic affine timing attributes in MLIR [21] (Figure 6). A
+call carries an invocation_time, a timed loop carries a
+start_time map over its loop indices, and an operation
+carries an issue_time pin. TauIR carries no unroll factor or
+pipeline stage count, so these attributes capture the entire
+programmer-specified schedule.
+At the operation level, TauIR distinguishes explicit and
+derived pins, each measured from a symbolic root. A pin
+the programmer writes with .at is an explicit pin, which
+fixes the exact cycle (from tau.T) or cycle distance (from
+tau.start or tau.end) at which the operation issues. Every
+unpinned operation inside a tau.domain instead carries a
+derived pin, the time derived from the iteration start of its
+nearest enclosing timed domain, which the operation takes
+as a lower bound on its issue cycle. Among these operations,
+only those with no intra-iteration operands, such as a load,
+can issue first, so TauIR marks them as candidates to initiate
+the iteration. The earliest scheduled candidate initiates the
+iteration at the exact cycle of its derived pin. Each iteration
+thus starts at the cycle specified by the time map without
+requiring the programmer to pin an operation by hand. Vali-
+dation and cluster partitioning rely on these operations for
+exact cycle gaps across iterations. An unpinned operation
+5
+
+
+--- Page 6 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+(a)
+1 tiles = tau.domain(NB, KB,
+2  at=lambda n,k: tau.T + (n*KB+k)*P)
+3 for n,k in tiles:
+4  tile(A,B,S,n=n,k=k,M=M,NB=NB,
+5       KB=KB,II=II).at(tiles[n,k]+L)
+6 for n,i in tau.domain(NB,M,
+7  at=lambda n,i: tiles[1,0]+(n*M+i)*II):
+8  store(C, cast_f32_to_f16(
+9      load(S, addr=i*NB+n)), addr=i*NB+n)
+op: tau.mem.read S[i*NB+n]
+src: L7 (time), L9 (read)
+at: n = NB−1, k = KB−1
+error: read-before-write
+S[iNB + n] · last write: k = KB − 1
+Δ(n, i) = tr − ts ≥ 0
+Δ(n, i) ≤ P − L − W − n(KBP − MII)
+Witness: n = NB − 1, Δ < 0
+tau.mem.write %S, %s, %rs
+ts ≥ T + (nKB + k)P 
++ L + iII + W
+%v = tau.mem.read %S, %rs
+tr = T + KBP + (nM + i)II
+(c) correct pins on each column
+walk
+last store to
+column n of S
+final loop
+read of
+column n
+n = 0
+n = 1
+n = 2
+n = 0
+n = 1
+n = 2
+KB · P
+KB · P
+cycles
+(b) As written
+walk
+last store to
+column n of S
+final loop
+read of
+column n
+n = 0
+n = 1
+n = 2
+n = 0
+n = 1
+n = 2
+KB · P
+M · II
+cycles
+Figure 7. Validation rejects a tiled GEMM whose final loop
+reads 𝑆before the tile walk finishes writing it. (a) The pro-
+gram, the composed times of the write and the read of 𝑆, and
+the diagnostic. (b) The paces of the walk and of the final
+loop as written. (c) The same paces once each column of the
+final loop starts after its tile walk.
+outside every tau.domain has no derived pin and issues
+wherever its dependences and resources allow.
+TauLang lowers these timing attributes onto a single time-
+line in three stages while preserving their meaning. First,
+it composes every call into the entry kernel by adding the
+call’s invocation_time to every time attribute of the callee,
+which places all times of the program on one shared timeline.
+Second, for each unpinned operation inside a tau.domain,
+it walks outward to the nearest enclosing timed domain to
+attach its derived pin and marks the candidate operations
+that can initiate each iteration. Finally, it unrolls the inner
+loops of every loop nest, while each loop that stays rolled
+takes the coefficient of its index in the pins as its initiation
+interval. Each unrolled instance retains the source form of
+its time attribute, so any diagnostic on a lowered operation
+quotes the line the programmer wrote.
+5.2
+Affine Time Validation
+As illustrated by the read-before-write bug in §2.4, explicit
+times may conflict with machine latencies or with one an-
+other. Before placement and scheduling run, TauLang checks
+the explicit times algebraically on TauIR against necessary
+timing conditions that hold regardless of slice placement and
+leaves conflicts that depend on exact hop counts to place-
+ment and scheduling. These conditions are independent of
+placement because the explicit times, the dependence graph,
+and the opcode latencies (𝑑func,𝑑skew) are already fixed in
+TauIR, whereas placement only varies hop counts within
+chip bounds. Each check takes the difference of two times
+sharing a root and verifies that it satisfies these necessary
+bounds across all loop indices. Validation rejects three error
+patterns, namely (1) a conflict among explicit times, such as
+a pin (.at) that places an operation before its iteration starts,
+(2) an unbalanced pipeline in which reconvergent data paths
+have different cycle lengths, and (3) a data-dependence vio-
+lation in storage, such as reading before a write commits or
+overwriting a value before it is read, which silently produces
+wrong data.
+Figure 7 traces the third pattern on the overlapped final
+loop of §2.4. On the composed timeline, each read of 𝑆in the
+final loop (at 𝑡𝑟, which initiates its iteration) must follow the
+last write to that element in tile (𝑛, KB −1) (at 𝑡𝑠≥row start
++𝑊, where𝑊is the minimum load-to-store latency through
+a row). This requires the upper bound 𝑃−𝐿−𝑊−𝑛(KB ·𝑃−
+𝑀·II) of 𝑡𝑟−𝑡𝑠to remain non-negative. Because the final loop
+drains columns faster than the walk finishes them (Figure 7b),
+𝑡𝑟−𝑡𝑠< 0 from 𝑛= 1 through 𝑛= NB−1. Validation catches
+this negative slack and reports the offending source lines
+(Figure 7a). Starting column 𝑛at tiles[n + 1, 0] cancels
+the term in 𝑛and leaves the bound 𝑃−𝐿−𝑊, so validation
+accepts the program when 𝑃≥𝐿+𝑊(Figure 7c).
+6
+Space-Time Scheduling
+Once affine time validation accepts the explicit times, the
+compiler must still decide where and when every operation
+runs. Placement assigns each operation to a slice, and sched-
+uling assigns its issue cycle. Both choices must satisfy Equa-
+tion 1 as well as the per-cycle bandwidth limits of SR tracks
+and memory banks. Because values on a stream advance one
+slice per cycle without waiting, placement and scheduling
+are coupled through the hop count 𝛿in Equation 1. TauLang
+satisfies these constraints in one of two flows, which trade
+compile time against schedule quality. The space-first flow
+decides placement and then scheduling, whereas the cluster
+flow decides tensor placement and scheduling together in
+an ILP.
+6.1
+Space-First Scheduling
+In a tensor kernel, regular data and computation patterns
+allow simple rules to assign every tensor to memory slices
+6
+
+
+--- Page 7 ---
+TauLang: A Language and Compiler for Space-Time Programming on Statically Scheduled Accelerators
+load
+A
+ACC
+ABC
+load
+S
+add
+store
+load
+A
+ACC
+ABC
+load
+S
+add
+store
+> 1
+>= 40
+>= 40
+>= 2
+>= 2
+>= 1
+>= 1
+Iteration0
+Iteration1
+load
+A
+ACC
+ABC
+load
+S
+add
+store
+load
+A
+ACC
+ABC
+load
+S
+add
+store
+> 1
+>= 40
+>= 40
+H+DOT
+II
+>= 1
+>= 1
+>= 2
+>= 2
+H+DOT
+Iteration0
+Iteration1
+exact gap (=)
+minimum gap (>=)
+programmer-defined
+explicit time (=)
+(a) original DAG
+(b) after partitioning
+load
+weight B
+load
+weight B
+Figure 8. Cluster partitioning of the row loop of tile (Fig-
+ure 3). Explicit times (red) merge the blue operations into
+one cluster.
+and words and each operation to a matching functional slice
+without search. Fixing these slice locations turns every hop
+count 𝛿in Equation 1 into a known constant and decouples
+scheduling from placement. To exploit this property for fast
+compilation, the space-first flow runs rule-based placement
+first and then schedules operations in cycle order with a
+greedy list scheduler [11], prioritizing operations by their
+critical-path latency to the end of the kernel.
+For each loop, the scheduler builds a single-iteration sched-
+ule at either the programmer-specified initiation interval or
+the smallest interval at which no two iterations collide on
+a slice. Repeating this schedule across the loop bounds ad-
+vances the timeline to the end of the last iteration, so the
+next loop or operation starts only after the loop drains. The
+scheduler requires every operation pinned with .at to is-
+sue at its written cycle and reports the source line of any
+mismatch. While the space-first flow is fast and determin-
+istic and serves as our baseline, separating placement from
+loop-by-loop scheduling limits schedule quality. Because
+hop counts 𝛿are fixed upfront, the list scheduler cannot
+relocate slices to align operand arrival cycles, which forces
+longer initiation intervals, while draining each loop prevents
+cross-loop overlap.
+6.2
+Time-Guided Cluster Scheduling
+Because placement and scheduling constrain each other, de-
+ciding both together finds schedules that no fixed placement
+allows, at the cost of a search space that grows exponentially
+in the number of operations. In the cluster flow, TauLang
+formulates this joint search as an ILP that decides which
+memory slices hold each tensor buffer and when every oper-
+ation issues. To keep the search tractable, as previewed in
+§2.5, TauLang uses stream dependences and explicit times
+to merge connected operations into timing clusters, whose
+operations shift in time together (Figure 8b).
+Placement. Most of the spatial freedom lies in the memory
+slices, which far outnumber the vector, switch, and matrix
+slices. How tensors are laid out across memory slices matters
+most for performance, because it sets the hop count 𝛿that
+each value travels along SR tracks to reach its consumer. The
+ILP therefore keeps the functional slices from the rule-based
+placement of the space-first flow and places only the tensor
+buffers. A tensor buffer occupies consecutive memory slices
+starting from a single base slice, and each memory access
+runs on the slice that holds the part of the tensor it addresses.
+The ILP thus carries one slice decision per buffer rather than
+one per access.
+Dependences. How a dependence constrains the schedule
+depends on the storage or communication medium it tra-
+verses (Figure 8a). A dependence through memory banks or
+matrix weight planes is an inequality, because storage holds
+a value across cycles until another write overwrites it. The
+consumer may therefore read the value at any cycle after
+the write commits. In contrast, a stream carries each value
+from its producer to its consumer without waiting, so their
+issue cycles must obey the rendezvous equality of Equation 1.
+This equality is where placement and scheduling constrain
+each other. Choosing the two slices fixes the hop count 𝛿and
+therefore the cycle gap between the two operations. Con-
+versely, once the two issue cycles are fixed, Equation 1 fixes
+the hop count 𝛿between their slices.
+Explicit times. Explicit times also state equalities between
+issue cycles (red arrows in Figure 8b). A time map fixes the
+issue cycle of the operation that initiates each iteration, and a
+pin (.at) fixes the issue cycle of the pinned operation. Every
+time map and pin therefore fixes the exact cycle gap between
+an operation and its root.
+Cluster partitioning. Given the operation DAG annotated
+with dependence bounds and explicit times, the issue cycles
+of its operations are not independent, because every exact
+gap (=) fixes the cycle difference between two operations
+before the solver runs. To presolve these equalities, TauLang
+partitions the DAG along all exact-gap edges, from both
+stream dependences and explicit times, into connected com-
+ponents (timing clusters). Because operations in the same
+cluster have fixed cycle offsets from one another, TauLang
+substitutes out their individual issue cycles along a spanning
+tree, which leaves at most one unknown start cycle per clus-
+ter and none at all for the cluster rooted at tau.T. Their slice
+placements are not independent either. When two stream-
+connected operations fall into the same cluster, the cluster’s
+start cycle cancels in Equation 1 and fixes the hop count 𝛿
+between them, so placing one slice directly determines the
+other at distance 𝛿.
+Figure 8 illustrates this presolve on the row loop of tile
+from §2.3 (Figure 3). In the original DAG (Figure 8a), machine
+latencies give each edge either an exact gap (solid) or a mini-
+mum gap (dashed). Because add takes two stream operands
+that must reach VXM in the same cycle, ACC fixes when both
+7
+
+
+--- Page 8 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+add and load S issue and joins the three operations with
+exact gaps within each iteration. In contrast, ABC reads its
+weights from a weight plane and takes only load A as a
+stream input, while the remaining edges pass through the
+matrix accumulator or memory and therefore impose only
+minimum gaps on load A, load weight B, and store. In
+Figure 8b, explicit times (red) add the missing exact gaps.
+The time map of the row domain links load A across iter-
+ations at interval II, and the .at on the accumulation fixes
+ACC at 𝐻+ DOT cycles after load A. Because 𝐻is the hop
+count from load A to ABC, ABC has no slack between load
+A and ACC. Since load A initiates each iteration from tau.T,
+partitioning merges all blue operations across iterations into
+a single cluster with known issue cycles, so the solver sched-
+ules only load weight B and store. From the fixed cycle
+gaps inside this blue cluster, Equation 1 also determines the
+hop counts from load A to ABC (𝐻hops) and from load S to
+add, so the memory slices of 𝐴and 𝑆follow directly from the
+matrix and vector slices. The pin on exp_f32 in §2.5 forms
+its cluster the same way.
+Resources. While cluster partitioning fixes cycle offsets
+within each cluster, operations in different clusters can still
+share a slice and must not collide on the same cycle or unit
+occupancy. Rather than unrolling a loop into one variable
+per iteration, the ILP keeps a single start-cycle variable for
+each rolled operation and forbids start-cycle differences at
+which two operations on the same slice would collide [35].
+For example, if operations 𝐴and 𝐵each run three times at
+a four-cycle interval (𝑎,𝑎+ 4,𝑎+ 8 and 𝑏,𝑏+ 4,𝑏+ 8), they
+collide on a shared slice whenever 𝑎−𝑏∈{−8, −4, 0, 4, 8}.
+Before solving, TauLang precomputes this forbidden set for
+every pair of operations that may share a slice.
+Objective and diagnostics. The ILP objective minimizes
+the kernel makespan, defined as the cycle by which every
+operation completes. TauLang solves the remaining slice
+and issue-cycle variables with CP-SAT [32] under a fixed
+time budget. When no valid schedule satisfies the explicit
+times, TauLang reports the violated pins or the stream de-
+pendence whose rendezvous Equation 1 cannot satisfy under
+any placement.
+7
+Implementation
+We implement TauLang in about 44K lines of Python and C++
+on top of MLIR [21]. A Python front end lowers kernels into
+our MLIR compiler pipeline, which carries symbolic timing
+attributes through call composition, affine time validation,
+and scheduling. We implement the ILP of the cluster flow
+on top of the CP-SAT solver in OR-Tools [32]. Once slices
+and issue cycles are assigned, backend passes allocate inter-
+slice SR tracks, partition the program into one timestamped
+instruction stream per slice, and assemble the streams into a
+binary.
+Finally, we implement a cycle-accurate software simulator
+and a SystemVerilog RTL model of the machine’s control
+logic. The simulator executes compiled binaries cycle by cy-
+cle across all slices, computes every data value, and traps on
+any rendezvous or resource violation, while the RTL model
+validates the simulator’s cycle timing.
+8
+Evaluation
+Our evaluation answers five questions that progress from
+untimed compilation to explicit timing in TauLang. (1) How
+much does deciding placement and issue cycles together
+reduce schedule latency over space-first scheduling on un-
+timed kernels (§8.2)? (2) Does fixing placement upfront still
+lose optimality under an exact scheduler, and what domi-
+nates the joint search cost (§8.3)? (3) Which explicit times
+accelerate joint search without increasing schedule latency
+(§8.4)? (4) How well do explicit time pins scale joint search
+as kernel size grows (§8.5)? (5) How do parameterized time
+maps let the programmer explore schedule trade-offs without
+rewriting the kernel (§8.6)?
+8.1
+Evaluation Setup
+Metrics. We report kernel latency in execution cycles and
+compile time in wall-clock seconds. On a statically scheduled
+machine, the binary fixes the slice and issue cycle of every
+instruction and each opcode has a fixed, data-independent la-
+tency, so a single run determines a kernel’s exact cycle count
+and small problem sizes suffice to validate the simulator
+against RTL. We measure all kernels on our cycle-accurate
+simulator, whose instruction latencies and issue intervals
+come from our 93-slice SystemVerilog RTL and match the
+published TSP parameters [2]. Since full RTL simulation in
+Verilator is too slow for larger problem sizes, we run the
+smallest instance of each kernel and one ResNet residual
+block in Verilator under both flows and confirm that the RTL
+matches the simulator’s cycle count on every binary without
+timing or resource violations.
+Configurations. We compare the two scheduling flows of
+TauLang. The baseline space-first flow fixes slice placement
+first and runs a greedy list scheduler (§6.1), whereas the
+cluster flow runs joint search, solving the ILP of §6.2 with
+CP-SAT [32] under a 60-second budget per solve. The case
+study raises this budget to 100 seconds, and to 600 seconds
+for some pairs near its front.
+Workloads. We evaluate ten kernels spanning BLAS [22],
+PolyBench [33], ResNet [14], and Transformer layers [38, 40]
+(Table 1). Each kernel is evaluated at three problem sizes (30
+instances in total) across three DSL versions. The untimed
+version writes no explicit times, the time maps version re-
+places range loops with tau.domain and its time map, and
+the pins version adds one to three lines of .at. Sections 8.2
+and 8.3 compile the untimed version in both flows to isolate
+the effect of joint placement and scheduling. Section 8.4 then
+8
+
+
+--- Page 9 ---
+TauLang: A Language and Compiler for Space-Time Programming on Statically Scheduled Accelerators
+Table 1. The ten kernels, the slices each uses besides memory,
+and the three sizes of each.
+Kernel
+Source
+Slices
+Sizes
+AXPY
+BLAS 1
+VXM
+4, 8, 16 vectors
+GEMV
+BLAS 2
+MXM
+4, 8, 16 vectors
+GEMM
+BLAS 3
+MXM, VXM 2, 3, 4 blocks of 𝐾
+Jacobi-2D
+PolyBench
+SXM, VXM
+4, 8, 16 rows
+Conv2D 3×3
+ResNet
+MXM, VXM 4, 8, 16 rows
+MaxPool 3×3/2 ResNet
+VXM
+4, 8, 16 positions
+Softmax
+Transformer MXM, VXM 4, 8, 16 rows
+RMSNorm
+Transformer MXM, VXM 4, 8, 16 rows
+MLP, 2 layers
+Transformer MXM, VXM 4, 8, 16 vectors
+Horner
+activation
+VXM
+degree 4, 8, 16
+AXPY
+GEMV
+GEMM
+Jacobi-2D
+Conv2D
+MaxPool
+Softmax
+RMSNorm
+MLP
+Horner
+0
+0.5
+1
+1.5
+2
+Speedup over space-first
+smallest size
+middle size
+largest size
+Figure 9. Latency speedup of the cluster flow over the space-
+first flow across the three problem sizes of Table 1.
+compares all three versions, while Sections 8.5 and 8.6 use
+the timed versions to scale joint search and explore schedule
+parameters.
+8.2
+Deciding Placement and Cycles Together
+On a statically scheduled machine, placement and scheduling
+are coupled through stream hop counts (Equation 1). We
+first test whether deciding both together is necessary for
+schedule quality by comparing the cluster flow against the
+space-first flow across all 30 untimed kernel instances. As
+shown in Figure 9, the cluster flow finds a lower-latency
+schedule than the space-first flow on every instance and
+achieves a 1.40× geometric-mean speedup (ranging from
+1.04× to 2.22×). Three repeated compiles of each instance
+produce identical latency.
+Two mechanisms explain the gain. First, choosing memory
+placement together with issue cycles shortens loop initiation
+intervals. Because the space-first flow fixes tensor place-
+ments before scheduling, operands streaming from different
+memory slices incur mismatched hop counts 𝛿, which forces
+the greedy list scheduler to pad the initiation interval to
+avoid collisions. By placing memory buffers to align operand
+AXPY
+GEMV
+GEMM
+Jacobi-2D †
+Conv2D
+MaxPool
+Softmax
+RMSNorm †
+MLP
+Horner
+0.01
+0.1
+1
+10
+Solve time (% of cluster)
+bars: solve time (left)    marks: latency (right)
+smallest size
+middle size
+largest size
+1
+1.2
+1.4
+1.6
+1.8
+2
+Latency (× cluster)
+Figure 10. Solve time (bars, left axis, percentage) and latency
+(marks, right axis, ratio) of the fixed-placement flow relative
+to the untimed cluster flow. Bar colors and marker shapes
+denote problem size, and the dashed line marks equal latency.
+† marks kernels whose optimal latency remains unproven
+for at least one size. AXPY matches the optimal untimed
+reference latencies.
+arrival cycles, the cluster flow reduces the initiation interval
+at the largest problem size from 19 cycles to 1 on Softmax,
+from 12 to 1 on RMSNorm, and from 4 to 1 on AXPY, so
+their speedups grow with the number of rows or vectors.
+Second, joint search overlaps consecutive loops. On GEMM
+and Conv2D, both flows achieve a 1-cycle initiation interval
+within each loop, but the space-first flow drains each loop
+completely before starting the next. In contrast, the cluster
+flow schedules all loops together and overlaps each weight
+install with the tail of the rows streaming through the previ-
+ous weight plane, which reduces the interval between the
+four weight installs of 4-block GEMM from 170–178 cycles
+to 84 cycles.
+Across all ten kernels, the speedup of joint search grows
+with problem size wherever the cycles it saves recur in every
+iteration or block, as in AXPY, Softmax, RMSNorm, GEMM,
+and Horner. Conversely, the speedups of GEMV, MLP, and
+Jacobi-2D stay nearly flat because fixed setup or serialized
+SXM shifts dominate their latency, while MaxPool peaks at
+the smallest size where its short loop allows tighter output
+spacing.
+8.3
+Placement Ablation
+Because space-first scheduling both fixes placement upfront
+and uses a greedy list scheduler, §8.2 alone does not show
+whether fixing placement still loses optimality under an exact
+scheduler. To isolate the effect of fixed placement, we evalu-
+ate a fixed-placement flow that solves the same untimed ILP
+while holding every buffer at the slice chosen by the space-
+first flow’s rule-based placement. As shown in Figure 10, even
+9
+
+
+--- Page 10 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+AXPY
+GEMV
+GEMM
+Jacobi-2D †
+Conv2D
+MaxPool
+Softmax
+RMSNorm †
+MLP
+Horner
+0
+1
+2
+3
+4
+Compile-time speedup
+bars: compile-time speedup (left)    marks: latency (right)
+time maps
+pins
+untimed
+0.98
+1.00
+1.02
+1.04
+1.06
+Latency vs. untimed
+Figure 11. Compile-time speedup and relative schedule la-
+tency over the untimed kernel (geometric mean across the
+three sizes; † marks a kernel where a solve reaches the 60 s
+budget).
+though CP-SAT proves every fixed-placement schedule opti-
+mal for its given placement, fixed placement still increases
+latency across all 30 instances by 1.24× in geometric mean
+(ranging from 1.02× to 1.92×) compared to the cluster flow,
+which factors the 1.40× speedup of §8.2 into 1.13× from the
+ILP scheduler and 1.24× from joint placement. While the
+fixed-placement ILP still overlaps consecutive loops, CP-SAT
+proves that the 1-cycle initiation intervals reached by the
+cluster flow are infeasible under the rule-based placement
+on 19 of the 30 instances, so the minimum interval at the
+largest size rises to 2 cycles on Softmax, 8 on RMSNorm, and
+4 on AXPY. At the same time, fixed placement cuts solve
+time to at most 2.4 seconds per instance, or 0.01% to 4.4%
+of the cluster flow’s solve time, which shows that searching
+memory slice placements accounts for over 95% of the solve
+time.
+8.4
+Choosing What to Pin
+While joint search is necessary for schedule quality, search-
+ing memory slice placements and issue cycles together is
+costly. To accelerate this search without raising latency, a
+TauLang program can specify either loop initiation inter-
+vals via time maps or operation cycle offsets via explicit
+time pins. Using the machine latencies exposed by TauLang,
+our kernels each pin one to three recurring pipeline offsets
+with known optimal values, such as the accumulation after
+a matrix multiply or the interval between weight installs.
+Figure 11 compares the time maps and pins versions against
+the untimed version (median compile time of three runs).
+Explicit time pins cut compile time by 1.72× in geometric
+mean and by up to 3.50× on AXPY, while matching the un-
+timed latency on 28 of the 30 instances and staying within
+one cycle of it on 8- and 16-row Jacobi-2D. Time maps alone,
+2
+8
+32
+128
+512
+Blocks of K
+1
+10
+60
+Solve time (s)
+GEMM
+1
+4
+16
+64
+256
+Residual blocks
+ResNet
+untimed
+anchored pins
+linear in size
+budget
+Figure 12. With pins, solve time grows more slowly than
+the kernel. The plot excludes the time to build the ILP. Cir-
+cles mark sizes with a schedule. Crosses mark sizes with no
+schedule within the budget.
+by contrast, leave compile time unchanged (1.00× geometric
+mean), because they fix only the initiation interval, which
+the solver already finds in its first search round. They also
+raise the latency of Jacobi-2D to 1.01×, because its time map
+starts the sum loop only after every shift loop finishes.
+Pins shorten the search for memory slice placements,
+which dominates solve time. Pinning the issue cycles at
+both ends of a stream dependence fixes the hop count 𝛿
+between their slices through Equation 1, which prunes can-
+didate placements. The compile-time benefit therefore de-
+pends on how much placement search the pinned timing
+relation removes. Consequently, kernels with more irregular
+data layouts, such as AXPY, Softmax, and GEMV, gain the
+largest compile-time speedups. Because these layouts cre-
+ate many candidate placements for the untimed solver to
+compare, fixing their pipeline gaps with pins cuts compile
+time by 2.79× to 3.50×. In contrast, MLP and GEMM carry
+the same weight-to-accumulation pin as GEMV, but each
+phase repeats a uniform data layout, which yields smaller
+compile-time speedups of 1.00× and 1.45×. Beyond cutting
+compile time at these sizes, pruning candidate placements
+also changes how the search scales with kernel size.
+8.5
+Scaling Joint Search
+To test whether pins let the cluster flow scale, we grow two
+representative workloads far past the sizes of Table 1. First,
+we scale 16-row GEMM from 2 to 1,636 blocks of 𝐾, where
+each block adds a weight-install phase followed by a row-
+streaming phase. Second, we stack 8-row ResNet residual
+blocks [14], each fusing two 3×3 convolutions and a skip
+connection. In both, all blocks are fused into one kernel
+whose weights and intermediate buffers must fit on the chip
+together, so the compiler must place and schedule all phases
+globally.
+We compile each workload both untimed and with pins,
+plus one pin between consecutive convolutions in ResNet,
+10
+
+
+--- Page 11 ---
+TauLang: A Language and Compiler for Space-Time Programming on Statically Scheduled Accelerators
+while the solver still places every buffer and weight set and
+schedules all unpinned operations. Figure 12 plots the total
+solve time per compile (averaged over three compiles) as
+kernel size grows. We plot solve time rather than compile
+time because building the ILP takes the same time in both
+versions wherever both find a schedule. The untimed solver
+stops scaling early. Untimed GEMM solve time grows by
+10.5× from 2 to 16 blocks and finds no schedule within the
+budget at 32 blocks, while untimed ResNet reaches the budget
+at 4 residual blocks and finds no schedule at 8.
+With pins, by contrast, the solver finds schedules at far
+larger sizes, and its solve time grows sub-linearly with kernel
+size. As GEMM grows 818× (from 2 to 1,636 blocks), solve
+time grows by only 97× (from 0.63 to 61 seconds, staying
+near 20 seconds between 256 and 512 blocks), and as ResNet
+grows 128× (from 1 to 128 residual blocks), solve time grows
+by only 38× (from 1.1 to 42 seconds, with no schedule at 256
+blocks). Every completed solve proves its schedule optimal
+under its pins. Across the sizes where the untimed solver
+succeeds, pins reduce solve time by 4.5× to 15.5× with zero
+latency penalty and match the exact untimed growth rate of
+96 cycles per 𝐾-block in GEMM and 648 cycles per residual
+block in ResNet. On 8-block ResNet, the single pin between
+consecutive convolutions cuts solve time by a further 3.3×
+over intra-convolution pins alone (from 14.9 to 4.5 seconds).
+Once timing clusters tame the search itself, scaling to these
+sizes exposes the next largest cost in compile time, which
+is building the ILP before the solver runs. Building the ILP
+involves no search, as it only precomputes the forbidden
+start-cycle differences across operation pairs that may share
+a slice. This step takes under one second up to 64 GEMM
+blocks and 8 residual blocks, and reaches 182 and 194 seconds
+at the largest sizes, 3.0× and 4.6× as long as the solve. Overall,
+a few pins in TauLang let the solver prove schedules optimal
+under those pins at 1,636 GEMM blocks and 128 residual
+blocks, far beyond the sizes the untimed solver reaches.
+8.6
+Exploring Schedules by Parameters
+Although time maps alone do not accelerate solver search, pa-
+rameterizing their strides lets the programmer explore sched-
+ule trade-offs on the same kernel, as in the GEMM schedules
+of Figure 4. We demonstrate this on a flow-matching ac-
+tion head that refines a chunk of 𝑁= 50 robot actions over
+𝐾= 10 sequential Euler steps, following 𝜋0 [5]. Reactive
+control minimizes first-item latency so the robot acts on the
+earliest action [15, 19], whereas chunked execution mini-
+mizes whole-output time across the full chunk [6]. Because
+the kernel omits cross-item attention, its 50 items execute
+independently, while within each item step 𝑘+ 1 depends
+on the two matrix projections and Euler update of step 𝑘.
+A single 2D time map, tau.T + a*II + k*STEP, schedules
+step 𝑘of item 𝑎, spacing successive items by II cycles and
+successive steps of the same item by STEP cycles. Only these
+two stride parameters change across compiles. Reducing
+2850
+3000
+3150
+4000
+4500
+5000
+Whole output done (cycle)
+2850
+2950
+3050
+3800
+4000
+4200
+(29, 277)
+(25, 278)
+(21, 281)
+(20, 285)
+(18, 286)
+(17, 288)
+(15, 298)
+(14, 303)
+First item done (cycle)
+compiled pair
+Pareto front
+Figure 13. Exploring the trade-off between first-item latency
+and whole-output time on a single kernel. Each circle is a
+compiled schedule for a parameter pair (II, STEP) at 𝑁= 50
+and 𝐾= 10, and the solid line connects the Pareto front of
+the compiled pairs. The right panel enlarges the front inside
+the dashed region and labels each front schedule with its
+(II, STEP) values.
+STEP lowers first-item latency because the final step of the
+first item starts (𝐾−1) · STEP cycles after its first, whereas
+reducing II lowers whole-output time because the last item
+starts (𝑁−1) · II cycles after the first.
+We first screen 891 parameter pairs across II from 16 to 48
+cycles and STEP from 274 to 300 cycles. Before invoking the
+solver, affine time validation rejects 407 of these pairs within
+about a second each, because their strides assign two matrix
+operations to the same slice in the same cycle. A compile
+that finds a schedule takes 32 to 518 seconds (median 68), so
+we solve 84 of the 484 accepted pairs on a coarse grid of II
+from 20 to 48 with six STEP values and sample 30 more pairs
+around the grid’s front (II down to 13, STEP up to 311). Of
+these 114 pairs, 44 yield a schedule and 70 reach the budget,
+mostly at tighter strides where a larger budget could expand
+the front further.
+Eight of the 44 schedules form the Pareto front among
+compiled pairs in Figure 13. Along the front, II falls from
+29 to 14 cycles while STEP rises from 277 to 303. Reactive
+control selects (29, 277), which lowers first-item latency by
+237 cycles compared to (14, 303) (2839 versus 3076 cycles),
+whereas chunked execution selects (14, 303), which reduces
+whole-output time by 498 cycles (3762 versus 4260 cycles).
+Across all 44 schedules, whole-output time exceeds first-item
+latency by exactly 49 · II cycles, and first-item latency falls
+between 9·STEP +346 and 9·STEP +360 cycles. The program-
+mer can thus predict both latencies from (II, STEP) to within
+14 cycles before compiling, while the compiler determines
+which pairs are realizable. Adapting the kernel between con-
+trol regimes requires only changing two parameter values
+rather than rewriting the kernel.
+11
+
+
+--- Page 12 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+9
+Related Work
+Tile-level kernel languages. Triton [37], TileLang [39],
+CuTile [4], Tilus [7], Helion [26], and Gluon [30] let a pro-
+grammer express block-level computation over tiles while
+the compiler chooses layouts, warps, and pipelines. TauLang
+retains this tile-level programming model of loads, stores,
+matrix multiplies, and epilogues, but adds first-class cycle
+times so the compiler can statically schedule targets that
+lack dynamic hardware synchronization. While Exo [18]
+also exposes scheduling to the programmer through explicit
+rewrites, its schedules specify operation orderings rather
+than issue cycles.
+Timing in hardware languages. High-level hardware de-
+sign languages such as Spatial [20], Dahlia [27], and Aether-
+ling [8] raise accelerator design above the register-transfer
+level while leaving cycle timing to the compiler. Closer to
+our philosophy, Filament [28] and Lilac [29] embed cycle in-
+tervals into the type system to verify hardware pipelines stat-
+ically. However, because these languages synthesize custom
+circuits, the designer can insert registers or buffers whenever
+a path needs delay. In contrast, TauLang targets a fixed ac-
+celerator with predetermined latencies, so it satisfies explicit
+times by scheduling operations jointly with tensor placement
+across memory slices.
+Compilers for spatial accelerators. TileLoom [23] simi-
+larly compiles tile programs to spatial accelerators by plan-
+ning tile placement and data movement, but its schedule
+stops at spatial assignment and execution order. CGRA com-
+pilers assign both spatial units and modulo cycles [24, 25, 35],
+often using integer programming [16, 31]. However, because
+CGRAs buffer early operands in local registers, data depen-
+dences only bound consumer issue cycles from below. On our
+target, stream operands obey the exact rendezvous equality
+of Equation 1, which TauLang combines with programmer-
+written explicit times to merge operations into timing clus-
+ters before solving.
+Polyhedral scheduling. Polyhedral compilers represent
+loop schedules as affine functions of the iteration indices
+and derive them automatically over data dependences [10].
+TauLang adopts this affine representation for its domain time
+maps, but lets the programmer write the schedule directly as
+cycle times while the compiler validates dependences alge-
+braically. Whereas traditional polyhedral schedules specify
+logical ordering for dynamically synchronized hardware,
+Clockwork [17] interprets affine schedules as physical cycles
+to synthesize and size buffers for image-processing hard-
+ware. In TauLang, time maps likewise denote exact cycles,
+but because the target hardware is fixed, a valid schedule
+must satisfy Equation 1 across existing slices and memory
+banks.
+10
+Conclusion
+TauLang is, to our knowledge, the first kernel language
+and compiler for statically scheduled accelerators. By mak-
+ing cycle time a first-class, parameterized language con-
+struct, TauLang decouples a kernel’s schedule from its code
+structure and enables whole-program schedule exploration
+without rewriting code. Lowering explicit times into TauIR
+lets the compiler validate timing algebraically before search
+and merge connected operations into timing clusters dur-
+ing joint space-time scheduling. Across our benchmarks, a
+few explicit time pins accelerate joint search and scale it to
+thousand-block kernels while matching untimed schedule
+latency within a single cycle.
+References
+[1] Dennis Abts, Garrin Kimmell, Andrew Ling, John Kim, Matt Boyd,
+Andrew Bitar, Sahil Parmar, Ibrahim Ahmed, Roberto DiCecco, David
+Han, John Thompson, Michael Bye, Jennifer Hwang, Jeremy Fow-
+ers, Peter Lillian, Ashwin Murthy, Elyas Mehtabuddin, Chetan Tekur,
+Thomas Sohmers, Kris Kang, Stephen Maresh, and Jonathan Ross.
+2022. A software-defined tensor streaming multiprocessor for large-
+scale machine learning. In Proceedings of the 49th Annual International
+Symposium on Computer Architecture. ACM, 567–580. doi:10.1145/
+3470496.3527405
+[2] Dennis Abts, Jonathan Ross, Jonathan Sparling, Mark Wong-VanHaren,
+Max Baker, Tom Hawkins, Andrew Bell, John Thompson, Temes-
+ghen Kahsai, Garrin Kimmell, Jennifer Hwang, Rebekah Leslie-Hurd,
+Michael Bye, E.R. Creswick, Matthew Boyd, Mahitha Venigalla,
+Evan Laforge, Jon Purdy, Purushotham Kamath, Dinesh Mahesh-
+wari, Michael Beidler, Geert Rosseel, Omar Ahmad, Gleb Gagarin,
+Richard Czekalski, Ashay Rane, Sahil Parmar, Jeff Werner, Jim Sproch,
+Adrian Macias, and Brian Kurtz. 2020. Think Fast: A Tensor Stream-
+ing Processor (TSP) for Accelerating Deep Learning Workloads. In
+2020 ACM/IEEE 47th Annual International Symposium on Computer
+Architecture (ISCA). IEEE, 145–158. doi:10.1109/ISCA45697.2020.00023
+[3] Kyle Aubrey and Farshad Ghodsian. 2026.
+Inside NVIDIA
+Groq 3 LPX: The Low-Latency Inference Accelerator for the
+NVIDIA Vera Rubin Platform.
+NVIDIA Technical Blog, https:
+//developer.nvidia.com/blog/inside-nvidia-groq-3-lpx-the-low-
+latency-inference-accelerator-for-the-nvidia-vera-rubin-platform/.
+https://developer.nvidia.com/blog/inside-nvidia-groq-3-lpx-the-
+low-latency-inference-accelerator-for-the-nvidia-vera-rubin-
+platform/
+[4] Jonathan Bentz and Tony Scudiero. 2025. Simplify GPU Program-
+ming with NVIDIA CUDA Tile in Python.
+NVIDIA Technical
+Blog, https://developer.nvidia.com/blog/simplify-gpu-programming-
+with-nvidia-cuda-tile-in-python/. https://developer.nvidia.com/blog/
+simplify-gpu-programming-with-nvidia-cuda-tile-in-python/
+[5] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi,
+Chelsea Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian
+Ichter, Szymon Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine,
+Adrian Li-Bell, Mohith Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xi-
+aoyang Shi, James Tanner, Quan Vuong, Anna Walling, Haohuan
+Wang, and Ury Zhilinsky. 2025. 𝜋0: A Vision-Language-Action Flow
+Model for General Robot Control. In Robotics: Science and Systems
+(RSS). https://arxiv.org/abs/2410.24164
+[6] Kevin Black, Manuel Y. Galliker, and Sergey Levine. 2025. Real-Time
+Execution of Action Chunking Flow Policies. In Advances in Neural
+Information Processing Systems (NeurIPS). https://arxiv.org/abs/2506.
+07339
+12
+
+
+--- Page 13 ---
+TauLang: A Language and Compiler for Space-Time Programming on Statically Scheduled Accelerators
+[7] Yaoyao Ding, Bohan Hou, Xiao Zhang, Allan Lin, Tianqi Chen,
+Cody Hao Yu, Yida Wang, and Gennady Pekhimenko. 2026. Tilus: A
+Tile-Level GPGPU Programming Language for Low-Precision Com-
+putation. In Proceedings of the 31st ACM International Conference on
+Architectural Support for Programming Languages and Operating Sys-
+tems, Volume 1. ACM, 281–297. doi:10.1145/3760250.3762219
+[8] David Durst, Matthew Feldman, Dillon Huff, David Akeley, Ross Daly,
+Gilbert Louis Bernstein, Marco Patrignani, Kayvon Fatahalian, and Pat
+Hanrahan. 2020. Type-Directed Scheduling of Streaming Accelerators.
+In Proceedings of the 41st ACM SIGPLAN Conference on Programming
+Language Design and Implementation. ACM, 408–422. doi:10.1145/
+3385412.3385983
+[9] David Faber. 2025.
+Nvidia buying AI chip startup Groq’s as-
+sets for about $20 billion in its largest deal on record.
+CNBC
+(Dec. 2025).
+https://www.cnbc.com/2025/12/24/nvidia-buying-
+ai-chip-startup-groq-for-about-20-billion-biggest-deal.html
+https://www.cnbc.com/2025/12/24/nvidia-buying-ai-chip-startup-
+groq-for-about-20-billion-biggest-deal.html.
+[10] Paul Feautrier. 1992. Some efficient solutions to the affine scheduling
+problem. I. One-dimensional time. International Journal of Parallel
+Programming 21, 5 (Oct. 1992), 313–347. doi:10.1007/bf01407835
+[11] Phillip B. Gibbons and Steven S. Muchnick. 1986. Efficient Instruc-
+tion Scheduling for a Pipelined Architecture. In Proceedings of the
+1986 SIGPLAN Symposium on Compiler Construction. Association for
+Computing Machinery, 11–16. doi:10.1145/12276.13312
+[12] Graham Gobieski, Souradip Ghosh, Marijn Heule, Todd Mowry, Tony
+Nowatzki, Nathan Beckmann, and Brandon Lucia. 2022. RipTide: A
+Programmable, Energy-Minimal Dataflow Compiler and Architecture.
+In 2022 55th IEEE/ACM International Symposium on Microarchitecture
+(MICRO). IEEE, 546–564. doi:10.1109/micro56248.2022.00046
+[13] Groq. 2023.
+Groq Sets New Large Language Model Per-
+formance Record of 300 Tokens per Second per User on
+Meta AI Foundational LLM, Llama-2 70B.
+PR Newswire,
+https://www.prnewswire.com/news-releases/groq-sets-new-
+large-language-model-performance-record-of-300-tokens-per-
+second-per-user-on-meta-ai-foundational-llm-llama-2-70b-
+301979607.html. https://www.prnewswire.com/news-releases/groq-
+sets-new-large-language-model-performance-record-of-300-
+tokens-per-second-per-user-on-meta-ai-foundational-llm-llama-2-
+70b-301979607.html
+[14] Kaiming He, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. Deep
+Residual Learning for Image Recognition. In 2016 IEEE Conference
+on Computer Vision and Pattern Recognition (CVPR). IEEE, 770–778.
+doi:10.1109/cvpr.2016.90
+[15] Sigmund H. Høeg, Yilun Du, and Olav Egeland. 2024. Streaming
+Diffusion Policy: Fast Policy Synthesis with Variable Noise Diffusion
+Models. arXiv:2406.04806, https://arxiv.org/abs/2406.04806.
+[16] Qijing Huang, Minwoo Kang, Grace Dinh, Thomas Norell, Aravind
+Kalaiah, James Demmel, John Wawrzynek, and Yakun Sophia Shao.
+2021. CoSA: Scheduling by Constrained Optimization for Spatial
+Accelerators. In 2021 ACM/IEEE 48th Annual International Symposium
+on Computer Architecture (ISCA). IEEE, 554–566. doi:10.1109/isca52012.
+2021.00050
+[17] Dillon Huff, Steve Dai, and Pat Hanrahan. 2021. Clockwork: Resource-
+Efficient Static Scheduling for Multi-Rate Image Processing Applica-
+tions on FPGAs. In 2021 IEEE 29th Annual International Symposium
+on Field-Programmable Custom Computing Machines (FCCM). IEEE,
+186–194. doi:10.1109/fccm51124.2021.00030
+[18] Yuka Ikarashi, Gilbert Louis Bernstein, Alex Reinking, Hasan Genc,
+and Jonathan Ragan-Kelley. 2022. Exocompilation for productive
+programming of hardware accelerators. In Proceedings of the 43rd ACM
+SIGPLAN International Conference on Programming Language Design
+and Implementation. ACM, 703–718. doi:10.1145/3519939.3523446
+[19] Sunshine Jiang, Xiaolin Fang, Nicholas Roy, Tomás Lozano-Pérez,
+Leslie Pack Kaelbling, and Siddharth Ancha. 2025. Streaming Flow
+Policy: Simplifying Diffusion/Flow-Matching Policies by Treating Ac-
+tion Trajectories as Flow Trajectories. In Conference on Robot Learning
+(CoRL). https://arxiv.org/abs/2505.21851
+[20] David Koeplinger, Matthew Feldman, Raghu Prabhakar, Yaqi Zhang,
+Stefan Hadjis, Ruben Fiszel, Tian Zhao, Luigi Nardi, Ardavan Pedram,
+Christos Kozyrakis, and Kunle Olukotun. 2018. Spatial: A Language
+and Compiler for Application Accelerators. In Proceedings of the 39th
+ACM SIGPLAN Conference on Programming Language Design and Im-
+plementation. ACM, 296–311. doi:10.1145/3192366.3192379
+[21] Chris Lattner, Mehdi Amini, Uday Bondhugula, Albert Cohen, Andy
+Davis, Jacques Pienaar, River Riddle, Tatiana Shpeisman, Nicolas Vasi-
+lache, and Oleksandr Zinenko. 2021. MLIR: Scaling Compiler Infras-
+tructure for Domain Specific Computation. In 2021 IEEE/ACM Interna-
+tional Symposium on Code Generation and Optimization (CGO). IEEE,
+2–14. doi:10.1109/cgo51591.2021.9370308
+[22] C. L. Lawson, R. J. Hanson, D. R. Kincaid, and F. T. Krogh. 1979. Basic
+Linear Algebra Subprograms for Fortran Usage. ACM Trans. Math.
+Software 5, 3 (Sept. 1979), 308–323. doi:10.1145/355841.355847
+[23] Wei Li, Zhenyu Bai, Heru Wang, Pranav Dangi, Zhiqiang Zhang,
+Cheng Tan, Huiying Lan, Weng-Fai Wong, and Tulika Mitra. 2026.
+TileLoom: Automatic Dataflow Planning for Tile-Based Languages
+on Spatial Dataflow Accelerators. In 20th USENIX Symposium on Op-
+erating Systems Design and Implementation (OSDI 26). USENIX As-
+sociation, Seattle, WA, 1891–1908. ISBN 978-1-939133-55-7. https:
+//www.usenix.org/conference/osdi26/presentation/li-wei
+[24] Leibo Liu, Jianfeng Zhu, Zhaoshi Li, Yanan Lu, Yangdong Deng, Jie
+Han, Shouyi Yin, and Shaojun Wei. 2019. A Survey of Coarse-Grained
+Reconfigurable Architecture and Design: Taxonomy, Challenges, and
+Applications. Comput. Surveys 52, 6 (Oct. 2019), 118:1–118:39. doi:10.
+1145/3357375
+[25] Bingfeng Mei, Serge Vernalde, Diederik Verkest, Hugo De Man, and
+Rudy Lauwereins. 2002. DRESC: A Retargetable Compiler for Coarse-
+Grained Reconfigurable Architectures. In 2002 IEEE International Con-
+ference on Field-Programmable Technology, 2002. (FPT). Proceedings.
+IEEE, 166–173. doi:10.1109/fpt.2002.1188678
+[26] Meta Platforms, Inc. 2025.
+Helion.
+https://github.com/pytorch/
+helion/blob/ae89748fa2230d745779321afb19e8cdaee6eb9c/
+README.md.
+https://github.com/pytorch/helion/blob/
+ae89748fa2230d745779321afb19e8cdaee6eb9c/README.md
+[27] Rachit Nigam, Sachille Atapattu, Samuel Thomas, Zhijing Li, Theodore
+Bauer, Yuwei Ye, Apurva Koti, Adrian Sampson, and Zhiru Zhang. 2020.
+Predictable Accelerator Design with Time-Sensitive Affine Types. In
+Proceedings of the 41st ACM SIGPLAN Conference on Programming
+Language Design and Implementation. ACM, 393–407. doi:10.1145/
+3385412.3385974
+[28] Rachit Nigam, Pedro Henrique Azevedo de Amorim, and Adrian Samp-
+son. 2023. Modular Hardware Design with Timeline Types. Proceedings
+of the ACM on Programming Languages 7, PLDI (June 2023), 120:1–
+120:25. doi:10.1145/3591234
+[29] Rachit Nigam, Ethan Gabizon, Edmund Lam, Carolyn Zech, Jonathan
+Balkind, and Adrian Sampson. 2026. Parameterized Hardware De-
+sign with Latency-Abstract Interfaces. In Proceedings of the 31st
+ACM International Conference on Architectural Support for Program-
+ming Languages and Operating Systems, Volume 2. ACM, 1382–1395.
+doi:10.1145/3779212.3790199
+[30] Jeff
+Niu.
+2025.
+Introduction
+to
+Gluon.
+Triton
+doc-
+umentation,
+https://github.com/triton-lang/triton/blob/
+4b92505335a579f78c03bcf1c12457ca5b18e683/python/tutorials/
+gluon/01-intro.py.
+https://github.com/triton-lang/triton/blob/
+4b92505335a579f78c03bcf1c12457ca5b18e683/python/tutorials/
+gluon/01-intro.py
+13
+
+
+--- Page 14 ---
+Xuxiao Yang, Junchi Wu, Yuqi Peng, Feiyang Wu, Zhuoran Li, Wei Kong, Shuo Tao, Dongyi Fan, Yiming Zhang, Keqin Luo, Xingrui Gao, Hao Zhang, Xuehai
+Qian, and Youwei Zhuo
+[31] Tony Nowatzki, Michael Sartin-Tarm, Lorenzo De Carli, Karthikeyan
+Sankaralingam, Cristian Estan, and Behnam Robatmili. 2013.
+A
+General Constraint-Centric Scheduling Framework for Spatial Ar-
+chitectures. In Proceedings of the 34th ACM SIGPLAN Conference on
+Programming Language Design and Implementation. ACM, 495–506.
+doi:10.1145/2491956.2462163
+[32] Laurent Perron, Frédéric Didier, and Steven Gay. 2023. The CP-SAT-LP
+Solver. In 29th International Conference on Principles and Practice of
+Constraint Programming (CP 2023) (Leibniz International Proceedings
+in Informatics (LIPIcs), Vol. 280). Schloss Dagstuhl – Leibniz-Zentrum
+für Informatik, 3:1–3:2. ISBN 978-3-95977-300-3. doi:10.4230/LIPIcs.
+CP.2023.3
+[33] Louis-Noël Pouchet and Tomofumi Yuki. 2016. PolyBench/C 4.2.1-beta:
+The Polyhedral Benchmark Suite. https://sourceforge.net/projects/
+polybench/files/polybench-c-4.2.1-beta.tar.gz/. https://sourceforge.
+net/projects/polybench/files/polybench-c-4.2.1-beta.tar.gz/
+[34] Raghu Prabhakar, Yaqi Zhang, David Koeplinger, Matt Feldman, Tian
+Zhao, Stefan Hadjis, Ardavan Pedram, Christos Kozyrakis, and Kunle
+Olukotun. 2017. Plasticine: A Reconfigurable Architecture for Parallel
+Patterns. In Proceedings of the 44th Annual International Symposium on
+Computer Architecture. ACM, 389–402. doi:10.1145/3079856.3080256
+[35] B. Ramakrishna Rau. 1994. Iterative Modulo Scheduling: An Algorithm
+for Software Pipelining Loops. In Proceedings of the 27th Annual Inter-
+national Symposium on Microarchitecture. Association for Computing
+Machinery, 63–74. doi:10.1145/192724.192731
+[36] Satnam Singh. 2022. The Virtuous Cycles of Determinism: Program-
+ming Groq’s Tensor Streaming Processor. In Proceedings of the 2022
+ACM/SIGDA International Symposium on Field-Programmable Gate
+Arrays. ACM, 153. doi:10.1145/3490422.3510453 Keynote abstract.
+[37] Philippe Tillet, H. T. Kung, and David Cox. 2019. Triton: an inter-
+mediate language and compiler for tiled neural network computa-
+tions. In Proceedings of the 3rd ACM SIGPLAN International Work-
+shop on Machine Learning and Programming Languages. ACM, 10–19.
+doi:10.1145/3315508.3329973
+[38] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit,
+Llion Jones, Aidan N. Gomez, Łukasz Kaiser, and Illia Polo-
+sukhin. 2017.
+Attention Is All You Need. In Advances in Neu-
+ral Information Processing Systems, Vol. 30. Curran Associates,
+Inc., 5998–6008.
+https://proceedings.neurips.cc/paper/2017/hash/
+3f5ee243547dee91fbd053c1c4a845aa-Abstract.html
+[39] Lei Wang, Yu Cheng, Yining Shi, Zhiwen Mo, Zhengju Tang, Wenhao
+Xie, Tong Wu, Lingxiao Ma, Yuqing Xia, Jilong Xue, Fan Yang, and Zhi
+Yang. 2026. TileLang: Bridge Programmability and Performance in
+Modern Neural Kernels. In International Conference on Learning Rep-
+resentations. https://proceedings.iclr.cc/paper_files/paper/2026/hash/
+76fb92288bf90360c527efb0d1c2aba6-Abstract-Conference.html
+[40] Biao Zhang and Rico Sennrich. 2019. Root Mean Square Layer Normal-
+ization. In Advances in Neural Information Processing Systems, Vol. 32.
+Curran Associates, Inc., 12381–12392. https://proceedings.neurips.cc/
+paper/2019/hash/1e8a19426224ca89e83cef47f1e7f53b-Abstract.html
+14

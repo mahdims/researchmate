@@ -1,0 +1,714 @@
+--- Page 1 ---
+Solver-Free and Cost-Aware Online Scheduling
+of AI Data Center Tasks
+Xin Qin, Dawei Qiu
+School of Electrical and Electronic Engineering
+Nanyang Technological University, Singapore
+{xin.qin, dawei.qiu}@ntu.edu.sg
+Fei Teng
+Department of Electrical and Electronic Engineering
+Imperial College London, London, UK
+f.teng@imperial.ac.uk
+Abstract—AI data centers receive computing tasks continu-
+ously, whereas solver-based optimization takes time to run and
+electricity is priced per settlement period. This paper bridges
+this timing gap through a solver-free online optimization rule
+inspired by dual decomposition. The rule assigns each task a start
+period upon arrival to optimize energy cost subject to operational
+constraints, shifting flexible tasks toward low-price periods while
+keeping high-priority tasks on schedule. Simulations on the A100
+GPU trace (3,456 GPUs, 1,343 tasks) show that the proposed
+rule keeps GPU and CPU use within capacity while scheduling
+tasks at low cost. Compared with a multi-timescale optimization
+benchmark, it achieves a lower cost and, because it needs no
+solver, much less computation time.
+Index
+Terms—AI
+data
+center,
+demand
+flexibility,
+online
+scheduling, GPU workload, real-time electricity price.
+I. INTRODUCTION
+A. Background
+AI data centers (AIDCs), which host training and infer-
+ence clusters, are now large electrical loads, and electricity
+has become their largest operating expense, accounting for
+about two-thirds of the operating cost [1]. Their cost is also
+increasingly exposed to wholesale prices, which vary within
+the day. To reduce energy cost, part of their workload can be
+shifted to low-price periods by delays of minutes to hours, and
+experiments on GPU clusters have shown power reductions
+without compromising service targets [2], [3]. These findings
+motivate scheduling the start times of delay-tolerant tasks to
+exploit lower-price periods while still completing every task.
+The difficulty is a mismatch between the timescales of
+computing and energy. On the computing side, tasks arrive
+continuously, time-stamped to the second [4]. On the energy
+side, electricity is bought day ahead or in real time priced
+per hour or per 15 min, and an energy optimization that
+decides task start periods requires computational resources and
+time. This creates a dilemma: If the AIDC operator solves the
+optimization whenever a task arrives, the solver may not finish
+before the next arrival; If the operator solves it once per period
+instead, tasks wait unnecessarily for the next solve and may
+miss low-price periods.
+This paper therefore address one question: Can a solver-free
+rule that schedules each task once, on arrival, respect the GPU
+and CPU capacities while optimizing energy cost?
+B. Literature Review
+Existing works on energy-aware task scheduling in data
+centers follow three approaches.
+First, horizon-based methods plan a given workload over
+a given horizon. For example, the method in [5] uses day-
+ahead carbon forecasts to cap the next day’s hourly capacity
+for flexible workloads. Recent AIDC studies schedule training
+and inference workloads by robust optimization under uncer-
+tainty [6] or by a MILP for an AIDC operating as a microgrid
+prosumer [7]. These methods suit advance scheduling, when
+all tasks and prices are known, but are difficult to apply in
+real time as tasks arrive.
+Second, online methods decide each job as it arrives.
+Paper [8] delays flexible tasks into the lowest-carbon period
+within a waiting limit, also considering cloud service cost.
+Work [9] schedules tasks slot by slot under stochastic prices,
+and work [10] proposes a randomized online job and energy
+optimizer with a competitive ratio, building on online allo-
+cation theory [11], [12]. These rules target carbon, service
+cost or worst-case guarantees, rather than the energy cost
+minimization under resource limits.
+Third, multi-timescale methods separate fast and slow de-
+cisions. Work [13] switches servers on a slow time scale and
+sets service rates every slot, with Lyapunov bounds on cost and
+delay. Work [14] shapes the load one day ahead and places
+arriving jobs in real time, and D3T [15] assigns queued tasks to
+different sites at a time scale of seconds and optimizes cooling
+every 30 min. These methods decide where a task runs or how
+fast queued work is served, which may rely on offline training,
+however, they do not decide when flexible tasks start to reduce
+energy costs.
+C. Contributions
+This paper proposes an online optimization method that
+schedules AIDC tasks in real time. We take the perspective
+of the AIDC operator, as a price-taker, and schedule the
+tasks submitted during an operating day as they arrive. The
+contributions are summarized below:
+1) A fast online scheduling method. The proposed method
+decides each task once, at submission, by choosing its start
+period within the allowed delay, and achieves high computa-
+tional efficiency without a solver.
+2) A cost-efficient rule based on dual decomposition. In-
+spired by dual decomposition, the proposed method integrates
+the CPU/GPU resource shadow prices and reserves capacity,
+which contributes to cost optimization and keeps high-priority
+tasks on time.
+arXiv:2611.22239v1  [eess.SY]  17 Nov 2026
+
+
+--- Page 2 ---
+TABLE I
+NOMENCLATURE
+Symbol
+Meaning
+t ∈T
+Time period, T = {1, . . . , T}
+c ∈{G, C}
+Resource: GPU or vCPU
+j ∈J , J HP
+Task submitted; set of all and high-priority (HP) tasks
+Sj
+Set of possible start periods of task j
+Fj
+Set of feasible start periods of task j (fit free capacity)
+∆t
+Operation period length
+λDA
+t
+, λRT
+t
+Day-ahead and real-time price in period t ($/MWh)
+sj, ℓj
+Submission time and run time of task j
+tj, ¯tj
+Earliest and latest start period of task j
+Dj
+Delay limit of task j (periods)
+nj
+Number of periods spanned by the run of task j
+aj,i
+Share of the ith period of its run in which task j runs
+rc
+j
+Units of resource c requested by task j
+R0,c
+t
+, Rc
+Units of resource c used by the running tasks in period
+t; capacity limit of resource c
+ρ, pc
+Power usage effectiveness (PUE); power per unit of
+resource c above idle (W)
+Pj
+Facility power added by task j when running (kW)
+Cj,t, ˆCj,t
+Real-time and expected energy costs of starting task j in
+period t
+xj,t
+1 if task j starts at the beginning of period t, else 0
+t∗
+j
+Start period chosen for task j
+Uc
+t
+Units of c committed and reserved in period t
+µc
+t
+Shadow price of resource c in period t ($/unit)
+3) Case studies with benchmark comparisons. Based on the
+practical AI task data in the A100 GPU trace, we investigate
+the operational cost and computation time of the proposed
+method by comparing it with an energy-unaware rule, a multi-
+timescale optimization, and the perfect offline optimum.
+The remainder of this paper is organized as follows. Sec-
+tion II introduces the problem setting and formulation. Sec-
+tion III proposes the online rule. Section IV presents case
+studies and comparisons with benchmarks, and Section V
+presents conclusions and discussion.
+II. MODEL FORMULATION
+We introduce the model formulation in this section. For
+clarity, we list the notation in Table I.
+A. Problem setting and assumptions
+We take the perspective of an AIDC operator who receives
+computing tasks and aims to minimize its energy cost as a
+price taker. The AIDC is exposed to the prices of a two-
+settlement wholesale market, as in the US or China, either
+directly or through a retailer that passes these prices on. The
+day-ahead and real-time prices over period t are denoted by
+λDA
+t
+and λRT
+t
+, respectively. The operator schedules tasks in
+operation periods t ∈T of length ∆t, the interval at which
+it makes decisions, which ranges from seconds to minutes.
+On-site generations and the adjustment of cooling are not
+considered. Tasks submitted before the operating day are
+already running; together with the idle power, they form the
+day-ahead schedule, settled at λDA
+t
+. We focus on the tasks
+submitted during the operating day, which need to schedule in
+real time. Their energy is a deviation from day-ahead schedule
+and is settled at λRT
+t
+.
+Tasks can be submitted at any second, and every task should
+be completed. Task j is submitted at sj, runs for ℓj (spanning
+nj = ⌈ℓj/∆t⌉periods), and requests rG
+j GPUs and rC
+j vCPUs.
+It can start from period tj, the first period that begins at or after
+sj, and may wait up to Dj further periods. Tasks are divided
+into two categories: 1) High-priority (HP) tasks, such as online
+inference, are inflexible and start without delay (Dj = 0); 2)
+Flexible tasks, such as model training and batch inference,
+can wait up to Dj periods. Once a task is scheduled, its start
+cannot be postponed: a user who has been told that a task will
+finish within the next hour would not accept it finishing two
+hours later because of the operator’s scheduling.
+B. Optimization problem formulation
+The AIDC operator minimizes the real-time cost of the tasks
+submitted during the day over a horizon of T periods. Given
+all tasks and prices, the offline schedule solves the following
+mixed-integer linear programming (MILP) problem:
+min
+x
+X
+j∈J
+X
+t∈Sj
+Cj,t xj,t
+(1)
+subject to
+X
+t∈Sj
+xj,t = 1,
+xj,t ∈{0, 1},
+∀j ∈J ,
+(2)
+R0,G
+t
++
+X
+j∈J
+rG
+j
+X
+k∈Sj
+t−nj<k≤t
+xj,k ≤R
+G,
+∀t ∈T ,
+(3a)
+R0,C
+t
++
+X
+j∈J
+rC
+j
+X
+k∈Sj
+t−nj<k≤t
+xj,k ≤R
+C,
+∀t ∈T .
+(3b)
+The binary xj,t equals 1 if task j starts at the beginning of
+period t, and Cj,t is the real-time energy cost of that start,
+which is a scalar constant. Constraint (2) gives each task
+exactly one start period. Constraints (3a)–(3b) keep the GPU
+and vCPU use within the resource capacities. R0,G
+t
+and R0,C
+t
+are the GPUs and vCPUs used in period t by tasks already
+scheduled in prior days (i.e., outside J ).
+Start periods: Task j can start in the following periods:
+Sj = {tj, . . . , ¯tj},
+(4)
+where tj = ⌈sj/∆t⌉+ 1 is the first period starting at or after
+sj, and ¯tj = min{tj+Dj, T} is the latest allowed start period.
+Power and cost: With a fixed PUE ρ, task j adds a constant
+power Pj while it runs, and starting it in period t costs
+Cj,t = ∆t Pj
+nj
+X
+i=1
+aj,i λRT
+t+i−1,
+Pj =
+ρ
+1000
+ pGrG
+j + pCrC
+j
+
+,
+aj,i = min{1, ℓj/∆t −i + 1},
+i = 1, . . . , nj,
+(5)
+where pG and pC are the power per GPU and per vCPU above
+idle. A task that starts in period t fills its first nj −1 periods
+and a share aj,nj ∈[0, 1] of its last. This formulation keeps
+the CPU and GPU well used when ∆t is large. A smaller
+
+
+--- Page 3 ---
+∆t gives each task more start periods, and hence more binary
+variables, so the MILP may not be solved within one period.
+Overall, problem (1)–(3) minimizes the real-time energy
+cost. Since Cj,t is a constant, the problem is linear in x and
+is a MILP, with integrality only through xj,t ∈{0, 1}.
+III. SOLUTION METHOD
+The formulation in (1)–(3) cannot be applied directly during
+operation for three reasons. First, tasks arrive one at a time, so
+in period t only the tasks submitted so far are known, and the
+global optimum cannot be obtained without the complete task
+information. Second, the AIDC operator’s decision every ∆t
+(by solving a MILP over the waiting tasks) may not be finished
+within a period of seconds, but solving it less often, e.g. every
+15 min, makes arriving tasks wait for the next solve. Third,
+the real-time price is known only for the current settlement
+interval, so later prices must be forecast.
+To address these limits, we propose a solver-free online
+rule that assigns each task a start period upon arrival while
+respecting GPU and CPU capacity constraints. The workflow
+of the proposed method is illustrated in Fig. 1.
+A. Online Scheduling Rule
+This section presents the proposed online rule, which sched-
+ules the tasks of problem (1)–(3) as they arrive. Each task
+is scheduled once, at its submission time sj, in order of
+submission.
+Expected cost: A task submitted at sj can run from period
+tj onward. With the forecast of real-time prices denoted by
+ˆλt, for a task j, the expected cost of starting it in period t is
+ˆCj,t = ∆t · Pj
+nj
+X
+i=1
+aj,i ˆλt+i−1.
+(6)
+Resource capacity: U C
+t
+and U G
+t
+hold the use of GPU and
+CPU resources committed in period t, plus a reservation for
+upcoming HP tasks,
+U G
+t = R0,G
+t
++
+X
+j∈J HP
+tj≤t<tj+nj
+rG
+j ,
+∀t ∈T ,
+(7a)
+U C
+t = R0,C
+t
++
+X
+j∈J HP
+tj≤t<tj+nj
+rC
+j ,
+∀t ∈T .
+(7b)
+Decision for task j: An HP task first releases its own
+reservation. The feasible start periods k ∈Sj are then those
+from which the task fits, for both GPUs and CPUs, in every
+period t of its run:
+U G
+t ←U G
+t −rG
+j ,
+U C
+t ←U C
+t −rC
+j ,
+tj ≤t < tj + nj,
+if j ∈J HP,
+Fj =
+
+k ∈Sj : U G
+t + rG
+j ≤R
+G, U C
+t + rC
+j ≤R
+C,
+∀t, k ≤t < k + nj
+	
+.
+(8)
+If Fj̸ = ∅, the task starts in its cheapest feasible period, with
+ties going to the earliest (9a). Otherwise it starts late, in the
+first period after ¯tj from which it fits for its whole run (9b):
+Fig. 1. Workflow of the proposed solver-free online scheduling rule.
+t∗
+j = min
+n
+arg min
+t∈Fj
+ˆCj,t(tj)
+o
+,
+(9a)
+t∗
+j = min
+
+k > ¯tj : U G
+t + rG
+j ≤R
+G, U C
+t + rC
+j ≤R
+C,
+∀t, k ≤t < k + nj
+	
+.
+(9b)
+If no such period exists within the horizon, the task is not
+started. The start is then confirmed:
+U G
+t ←U G
+t +rG
+j , U C
+t ←U C
+t +rC
+j , t∗
+j ≤t < t∗
+j +nj. (10)
+Each decision evaluates (6) and (8) only over the task’s
+allowed start periods, without calling a solver.
+Feasibility: Each task receives one start from (9), and (10)
+fixes it, so (2) holds. Condition (8) reflects (3) for task j with
+all earlier starts fixed in U c
+t , and (10) adds only starts that fit;
+hence U c
+t ≤R
+c holds throughout. Each HP task’s capacity is
+reserved in advance, so releasing and recommitting it leaves
+U c
+t unchanged if task forecast is perfect. Hence every HP task
+starts on time, provided the running tasks and all HP tasks
+together fit within capacity. The delay limit holds because
+Fj ⊆Sj, and is exceeded only by a late start (9b).
+Remark (dual-decomposition view): Relaxing (3) with
+shadow prices µc
+t ≥0 splits (1)–(3) into one problem per
+task:
+tj(µ) ∈arg min
+t∈Sj
+h
+Cj,t +
+X
+c∈{G,C}
+t+nj−1
+X
+k=t
+µc
+k rc
+j
+i
+.
+(11)
+The first term is the energy cost; the second is the cost of the
+capacity that the start occupies. Dual decomposition updates
+µc
+t by subgradient steps until the starts fit [16]; this needs
+all tasks and many iterations. The online rule instead sets the
+prices from the committed state:
+µc
+t =
+(
+0,
+U c
+t + rc
+j ≤R
+c,
++∞,
+otherwise.
+(12)
+With (12), (11) becomes (8)–(9a): start periods whose run
+meets a period without room for the task are excluded, and
+the cheapest remaining one is taken. The reservation (7) prices
+HP capacity at +∞for flexible tasks. If capacity is slack at
+the cheapest starts, µc
+t = 0 is optimal and (11) reduces to the
+cheapest start; with all real-time prices known, the rule then
+solves (1)–(3). If capacity binds, the optimal µc
+t is finite and
+assigns a congested period to the task that gains most from it,
+whereas (12) assigns it to the first arrival.
+
+
+--- Page 4 ---
+Fig. 2. Day-ahead and real-time prices of CAISO NP15 on August 21, 2026.
+Fig. 3. GPU demand of the tasks if every task starts at its submission: tasks
+running from yesterday and the HP, Priority and Spot tasks of the day.
+IV. CASE STUDY
+A. Case Setup
+We consider the operation of a AIDC cluster located in
+California, US. It has 3,456 A100-SXM4-80GB GPUs and
+55,296 vCPUs. Each GPU draws 50 W when idle and 400 W
+at full load, and each vCPU 1 W and 5 W. With a PUE of
+ρ = 1.30, the facility power ranges from 297 kW with all
+servers idle to 2,157 kW at full load.
+We consider that the AIDC is exposed to CAISO wholesale
+prices, including two parts: The day-ahead part, for the idle
+power and the tasks already running from the previous day,
+and the real-time part, for the tasks submitted during the
+operating day. We focus on the real-time part. We use the
+NP15 locational marginal prices of August 21, 2026 (Fig. 2).
+The tasks come from the job set of the reference [4], which
+records the submission time, duration and GPU and CPU
+requests of each job. We make two changes for our tests.
+First, we reassign each job to one of three priority classes,
+HP, Priority and Spot, while keeping its other features. Second,
+to stress the capacity logic, we move jobs recorded on other
+GPU types into the considered task set, so that peak demand
+reaches about 109.2% of GPU capacity while all tasks can
+still be completed within the horizon.
+On the operating day, 1,622 tasks from yesterday are already
+running at 00:00, and 1,343 new tasks are submitted during
+the day (350 HP, 311 Priority and 682 Spot), which may arrive
+at any second, as shown in Fig. 3.
+We compare four cases: 1) Proposed: the solver-free online
+rule; 2) Benchmark 1 (earliest feasible): starts each task in
+its earliest feasible period without considering energy cost;
+3) Benchmark 2 (rolling MILP): re-solves (1)–(3) for waiting
+tasks at each update every 5 min (following multi-timescale
+dispatch); and 4) Perfect (offline MILP): solves the full-
+horizon problem (1)–(3) after the day with all tasks and
+prices known, providing a perfect-information reference with
+the global optimum. For a fair comparison of computation
+TABLE II
+SIMULATION SETTINGS
+Parameter
+Value
+Parameter
+Value
+Horizon
+26 h
+Dj, Spot
+120 (120 min)
+Period length ∆t
+1 min
+Benchmark 2 update
+5 min
+Dj, HP
+0
+Offline MILP gap
+10−4
+Dj, Priority
+60 (60 min)
+Offline time limit
+600 s
+TABLE III
+ENERGY COST, SCHEDULING PERFORMANCE, AND COMPUTATION TIME
+Method
+Flexible-task
+cost ($)
+Cost above
+offline (%)
+Late HP
+tasks (#)
+Time per
+decision (ms)
+Benchmark 1
+378.02
+12.9
+0
+0.032
+Benchmark 2
+341.27
+1.9
+7
+41.4
+Proposed
+340.74
+1.7
+0
+0.024
+Perfect
+334.97
+0
+0
+52,800
+time, the MILPs of Benchmark 2 and Perfect are solved by
+calling the MATLAB intlinprog solver directly, without a
+modeling layer such as YALMIP, with a relative gap of 10−4.
+The simulation settings are summarized in Table II.
+B. Cost and Computation
+Table III shows the energy cost and scheduling performance
+of flexible tasks (only Priority and Spot). Benchmark 1 starts
+each task in its earliest feasible period. The proposed method
+instead delays Priority and Spot tasks by 18.9 and 39.1 min
+on average, shifting them to lower-price periods. This lowers
+the flexible-task cost by $37.28 (9.9%). The proposed method
+also costs $0.53 (0.16%) less than Benchmark 2. Although
+this saving is modest, Benchmark 2 has three drawbacks: 1)
+it takes over 1,000 times longer per decision compared to
+the proposed method; 2) since it updates only every 5 min,
+tasks wait 1.2 min longer on average; and 3) with no capacity
+reserved for HP tasks, seven HP tasks start late, violating their
+timing requirements. (We did not add penalty in the reported
+cost.) Finally, the proposed method costs $5.77 (1.7%) more
+than Perfect. However, Perfect requires complete knowledge
+of future tasks and prices and takes 52.8 s (nearly 1 min)
+to solve the full-horizon problem, making it impractical for
+real-time operation.
+C. Capacity and HP Tasks
+GPU capacity is the binding constraint: utilization reaches
+100% around 03:00, 10:00–12:00 and 17:00–19:00 under the
+proposed method (Fig. 4), while vCPU utilization remains
+below 97% across all methods (Fig. 5). Both the proposed
+method and Benchmark 1 reserve capacity for future HP tasks
+and start all HP tasks on time. However, Benchmark 1 does
+not consider the impact of electricity prices, leaving GPU load
+high during the high-price periods around 09:00 and 19:00
+(Fig. 4), whereas the proposed method combines capacity
+reservation with price-aware scheduling. Benchmark 2 also
+uses price forecasts but lacks capacity reservation. Earlier
+batches can therefore occupy the available GPU capacity,
+delaying seven HP tasks by 5–32 min.
+
+
+--- Page 5 ---
+Fig. 4. GPU use per period of the four cases.
+Fig. 5. vCPU use per period of the four cases.
+D. Impact of the Price and Task Forecast
+On the operating day, the day-ahead price follows the shape
+of the real-time price (Fig. 2), so it serves as a reasonable
+forecast. The proposed method and Benchmark 2 use the same
+information: the day-ahead price as the price forecast, and
+perfect knowledge of the HP arrivals.
+With capacity mostly slack, µc
+t = 0 in most periods, so both
+methods take the cheapest start under the forecast, and their
+hourly costs differ by at most $0.6 (Fig. 6). The gap to Perfect
+comes from forecast error: between 12:00 and 17:00, the real-
+time price falls 9–19 $/MWh below the day-ahead price, so
+Perfect shifts load from 09:00–12:00 to 12:00–16:00 (Fig. 7).
+From 17:00, when the forecast matches the price, the hourly
+costs agree within $1. This shows the value of better price
+forecasts.
+V. CONCLUSION
+In this work, we propose an online solver-free rule that
+schedules each task of an AIDC once, at submission, in its
+cheapest capacity-feasible start period under the forecast real-
+time price, given the day-ahead schedule. Under a stressed
+workload, the proposed method has a 9.9% lower cost than the
+earliest-feasible rule (Benchmark 1). Compared with a rolling
+MILP (Benchmark 2), it achieves a slightly lower cost, starts
+all HP tasks on time, and needs 0.024 ms per decision against
+41.4 ms per update. Its cost is within 1.7% of the perfect
+offline optimum. Future work will address task and market
+price uncertainty, multi-day evaluations, and the theoretical
+bound of the online algorithm.
+REFERENCES
+[1] A. Michael and B. Cottier, “Servers account for 60% of the total
+cost of ownership of a one-gigawatt AI data center,” Epoch AI, May
+2026. [Online]. Available: https://epoch.ai/data-insights/ai-datacenter-
+cost-breakdown
+Fig. 6. Hourly cost of the tasks of the day.
+Fig. 7. Difference in hourly cost relative to Perfect.
+[2] P. Colangelo et al., “AI data centres as grid-interactive assets,” Nature
+Energy, vol. 11, pp. 254–261, 2026.
+[3] C. Williams et al., “Power-flexible AI data centers: A new paradigm for
+grid-responsive compute,” arXiv:2606.25098, 2026.
+[4] J. Duan et al., “GFS: A preemption-aware scheduling framework for
+GPU clusters with predictive spot instance management,” in Proc.
+ASPLOS, 2026.
+[5] A. Radovanovi´c et al., “Carbon-aware computing for datacenters,” IEEE
+Trans. Power Syst., vol. 38, no. 2, pp. 1270–1280, 2023.
+[6] Y. Yang, X. Weng, and Y. Chen, “Contextual robust optimization for AI
+data center scheduling with statistical guarantees,” arXiv:2606.17466,
+2026.
+[7] J. R. Zhang et al., “Carbon-aware compute–power scheduling for AI
+data centers with microgrid prosumer operations,” arXiv:2605.03751,
+2026.
+[8] W. A. Hanafy, Q. Liang, N. Bashir, A. Souza, D. Irwin, and P. Shenoy,
+“Going green for less green: Optimizing the cost of reducing cloud
+carbon emissions,” in Proc. ASPLOS, 2024.
+[9] H. He, H. Shen, Q. Hao, and H. Tian, “Online delay-guaranteed
+workload scheduling to minimize power cost in cloud data centers using
+renewable energy,” J. Parallel Distrib. Comput., vol. 159, pp. 51–64,
+2022.
+[10] H. Wang, J. X. Zhang, and F. Li, “On time-sensitive revenue manage-
+ment and energy scheduling in green data centers,” arXiv:1404.4865,
+2014.
+[11] N. Buchbinder and J. Naor, “The design of competitive online algorithms
+via a primal–dual approach,” Found. Trends Theor. Comput. Sci., vol. 3,
+no. 2–3, pp. 93–263, 2009.
+[12] Y. Azar, “On-line load balancing,” in Online Algorithms: The State of
+the Art, ser. Lecture Notes in Computer Science, A. Fiat and G. J.
+Woeginger, Eds.
+Springer, 1998, vol. 1442, pp. 178–195.
+[13] Y. Yao, L. Huang, A. Sharma, L. Golubchik, and M. Neely, “Data
+centers power reduction: A two time scale approach for delay tolerant
+workloads,” in Proc. IEEE INFOCOM, 2012.
+[14] S. Hall, F. Micheli, G. Belgioioso, A. Radovanovi´c, and F. D¨orfler,
+“Carbon-aware computing for data centers with probabilistic perfor-
+mance guarantees,” IEEE Trans. Power Syst., 2025.
+[15] Y. Ran et al., “D3T: Dual-timescale optimization of task scheduling and
+thermal management for energy efficient geo-distributed data centers,”
+IEEE Trans. Parallel Distrib. Syst., vol. 37, no. 1, pp. 230–245, 2026.
+[16] S. Boyd, L. Xiao, A. Mutapcic, and J. Mattingley, “Notes on decompo-
+sition methods,” Stanford Univ., EE364B lecture notes, 2008.

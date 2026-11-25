@@ -1,0 +1,500 @@
+--- Page 1 ---
+FunSearch and Structured SAT Search
+for Weak Schur Partitions
+Rebecca Vicenzi1
+Pablo Christofferson2
+Caleb Hartman3
+Jingxuan Feng4
+Suleman Khan5
+Omar M. Elshinawy6
+Eric Ramos7
+1University of Bologna
+2Carleton College
+3Waynesburg University
+4University of Southern California
+5Rochester Institute of Technology
+6University of Münster
+7Stevens Institute of Technology
+Abstract
+The weak Schur problem asks how large an interval of consecutive integers can be parti-
+tioned into a fixed number of classes with no class containing a monochromatic solution to
+a + b = c with a̸ = b. We investigate whether FunSearch, an evolutionary program-search
+method guided by a large language model, can discover effective construction strategies for this
+classical combinatorial problem. In our adaptation, FunSearch evolves a priority function
+used by a fixed greedy solver, while a separate validity check enforces the weakly sum-free
+condition. This approach matches the known exact values for two, three, and four classes
+and reaches WS(5) ≥195. We then explore a complementary SAT-based approach. Guided
+by structural information from a 207-element construction communicated by Fred Rowley
+(Rowley, 2026), our SAT search produces and verifies a distinct valid five-class partition of
+{1, . . . , 207}. Thus the strongest construction obtained in this project reaches WS(5) ≥207,
+eleven integers beyond the best published lower bound of 196.
+The contrast between the
+two approaches also exposes a limitation of our FunSearch formulation: its greedy solver
+makes local, irreversible decisions, whereas SAT can enforce global structure across the whole
+partition.
+Contents
+1
+Introduction
+2
+2
+The Weak Schur Problem
+2
+3
+FunSearch
+2
+4
+Our FunSearch Adaptation and the 195 Construction
+3
+5
+SAT Formulation
+5
+6
+The 207 Construction
+7
+7
+Discussion and Conclusion
+8
+1
+arXiv:2611.22032v1  [math.CO]  17 Nov 2026
+
+
+--- Page 2 ---
+1
+Introduction
+The weak Schur problem asks how large an interval {1, . . . , N} can be while admitting a partition
+into a fixed number of classes, each free of solutions to a + b = c with a̸ = b inside a single class.
+Prior work has used constructive combinatorial arguments and computational search, including
+SAT-based methods (Eliahou et al., 2012; Heule, 2018; Ageron et al., 2022).
+FunSearch (Romera-Paredes et al., 2024) uses a large language model to evolve a short, au-
+tomatically scored program that constructs a mathematical object. We apply this idea by fixing
+a simple greedy constructor and evolving the priority function that decides which class to try
+for each new integer. A separate validity check ensures that accepted placements preserve weak
+sum-freeness.
+The final FunSearch program constructs a verified five-class partition of [1, 195], establishing
+WS(5) ≥195. A complementary structured SAT search constructs a verified partition of [1, 207].
+The latter is the strongest result obtained in this work and exceeds by eleven the 196 lower bound
+reported by Eliahou et al. (2012).
+This paper presents two computational constructions with their algorithms and explicit, in-
+dependently checkable certificates. The structured SAT construction establishing WS(5) ≥207
+is the principal result; the FunSearch construction at 195 provides the complementary greedy
+approach.
+2
+The Weak Schur Problem
+A set of positive integers A is sum-free if it contains no solution to a + b = c, including equal
+summands a = b. It is weakly sum-free if it contains no such solution with distinct summands.
+Thus the weak condition is
+a, b ∈A,
+a < b
+=⇒
+a + b /∈A.
+(1)
+For example, {1, 2, 4, 8} is weakly sum-free but not sum-free: 1 + 1 = 2 is allowed by the weak
+condition. Together with {3, 5, 6, 7}, it gives a weakly sum-free two-class partition of [1, 8].
+The weak Schur number WS(k) is the largest N for which [1, N] = {1, . . . , N} can be parti-
+tioned into k weakly sum-free classes. One valid partition establishes a lower bound WS(k) ≥N.
+An exact value additionally requires proving that no partition of [1, N + 1] exists. The known
+small values are
+WS(1) = 2,
+WS(2) = 8,
+WS(3) = 23,
+WS(4) = 66
+(Eliahou et al., 2012; Heule, 2018). For five classes, Eliahou et al. (2012) exhibited a partition of
+[1, 196]; subsequent template methods developed further weak Schur constructions (Ageron et al.,
+2022).
+Our task is to construct five lists of integers whose entries cover a long consecutive interval
+exactly once, with each list weakly sum-free. These are the class lists used by our greedy con-
+structor and returned by decoding the SAT output. A class label can also be called a colour; a
+forbidden sum is then a monochromatic triple.
+3
+FunSearch
+FunSearch searches over programs that construct solutions. Here, the model proposes
+Python priority rules that a fixed solver uses to construct weak Schur partitions.
+FunSearch improves candidate functions through repeated generation, execution and scoring
+(Romera-Paredes et al., 2024).
+A fixed evaluator measures each construction, and promising
+programs become examples for later model proposals.
+2
+
+
+--- Page 3 ---
+The roles in our application are as follows.
+Fixed. The greedy solver, the validity check for a placement, and the evaluator that scores the
+resulting construction.
+Evolved. Only the function priority, which expresses which class the solver should try first.
+Candidate program. An executable Python implementation of priority.
+Model input. Examples of earlier candidate priority functions, a description of the construction
+task, and the function interface: its arguments and expected return value.
+Model output. A new candidate priority function, written as Python source code.
+Execution. The candidate replaces priority in the fixed specification and is run inside the
+greedy solver.
+Scoring. The solver builds a partition. The fixed evaluator assigns the candidate a numerical
+score from that construction.
+Feedback. High-scoring candidate programs become examples in later prompts, so subsequent
+proposals build on successful rules.
+large language model
+↓
+candidate priority() function
+↓
+greedy solver builds a partition using it
+↓
+partition −→numerical score
+↓
+best-scoring candidates selected for prompts
+←
+Figure 1: The FunSearch feedback loop.
+The return arrow carries selected programs back as
+examples for the next model prompt. The task description and function interface remain part of
+that prompt.
+Feedback carries candidate code selected by its construction score. Thus each rule is evaluated
+through a complete construction. Section 4 specifies the fixed solver and the final rule that reaches
+195.
+4
+Our FunSearch Adaptation and the 195 Construction
+The implementation uses priority(i,k,partition), solve(n) and evaluate(n). In these code
+interfaces, n is the number of classes, k is the next integer to place, and i is a zero-based class
+index. The partial partition is a list of n class lists.
+3
+
+
+--- Page 4 ---
+The evolved preference.
+priority(i,k,partition) returns a numerical preference for plac-
+ing k in class i. A higher score makes that class an earlier candidate. The function ranks choices;
+it does not decide whether a choice is mathematically allowed.
+The fixed construction.
+solve(n) starts with n empty classes and considers k = 1, 2, 3, . . .
+in order. It computes the priorities, tries classes from highest to lowest score and places k in the
+first valid class. Ties are resolved by the smallest index. If every class rejects k, it returns the
+partition constructed so far.
+The separate function sum_free_addition checks each attempted placement. For an increas-
+ing construction, all existing elements of a class S are smaller than k. The only possible new
+forbidden sum therefore has k as its largest value: the placement is valid exactly when no distinct
+a, b ∈S satisfy a + b = k. The repository checker also tests a + k = b, which cannot occur on this
+increasing trajectory.
+For example, if a class is {1, 2, 4}, it cannot receive 5 because 1 + 4 = 5. It is rejected even
+if the priority ranks it first. The solver then tries the next class. This is the essential division of
+responsibility: the priority chooses preferences, while the checker enforces weak sum-freeness.
+Listing 1: Pseudocode for solve(n), showing the construction used for the reported result. Internal
+guards are omitted.
+start with n empty classes
+for k = 1, 2, 3, ...:
+rank classes by priority(i, k, partition)
+try them from highest score to lowest, ties by index
+if a class accepts k under the validity check:
+place k in the first such class
+else:
+stop and return the current partition
+Since every accepted insertion preserves validity and integers are processed in order, the final
+read-only priority builds a partition of an unbroken interval. No earlier placement is revised.
+The fixed score.
+evaluate(n) counts the entries returned by solve(n). For five classes, only
+the baseline count 124 is mapped to zero; the final construction receives score 195.
+The final learned priority.
+The final rule looks at how far a class currently extends, values
+near k/2, additive relationships involving k, values near k, class size and the spread of its elements.
+It combines these signals into one numerical preference used to rank the candidate classes; the
+separate validity check still controls each placement.
+Listing 2 reproduces the signature and
+computational body from the saved repository file. NumPy is supplied as np by the specification.
+The pair-sum count includes equal summands, so an allowed doubling can affect the prefer-
+ence. The coefficients are evolved; their individual effects have not been validated by ablation
+experiments.
+4
+
+
+--- Page 5 ---
+Listing 2: Verbatim excerpt of fourth_run/WS5_best.py: the signature and computational body
+of priority. Only the function’s documentation string is omitted.
+def priority(i: int, k: int, partition: list[list]) -> float:
+set_max = max(partition[i]) if partition[i] else 0
+arr = np.array(partition[i])
+window_count = np.sum(np.abs(arr - k/2) <= 2.2)
+conflict_penalty = np.sum(np.isin(arr[:, None] + arr, k)) * (k ** 0.48) / 2.9
+near_k = np.sum(arr >= k - 9) * np.exp(0.015 * (k - arr.min())) if arr.size > 0 else
+0
+size_penalty = len(partition[i]) ** 0.33 if len(partition[i]) > 20 else 0
+diversity_bonus = np.std(arr) * 0.17 if arr.size > 2 else 0
+growth_penalty = -0.078 if set_max > 0.84 * k else 0
+return float(set_max) + 2.1 * window_count - 1.95 * conflict_penalty + 0.85 * near_k
+- size_penalty + diversity_bonus + growth_penalty
+Running the saved rule with solve(5) produces the following classes, where [u, v] denotes
+every integer from u to v:
+C1 = {1, 2, 4, 8, 11, 22, 25, 53, 63, 68, 139, 149, 154, 177, 182, 195},
+C2 = {3, 19, 21, 23} ∪[5, 7] ∪[50, 52] ∪[64, 66]
+∪[136, 138] ∪[150, 152] ∪[179, 181] ∪[192, 194],
+C3 = {9, 10, 20} ∪[12, 18] ∪[54, 62] ∪[140, 148] ∪[183, 191],
+C4 = {24, 153, 178} ∪[26, 49] ∪[155, 176],
+C5 = {67} ∪[69, 135].
+Their sizes are 16, 25, 37, 49, 68. Independent verification confirms that each integer in [1, 195]
+occurs exactly once. Checking all 9,409 pairs a < b with a + b ≤195 finds no monochromatic
+triple. The construction establishes
+WS(5) ≥195.
+Re-executing the final program reproduces this partition. Other saved priorities construct intervals
+of lengths 8, 23 and 66 for two, three and four classes, matching the known exact values.
+Every class blocks 196: witness pairs are (1, 195), (3, 193), (9, 187), (24, 172) and (67, 129)
+in C1, . . . , C5, respectively. This trajectory therefore stops. Extending the displayed partition
+requires revising earlier choices, which the fixed greedy solver cannot do. This motivates a global
+SAT formulation.
+5
+SAT Formulation
+The greedy constructor commits permanently to each placement.
+SAT instead searches for a
+complete assignment satisfying all constraints, with the freedom to revise choices when conflicts
+arise. A Boolean satisfiability problem consists of true-or-false variables and clauses that must all
+hold. A clause is a disjunction: at least one of its alternatives must be true.
+For a target interval [1, N], introduce Xv,c for each integer v and colour c ∈{1, . . . , 5}. It
+is true exactly when v belongs to class c. The conjunction of the following clauses, written in
+conjunctive normal form (CNF), describes the search.
+5
+
+
+--- Page 6 ---
+Exactly one class per integer.
+Every integer must receive a colour, and two colours cannot
+both be selected for the same integer. We express these requirements by
+5_
+c=1
+Xv,c,
+(2)
+¬Xv,c ∨¬Xv,d
+(1 ≤c < d ≤5).
+(3)
+Here ∨means “or” and ¬ means negation. Together the clauses choose exactly one class for each
+v.
+Weak Schur constraints.
+For each pair a < b with a + b ≤N, its three values cannot all
+receive the same colour. For each colour c, add
+¬Xa,c ∨¬Xb,c ∨¬Xa+b,c.
+(4)
+For instance, 2 + 3 = 5 forbids giving 2, 3 and 5 the same colour. Equal summands contribute no
+clause. Exactly-one and weak Schur clauses together are equivalent to a valid five-class partition:
+a partition satisfies them, and any satisfying assignment decodes into such a partition.
+Colour symmetry.
+The names of the five classes are arbitrary, so many SAT assignments
+describe the same partition and differ only by a permutation of colour labels. Ordering colours by
+their first appearance removes this redundant symmetry: colour c may appear only after colour
+c −1 has already appeared. For c = 2, . . . , 5 and 1 ≤v ≤N, add
+¬Xv,c ∨
+v−1
+_
+u=1
+Xu,c−1.
+(5)
+At v = 1 the disjunction over earlier positions is empty, so only colour 1 is allowed. Any base
+partition can be renamed by first appearance, making this a convention on colour names. We use
+this convention to implement the increasing-colour information in Rowley’s note (Rowley, 2026),
+which refers to the symmetry-breaking methods of Heule (2018).
+Structural restrictions.
+To focus the search at N = 207, we adopt two restrictions from
+Rowley’s note (Rowley, 2026, p. 3 and Fig. 2). These restrictions give partial colour information
+while leaving the remaining assignments to the solver.
+First, colours repeat with period four within [100, 120]. Integer i and i+4 must have the same
+colour whenever both lie in that interval. For 100 ≤i ≤116 and 1 ≤c ≤5, we impose
+¬Xi,c ∨Xi+4,c,
+¬Xi+4,c ∨Xi,c.
+(6)
+Second, fourteen colours are fixed to the values in Table 1, taken from the note’s Figure 2. Each
+becomes a unit clause Xv,f(v), requiring that colour to be selected.
+v
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+14
+16
+f(v)
+1
+2
+1
+3
+1
+2
+1
+3
+1
+2
+1
+4
+2
+3
+Table 1: The fourteen prescribed colours from Rowley’s structural information.
+The structural restrictions select a smaller family of partitions, while retaining every base
+requirement. A satisfying assignment therefore still proves a weak Schur lower bound. Failure
+within this restricted family would not rule out other weak Schur partitions.
+6
+
+
+--- Page 7 ---
+6
+The 207 Construction
+Structured SAT search produces a verified five-class partition of [1, 207]. This is the
+strongest construction obtained in this work and gives
+WS(5) ≥207.
+It exceeds by eleven the 196 lower bound reported by Eliahou et al. (2012). Table 2 summarizes
+the results for the class counts relevant here.
+Classes k
+FunSearch
+SAT
+Published lower bound
+2
+8
+–
+8
+3
+23
+–
+23
+4
+66
+–
+66
+5
+≥195
+≥207
+≥196 (Eliahou et al., 2012)
+Table 2: Main computational results. FunSearch matches the known values for two, three and
+four classes and reaches WS(5) ≥195. Structured SAT establishes WS(5) ≥207, the strongest
+construction reported here and eleven above Eliahou et al.’s published lower bound of 196. Dashes
+indicate no SAT result reported here.
+The final instance and solver.
+We set N = 207 and include exactly the constraints of Sec-
+tion 5: one class per integer, no distinct-summand monochromatic sum, first-appearance colour
+ordering, period four within [100, 120], and the fourteen prescribed colours. The latter two restric-
+tions are the partial structural information taken from Rowley’s note. Table 3 gives the resulting
+clause counts.
+Clause family
+Count
+At least one colour
+207
+At most one colour
+2,070
+Weak Schur constraints
+53,045
+First-appearance ordering
+828
+Period four
+170
+Fixed colours
+14
+Total
+56,334
+Table 3: The final SAT instance: 1,035 variables and 56,334 clauses.
+There are 10,609 pairs a < b with a + b ≤207, each yielding five weak Schur clauses. The
+generator numbers Xv,c by 5(v −1)+c and writes the complete formula in DIMACS CNF format,
+including the fourteen fixed colours as unit clauses.
+SLIME5 (Riveros, 2020), run on this file with default settings, returns a satisfying assignment.
+In the recorded experiment, it found the assignment in approximately 107 seconds. Reading each
+integer’s selected colour gives the five classes.
+The certificate.
+The complete construction is supplied in the machine-readable 207 certificate.
+Its five lists allow the result to be checked without repeating the search. Table 4 compares their
+sizes with those of the FunSearch construction.
+7
+
+
+--- Page 8 ---
+Method
+|C1|
+|C2|
+|C3|
+|C4|
+|C5|
+N
+FunSearch
+16
+25
+37
+49
+68
+195
+Structured SAT
+39
+41
+31
+46
+50
+207
+Table 4: The independently verified five-class constructions.
+Independent verification.
+The certificate can be checked independently by confirming that
+the five classes cover [1, 207] exactly, with no repeated or missing integers, and contain no forbidden
+weak Schur triple. Verification examines all 10,609 pairs a < b with a+b ≤207 and confirms that
+a, b and a + b never share a colour. Thus the five lists form a partition of the required interval
+into weakly sum-free classes.
+Proposition 1 The certificate partitions [1, 207] into five weakly sum-free classes.
+Hence
+WS(5) ≥207.
+Proof.
+Exact interval coverage establishes a partition of [1, 207].
+The exhaustive pair check
+establishes (1) in every class. These are the defining requirements of a weak Schur partition, so
+this certificate proves the lower bound.
+The check is independent of the SAT solver and generator. The public verifier equivalently
+checks distinct pairs within each class and tests whether their sum is absent from that class.
+The SAT assignment yields the same partition as the certificate and satisfies all 56,334 clauses.
+The mathematical lower bound follows directly from exact interval coverage and weak sum-
+freeness.
+Rowley’s source also gives a partition at 207. Our returned certificate differs from its Figure 3
+even after renaming colours: the greatest agreement over all 5! colour permutations is 191 of the
+207 positions.
+7
+Discussion and Conclusion
+FunSearch searches for a heuristic program used inside a fixed greedy construction. The learned
+priority ranks candidate classes, while a separate validity check enforces weak sum-freeness. This
+method constructs a verified partition establishing WS(5) ≥195, but cannot revise earlier choices
+when the next insertion is blocked.
+The SAT formulation performs global constraint search,
+allowing assignments to be reconsidered while enforcing the full set of requirements, and reaches
+WS(5) ≥207.
+The difference illustrates the importance of search architecture. The gap from 195 to 207
+concerns the particular greedy constructor and learned rule used here; it does not prove a general
+limitation of FunSearch. A natural future direction is a hybrid approach in which learned heuristics
+guide an exact solver that can revise assignments and enforce global constraints.
+Both results are explicit, independently verified lower bounds, rather than a determination of
+the exact value of WS(5). The principal result of this paper is the structured SAT construction
+establishing WS(5) ≥207.
+Code and data availability.
+The commit-stable repository snapshot contains the saved pri-
+ority and specification, plus the linked 207 certificate and verifier. The supplement supplies both
+certificates, the CNF generator and instance, signed solver output, independent checks and soft-
+ware metadata. Verification uses only Python; re-executing the final 195 program also requires
+NumPy.
+8
+
+
+--- Page 9 ---
+The final constructions can be checked from these artifacts. The original winning FunSearch
+run’s exact model, seed and search configuration are not completely preserved, so the whole
+evolutionary discovery process cannot be reconstructed from them.
+Acknowledgements.
+We thank Adam Sheffer and the organizers of the 2026 Polymath Jr.
+Program, where the majority of this work was completed. We also thank Fred Rowley for providing
+the structural material used in the SAT formulation.
+References
+Romain Ageron, Paul Casteras, Thibaut Pellerin, Yann Portella, Arpad Rimmel and Joanna
+Tomasik. New lower bounds for Schur and weak Schur numbers. arXiv:2112.03175v2, 4 April
+2022. arXiv:2112.03175v2.
+Shalom Eliahou, Juan M. Marín, María P. Revuelta and María I. Sanz. Weak Schur numbers and
+the search for G. W. Walker’s lost partitions. Computers & Mathematics with Applications,
+63(1):175–182, 2012. doi:10.1016/j.camwa.2011.11.006.
+Marijn J. H. Heule. Schur number five. Proceedings of the AAAI Conference on Artificial Intelli-
+gence, 32(1):6598–6606, 2018. doi:10.1609/aaai.v32i1.12209.
+Oscar Riveros. SLIME5 SAT solver: precompiled Linux binary and documentation. Software
+artifact, 2020. maxtuno/slime-sat-solver, directory SLIME5-binary.
+Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang,
+Omar Fawzi, Pushmeet Kohli and Alhussein Fawzi. Mathematical discoveries from program
+search with large language models. Nature, 625:468–475, 2024. doi:10.1038/s41586-023-06924-
+6.
+Fred Rowley. Weak Schur number five exceeds two hundred. Draft marked August 2025, commu-
+nicated August 2026. Structural restrictions on p. 3 and Fig. 2; reference certificate in Fig. 3.
+Author’s public announcement and colouring: Maths Papers.
+9

@@ -1,0 +1,1098 @@
+--- Page 1 ---
+Joint Quantization and Dynamic Partitioning for
+Context-Aware Edge Vision Transformers
+Jiaqi Zhu
+Walmart
+Sunnyvale, USA
+jiaqi.zhu@walmart.com
+Prakriti Jain
+Heidelberg University
+Heidelberg, Germany
+prakriti.jain@stud.uni-heidelberg.de
+Dewant Katare
+Technische Universiteit Delft
+Delft, the Netherlands
+d.katare@tudelft.nl
+Saurabh Kumar
+Walmart
+Sunnyvale, USA
+saurabh.kumar4@walmart.com
+Abstract—Deploying vision transformer models across con-
+nected and automated vehicles (CAVs) requires joint management
+of computation and Vehicle-to-Vehicle (V2V) communication.
+Static split-inference methods use fixed partition points and
+cannot adapt to time-varying link bandwidth, processing load,
+and concurrent multi-stream traffic. This paper proposes an
+edge orchestration framework that jointly selects model partition
+points, per-layer quantization bitwidths, and execution placement
+across heterogeneous vehicular compute nodes. The joint parti-
+tioning and mixed-precision allocation problem is formulated as a
+Mixed-Integer Linear Program (MILP) that minimizes compute
+and communication energy subject to end-to-end latency and
+task-quality constraints. The framework is evaluated on Jetson
+Orin Nano (8 GB), Jetson Orin NX (16 GB), and Jetson AGX
+Orin (32 GB) nodes using OPV2V-driven multi-stream workloads
+with K ∈{2, 4, 6, 8}. Across the evaluated configurations, the
+proposed formulation reduces V2V communication energy by
+33.3–36.0% relative to a Uniform INT8 split. At K = 8, end-to-
+end task completion latency is reduced by 34.0% on the Orin
+Nano and 33.1% on the Orin NX relative to the same baseline,
+while limiting the reduction in 3D detection accuracy to 3.1–4.1
+percentage points in mAP50 relative to FP16 execution.
+Index Terms—Edge AI, Split Inference, Mixed-Precision Quan-
+tization, Vehicular Edge Computing, Vision Transformers
+I. INTRODUCTION
+Connected and Automated Vehicles (CAVs) process camera,
+LiDAR, and other sensor streams to maintain situational
+awareness under changing traffic conditions. Transformer-
+based perception models provide strong performance for visual
+and spatio-temporal tasks by modeling long-range depen-
+dencies across input features [1], [2]. Their deployment on
+embedded platforms, however, introduces high computation,
+memory, and energy requirements [2], [3]. Distributed execu-
+tion provides an alternative when local processing alone cannot
+satisfy the required latency or resource limits. In this setting,
+part of the inference graph executes on the sensing platform
+and the remaining computation is transferred to a second
+edge node [4], [5]. Split inference introduces a direct trade-
+off between local computation and communication. Moving
+the partition deeper into the model increases the computation
+retained on the local node, while an earlier partition offloads
+more execution but may require transmission of a larger
+intermediate activation [4], [6]. This trade-off becomes more
+difficult under concurrent vehicular inference because layer
+execution time changes with processing load and the available
+V2V data rate may differ across streams. A cut selected for
+one compute or link condition can therefore increase either
+completion latency or communication energy when these
+conditions change.
+Existing methods address individual parts of this problem.
+Dynamic DNN partitioning and task offloading adapt execu-
+tion to compute and network conditions [5], [7], while adaptive
+semantic communication reduces the amount of intermediate
+information transmitted during distributed inference [6], [8].
+Quantization reduces arithmetic and memory cost by executing
+network operations at lower numerical precision
+[9]–[11].
+Energy-aware CAV and edge–cloud frameworks have also
+considered adaptive deployment and resource allocation [12],
+[13]. These approaches do not jointly determine the stream-
+specific partition location and layer-wise numerical precision
+while accounting for their combined effect on compute energy,
+intermediate activation size, and V2V transmission cost.
+This paper presents an edge orchestration framework for
+joint partition and mixed-precision selection in vehicular Vi-
+sion Transformer inference. For each stream, the framework
+selects a contiguous local-to-aggregator partition, while a
+common layer-wise INT8/FP16 configuration is selected for
+the deployed model. The resulting problem is formulated
+as a Mixed-Integer Linear Program (MILP) that minimizes
+compute and V2V communication energy subject to per-
+stream end-to-end latency and task-quality constraints. The
+formulation uses profiled concurrency-dependent layer latency,
+precision-dependent activation size, stream-specific V2V link
+rate, and empirically calibrated quantization sensitivity.
+The framework is evaluated on a heterogeneous NVIDIA
+Jetson Orin testbed. Jetson Orin Nano (8 GB) and Jetson
+Orin NX (16 GB) are evaluated as alternative local compute
+nodes, with Jetson AGX Orin (32 GB) acting as the edge
+aggregator. Experiments use OPV2V-driven workloads with
+K ∈{2, 4, 6, 8} concurrent streams under emulated V2V link
+conditions. System performance is measured using end-to-end
+task completion latency, compute energy, V2V communication
+energy, and 3D detection mAP50. The research contributions
+are as follows:
+• We formulate stream-specific model partitioning and
+layer-wise INT8/FP16 selection as a MILP that mini-
+mizes compute and V2V communication energy under
+latency and task-quality constraints.
+arXiv:2611.14196v1  [cs.AI]  10 Nov 2026
+
+
+--- Page 2 ---
+• We couple precision-dependent execution cost and in-
+termediate activation size with the partition decision,
+allowing the optimizer to account for both local compute
+load and stream-specific V2V transmission cost.
+• We evaluate the formulation on three edge devices using
+configurations K ∈{2, 4, 6, 8} concurrent OPV2V-driven
+streams, reporting energy, task completion latency, solver
+runtime, and 3D detection accuracy against static FP16
+and uniform INT8 deployments.
+This paper is organized as follows. Section II discusses split
+inference, quantization, and communication-aware vehicular
+edge execution. Section III presents the system model and
+MILP formulation. Section IV describes the experimental
+setup. Section V presents the evaluation results, and Section VI
+concludes the paper.
+II. RELATED WORK
+Distributed inference of Vision Transformers across con-
+nected vehicles requires balancing split inference bound-
+aries, numerical compression, and multi-stream execution con-
+straints. This section surveys recent developments in model
+partitioning, communication-aware edge inference, and ve-
+hicular edge computing, highlighting the methodological gap
+addressed by our joint formulation.
+A. Split Inference and Dynamic Partitioning
+Split inference divides neural network between a resource-
+constrained sensing platform and a more capable edge node.
+Matsubara and Levorato [4] partition object-detection net-
+works and transmit intermediate features between mobile and
+edge platforms, showing that the selected cut affects both local
+execution and communication cost. The benefit of a partition
+therefore depends on the computational cost retained before
+the cut and the size of the activation transferred afterward.
+Recent work considers partition selection under changing edge
+conditions. Zhang et al. [5] jointly address DNN partitioning
+and task offloading using reinforcement learning under varying
+compute and communication conditions and concurrent task
+arrivals. Uslu and Dagdeviren [7] study optimization methods
+for distributed DNN and large-model inference, including
+partitioning, communication, and resource allocation. Katare et
+al. [13] consider adaptive resource allocation across serverless
+edge–cloud environments. These approaches support adaptive
+execution or resource assignment, but numerical precision is
+not jointly selected with the partition boundary.
+B. Quantization and Communication-Aware Edge Inference
+Quantization reduces model memory and arithmetic cost
+by mapping weights and activations to lower numerical pre-
+cision
+[9], [11]. Moosmann et al.
+[10] evaluate fully
+quantized object-detection models on low-power embedded
+systems, while Gaddi [9] studies post-training quantization
+for a transformer-based autonomous driving network. These
+methods address reduced-precision execution, but the selected
+bitwidth is not coupled to the communication cost of an
+intermediate split. Communication-oriented methods instead
+TABLE I: Comparison of Representative Edge AI Approaches
+Work
+Partition Precision/Comm.
+Concurrent
+Domain
+Adaptation
+Workload
+Matsubara et al. [4]
+Static
+No
+No
+Edge vision
+Zhang et al. [5]
+Dynamic
+No
+Yes
+Mobile edge
+Moosmann et al. [10]
+None
+Quantization
+No
+Embedded vision
+Devoto et al. [6]
+Fixed
+Token adaptation
+No
+Transformer edge
+Katare et al. [12]
+Adaptive
+Approximation
+Yes
+CAV
+This Work
+Dynamic
+INT8/FP16
+Yes (K ≤8)
+CAV
+modify the intermediate data transmitted between compute
+nodes. Devoto et al. [6] adapt semantic token communication
+for transformer-based edge inference according to network
+conditions. Wang et al. [8] analyze communication overhead
+together with inference latency and reliability, while Fu et
+al. [3] discuss communication-efficient and task-oriented op-
+timization for edge AI inference. These methods address the
+transmission side of distributed inference, but do not jointly
+select layer precision and the stream-specific partition point.
+C. Vehicular Edge Execution
+Vehicular inference have changing link conditions and con-
+tinuous sensing to the partitioning problem. Mayumu et al.
+[14] study multimodal information processing and exchange in
+V2X systems. Katare et al. [12] consider model partitioning,
+adaptive deployment, and approximation for energy-aware
+CAV computing. These studies motivate adaptive compute
+and communication decisions in vehicular systems, but do
+not jointly optimize layer-wise precision and stream-specific
+partitioning under a common compute and V2V energy ob-
+jective [15]. Table I compares representative methods with
+the formulation used in this paper. The comparison focuses
+on whether partition selection, precision or communication
+adaptation, and concurrent workload execution are consid-
+ered together. Existing work provides mechanisms for dy-
+namic partitioning, reduced-precision execution, or commu-
+nication adaptation, but these decisions are generally ad-
+dressed separately. The formulation in this paper couples
+the stream-specific partition boundary with a common layer-
+wise INT8/FP16 configuration, allowing precision-dependent
+compute cost and transmitted activation size to enter the same
+energy minimization problem.
+III. SYSTEM MODEL AND OPTIMIZATION FORMULATION
+This section formalizes the joint model partitioning, layer-
+wise precision allocation, and execution placement framework.
+We first outline the multi-tier vehicular execution pipeline
+illustrated in Fig. 1, establish exact binary linearizations for the
+coupled decision variables, and formulate the Mixed-Integer
+Linear Program (MILP) that minimizes total energy consump-
+tion under end-to-end latency and task-quality constraints.
+A. System Architecture
+We consider a two-node split-inference configuration se-
+lected from a three-device vehicular edge testbed, depicted
+in Fig. 1. The local on-vehicle node is either an NVIDIA
+Jetson Orin Nano (8 GB), denoted by nNano, or an NVIDIA
+
+
+--- Page 3 ---
+Fig. 1: System model architecture and split-inference pipeline across local on-vehicle platforms (nlocal ∈{nNano, nNX}) and
+the AGX Orin aggregator (nAGX). The optimization coordinator executes on the aggregator node, taking telemetry feedback
+and channel conditions to issue optimal partition points (zl,k), precision allocations (yl,b), and node assignments (xl,n,k).
+Jetson Orin NX (16 GB), denoted by nNX. The edge aggre-
+gator is an NVIDIA Jetson AGX Orin (32 GB), denoted by
+nAGX. For each evaluated local-node configuration, nlocal ∈
+{nNano, nNX} and the active compute-node set is
+N = {nlocal, nAGX}.
+(1)
+As illustrated on the left side of Fig. 1, the local node
+processes K concurrent inference streams indexed by K =
+{1, . . . , K}. Each stream executes an L-layer Vision Trans-
+former backbone indexed by L = {1, . . . , L}. For stream
+k, layers up to and including the selected cut layer execute
+on nlocal. The corresponding intermediate activation tensor is
+then transferred over the emulated V2V wireless link, after
+which the remaining layers and the 3D detection heads execute
+on the edge aggregator nAGX. A layer-specific precision
+b ∈B = {8, 16}, corresponding to INT8 and FP16 execution,
+is selected for each transformer layer and is shared across
+all concurrent streams. The activation tensor size after layer l
+under precision b is denoted by S(l, b) in bytes. The available
+V2V data rate for stream k is denoted by Rk and varies across
+the evaluated link configurations.
+B. Decision Variables and Linearization
+The optimization couples three decisions that are other-
+wise handled independently in conventional split-inference
+pipelines: where a stream is partitioned, which node exe-
+cutes each layer, and which numerical precision is used for
+that layer. These decisions are related because changing the
+bitwidth affects both the execution cost of a transformer block
+and the size of the activation transmitted across the V2V link
+(Fig. 1). For stream k, the binary variable xl,n,k specifies
+the node assigned to layer l, while yl,b selects the numerical
+precision of that layer. The variable zl,k identifies whether the
+execution path is partitioned after layer l:
+xl,n,k ∈{0, 1},
+(2)
+yl,b ∈{0, 1},
+(3)
+zl,k ∈{0, 1}.
+(4)
+The precision decision is shared across concurrent streams
+because all streams execute the same deployed model configu-
+ration, whereas the partition location may differ across streams
+according to their link rate and processing condition.
+The activation volume after layer l depends on the selected
+precision. For a layer with candidate activation sizes S(l, b),
+the transmitted volume is written as
+Sl(yl) =
+X
+b∈B
+S(l, b)yl,b.
+(5)
+This term links quantization directly to the communication
+cost: selecting INT8 reduces the activation payload relative
+to FP16, but may increase the task-quality penalty associated
+with that layer.
+The computation term depends jointly on placement and
+precision, while the communication term depends jointly on
+precision and partition location. These products would make
+the formulation nonlinear. We therefore introduce the auxiliary
+binary variables
+wl,n,b,k = xl,n,kyl,b,
+(6)
+vl,b,k = yl,bzl,k,
+(7)
+and enforce them exactly using the standard binary lineariza-
+tion constraints:
+wl,n,b,k ≤xl,n,k,
+wl,n,b,k ≤yl,b,
+wl,n,b,k ≥xl,n,k + yl,b −1,
+(8)
+vl,b,k ≤yl,b,
+vl,b,k ≤zl,k,
+vl,b,k ≥yl,b + zl,k −1.
+(9)
+Since all participating variables are binary, these constraints
+preserve the original products exactly and retain a solvable
+MILP formulation.
+C. Energy and Latency Models
+The cost of a partition depends on both computation and
+communication. Executing additional layers locally increases
+the work performed by the on-vehicle node but may reduce the
+activation size transmitted to the aggregator. Moving the cut
+
+
+--- Page 4 ---
+earlier has the opposite effect. The selected precision further
+changes both quantities because INT8 and FP16 have different
+execution profiles and activation sizes.
+Let τ(l, n, b, K) denote the profiled execution latency of
+layer l on node n under precision b with K concurrent streams.
+The dependency on K captures the change in layer execution
+time under the evaluated multi-stream load. Let Pcomp(n, b)
+denote the corresponding profiled active compute power. The
+compute energy accumulated across all streams is
+Ecomp =
+X
+k∈K
+X
+l∈L
+X
+n∈N
+X
+b∈B
+Pcomp(n, b)τ(l, n, b, K)wl,n,b,k.
+(10)
+The variable wl,n,b,k ensures that an energy term contributes
+only when layer l is assigned to node n and executed at
+precision b.
+Communication cost is incurred only at the selected par-
+tition boundary. If stream k is divided after layer l, the
+transmission time is determined by the activation size at that
+layer and the available V2V data rate Rk:
+Ttx(k) =
+L−1
+X
+l=1
+X
+b∈B
+S(l, b)
+Rk
+vl,b,k.
+(11)
+For a wireless interface transmission power Ptx, the total
+communication energy is
+Ecomm =
+X
+k∈K
+L−1
+X
+l=1
+X
+b∈B
+Ptx
+S(l, b)
+Rk
+vl,b,k.
+(12)
+The formulation therefore favors later cuts when local exe-
+cution is energy-efficient and link conditions are poor, while
+earlier cuts become feasible when aggregator execution com-
+pensates for the additional transmission cost. The end-to-end
+latency of stream k contains all layer execution time on the
+selected nodes and the single V2V transfer:
+Te2e(k) =
+X
+l∈L
+X
+n∈N
+X
+b∈B
+τ(l, n, b, K)wl,n,b,k + Ttx(k).
+(13)
+This definition is used directly by the latency constraint and
+preserves the measured dependence of computation time on
+stream concurrency.
+D. MILP Formulation
+The optimization selects the partition and precision con-
+figuration that minimizes the combined compute and V2V
+communication energy:
+min
+x,y,z,w,v Etotal = Ecomp + Ecomm.
+(14)
+The objective does not minimize latency directly. Instead,
+latency is treated as a feasibility requirement so that an energy-
+efficient solution is accepted only when it satisfies the per-
+stream completion deadline.
+Each layer of every stream must execute on exactly one
+active compute node:
+X
+n∈N
+xl,n,k = 1,
+∀l ∈L, ∀k ∈K.
+(15)
+Similarly, each transformer layer is assigned one numerical
+precision:
+X
+b∈B
+yl,b = 1,
+∀l ∈L.
+(16)
+Because the precision variables are not stream-indexed, the
+resulting layer-wise quantization configuration is common to
+all concurrent streams.
+The execution path is restricted to one contiguous local-
+to-aggregator partition. Once execution moves from nlocal to
+nAGX, subsequent layers cannot return to the local node:
+xl+1,nlocal,k ≤xl,nlocal,k,
+∀l ∈{1, . . . , L −1}, ∀k ∈K.
+(17)
+The corresponding partition indicator is
+zl,k = xl,nlocal,k−xl+1,nlocal,k,
+∀l ∈{1, . . . , L−1}, ∀k ∈K.
+(18)
+To exclude degenerate all-local or all-aggregator assignments,
+the first layer is constrained to the local node and the final
+layer to the aggregator:
+x1,nlocal,k = 1,
+∀k ∈K,
+(19)
+xL,nAGX,k = 1,
+∀k ∈K.
+(20)
+Together, these constraints produce exactly one transition
+between the two nodes:
+L−1
+X
+l=1
+zl,k = 1,
+∀k ∈K.
+(21)
+The selected configuration must also satisfy the application
+latency requirement:
+Te2e(k) ≤Tbudget,
+∀k ∈K.
+(22)
+This prevents the optimizer from selecting a low-energy par-
+tition that violates the completion deadline under a given
+stream load or link rate. Quantization is constrained separately
+through an empirically calibrated task-quality budget:
+X
+l∈L
+X
+b∈B
+∆Q(l, b)yl,b ≤ϵquality.
+(23)
+Here, ∆Q(l, b) represents the measured sensitivity associated
+with quantizing layer l to precision b. This quantity is used
+only as the optimization surrogate; final 3D detection accu-
+racy is measured using mAP50 on the evaluation workload.
+Together with the linearization constraints in (8)–(9), the above
+conditions define the feasible set of the MILP.
+E. Solver Implementation
+As outlined in the coordinator block of Fig. 1, the for-
+mulation is implemented in Pyomo 6.7 and solved using
+SCIP 8.0 on the Jetson AGX Orin coordinator. For L = 12,
+|N| = 2, |B| = 2, and K = 8, the formulation contains
+864 binary decision and auxiliary variables. Solver execution
+time and solution status are recorded for each evaluated stream
+configuration and reported with the experimental results.
+
+
+--- Page 5 ---
+TABLE II: System Performance Comparison Across Multi-Stream Workloads (K ∈{2, 4, 6, 8}) on the Heterogeneous Testbed
+Configuration / Method
+Stream
+Compute Energy Ecomp (J)
+Comm. Energy
+Total Energy
+Avg. Latency
+3D Detection
+Count (K)
+Local (nlocal)
+Aggregator (nAGX)
+Ecomm (J)
+Etotal (J)
+Te2e (ms)
+mAP50 (%)
+Local Platform: Jetson Orin Nano (8 GB) →Aggregator: Jetson AGX Orin (32 GB)
+Full Local FP16
+2
+0.88
+0.00
+0.00
+0.88
+58.4
+79.2
+Static Early Split (l = 3, FP16)
+2
+0.21
+0.49
+0.38
+1.08
+44.1
+78.8
+Static Late Split (l = 8, FP16)
+2
+0.58
+0.22
+0.46
+1.26
+51.2
+78.5
+Uniform INT8 Split (l = 4)
+2
+0.16
+0.34
+0.21
+0.71
+36.5
+74.8
+Joint DynOpt (Proposed)
+2
+0.18
+0.36
+0.14
+0.68
+33.8
+76.1
+Full Local FP16
+4
+1.84
+0.00
+0.00
+1.84
+118.9
+79.2
+Static Early Split (l = 3, FP16)
+4
+0.45
+1.06
+0.76
+2.27
+86.7
+78.8
+Static Late Split (l = 8, FP16)
+4
+1.22
+0.48
+0.92
+2.62
+103.4
+78.5
+Uniform INT8 Split (l = 4)
+4
+0.35
+0.72
+0.42
+1.49
+72.3
+74.6
+Joint DynOpt (Proposed)
+4
+0.39
+0.78
+0.27
+1.44
+54.6
+75.8
+Full Local FP16
+6
+2.86
+0.00
+0.00
+2.86
+182.4
+79.2
+Static Early Split (l = 3, FP16)
+6
+0.71
+1.64
+1.15
+3.50
+131.8
+78.8
+Static Late Split (l = 8, FP16)
+6
+1.91
+0.75
+1.38
+4.04
+157.2
+78.5
+Uniform INT8 Split (l = 4)
+6
+0.55
+1.12
+0.64
+2.31
+110.6
+74.5
+Joint DynOpt (Proposed)
+6
+0.61
+1.22
+0.41
+2.24
+76.2
+75.4
+Full Local FP16
+8
+3.92
+0.00
+0.00
+3.92
+248.5
+79.2
+Static Early Split (l = 3, FP16)
+8
+0.98
+2.28
+1.54
+4.80
+176.2
+78.8
+Static Late Split (l = 8, FP16)
+8
+2.61
+1.04
+1.84
+5.49
+212.8
+78.5
+Uniform INT8 Split (l = 4)
+8
+0.76
+1.54
+0.86
+3.16
+149.2
+74.3
+Joint DynOpt (Proposed)
+8
+0.84
+1.68
+0.55
+3.07
+98.4
+75.1
+Local Platform: Jetson Orin NX (16 GB) →Aggregator: Jetson AGX Orin (32 GB)
+Full Local FP16
+2
+0.72
+0.00
+0.00
+0.72
+46.8
+79.2
+Static Early Split (l = 3, FP16)
+2
+0.18
+0.49
+0.38
+1.05
+39.6
+78.8
+Static Late Split (l = 8, FP16)
+2
+0.46
+0.22
+0.46
+1.14
+44.5
+78.5
+Uniform INT8 Split (l = 4)
+2
+0.14
+0.34
+0.21
+0.69
+32.1
+74.8
+Joint DynOpt (Proposed)
+2
+0.16
+0.36
+0.14
+0.66
+29.7
+76.1
+Full Local FP16
+4
+1.52
+0.00
+0.00
+1.52
+94.2
+79.2
+Static Early Split (l = 3, FP16)
+4
+0.38
+1.06
+0.76
+2.20
+78.4
+78.8
+Static Late Split (l = 8, FP16)
+4
+0.98
+0.48
+0.92
+2.38
+88.1
+78.5
+Uniform INT8 Split (l = 4)
+4
+0.31
+0.72
+0.42
+1.45
+63.8
+74.6
+Joint DynOpt (Proposed)
+4
+0.34
+0.78
+0.27
+1.39
+48.2
+75.9
+Full Local FP16
+6
+2.36
+0.00
+0.00
+2.36
+144.6
+79.2
+Static Early Split (l = 3, FP16)
+6
+0.59
+1.64
+1.15
+3.38
+118.2
+78.8
+Static Late Split (l = 8, FP16)
+6
+1.52
+0.75
+1.38
+3.65
+134.8
+78.5
+Uniform INT8 Split (l = 4)
+6
+0.48
+1.12
+0.64
+2.24
+96.4
+74.5
+Joint DynOpt (Proposed)
+6
+0.52
+1.22
+0.41
+2.15
+67.5
+75.5
+Full Local FP16
+8
+3.24
+0.00
+0.00
+3.24
+196.4
+79.2
+Static Early Split (l = 3, FP16)
+8
+0.82
+2.28
+1.54
+4.64
+158.6
+78.8
+Static Late Split (l = 8, FP16)
+8
+2.12
+1.04
+1.84
+5.00
+181.4
+78.5
+Uniform INT8 Split (l = 4)
+8
+0.65
+1.54
+0.86
+3.05
+129.5
+74.3
+Joint DynOpt (Proposed)
+8
+0.71
+1.68
+0.55
+2.94
+86.7
+75.3
+IV. EXPERIMENTAL SETUP
+To evaluate the proposed optimization framework on em-
+bedded vehicular hardware, we deploy a physical testbed
+comprising three NVIDIA Jetson Orin platforms under em-
+ulated Vehicle-to-Vehicle network traces. This section details
+the hardware and software configuration, workload profiling
+methodology, V2V link parameterization, and the baseline
+deployment strategies used for comparative evaluation.
+A. Hardware Testbed and Software Environment
+The testbed comprises NVIDIA Jetson Orin Nano (8 GB)
+and Jetson Orin NX (16 GB) platforms as alternative local
+compute nodes, nlocal, and a Jetson AGX Orin (32 GB)
+as the edge aggregator, nAGX. The platforms are connected
+through an emulated vehicular communication link; hardware
+specifications are summarized in Table III. All platforms
+run NVIDIA JetPack 6.2. Model partitions and INT8/FP16
+configurations are executed using TensorRT engines. Active
+compute-rail power is sampled at 100 Hz using the onboard
+TABLE III: Hardware Testbed and Profiled System Parameters
+Parameter
+Orin Nano
+Orin NX
+AGX Orin
+Memory
+8 GB
+16 GB
+32 GB
+GPU
+1024-core
+1024-core
+1792-core
+Tensor Cores
+32
+32
+56
+Execution Role
+Local
+Local
+Aggregator
+Precision
+FP16, INT8 FP16, INT8 FP16, INT8
+Power Monitoring
+INA3221
+INA3221
+INA3221
+Texas Instruments INA3221 current and voltage monitors
+through the Linux sysfs interfaces. The communication-energy
+model uses a wireless interface transmission power of Ptx =
+1.8 W.
+B. Workload Profiling and Dataset Traces
+Evaluation workloads are derived from multi-agent LiDAR
+and camera perception traces in the OPV2V benchmark,
+including CARLA and Culver City scenarios. The computa-
+tional workload uses a 12-layer Vision Transformer backbone
+(L = 12, hidden dimension D = 768, 12 attention heads).
+
+
+--- Page 6 ---
+Layer execution latency τ(l, n, b, K) and active compute-
+power profiles Pcomp(n, b) are measured separately on the
+Orin Nano, Orin NX, and AGX Orin for precision b ∈{8, 16}
+and concurrency levels K ∈{2, 4, 6, 8}. Measurements are
+collected over 200 inference runs after warm-up. Activation
+tensor sizes S(l, b) range from 150 kB to 2.4 MB depending
+on layer position and bitwidth. The sensitivity values ∆Q(l, b)
+are obtained from layer-wise quantization evaluation on an
+independent calibration subset.
+C. Network Configuration
+For each experiment, the active local node and the AGX
+Orin aggregator are connected through an emulated V2V
+link. The available data rate for stream k is selected from
+{6, 12, 18, 24, 27} Mbps according to the evaluated link con-
+figuration. The stream-specific value Rk is used to calculate
+intermediate-tensor transmission latency and V2V communi-
+cation energy.
+D. Baseline Deployment Strategies
+The proposed framework is evaluated for both the Orin
+Nano–AGX Orin and Orin NX–AGX Orin configurations
+under K ∈{2, 4, 6, 8}. Four baseline deployment strategies
+are used:
+1) Full Local FP16: All L layers execute on nlocal under
+FP16 precision.
+2) Static Early Split (l = 3, FP16): Layers 1–3 execute on
+nlocal, while layers 4–12 execute on nAGX under FP16
+precision.
+3) Static Late Split (l = 8, FP16): Layers 1–8 execute on
+nlocal, while layers 9–12 execute on nAGX under FP16
+precision.
+4) Uniform INT8 Split (l = 4): Execution is divided after
+layer 4, with all layers quantized uniformly to INT8.
+Task quality is measured using 3D bounding-box detec-
+tion mAP50. System-level metrics include end-to-end task
+completion latency Te2e, compute energy Ecomp, and V2V
+communication energy Ecomm.
+V. EXPERIMENTAL RESULTS AND ANALYSIS
+This section evaluates the proposed optimization frame-
+work against four baseline deployment strategies for K ∈
+{2, 4, 6, 8}. Experiments cover both local-to-aggregator con-
+figurations: Jetson Orin Nano paired with Jetson AGX Orin
+and Jetson Orin NX paired with Jetson AGX Orin.
+A. Energy Consumption and Multi-Stream Allocation
+Table II reports compute energy on the local node and
+aggregator, modeled V2V communication energy, total energy,
+average end-to-end task completion latency, and 3D detection
+mAP50. Energy values are accumulated across the K con-
+current streams, whereas Te2e reports the average completion
+latency per stream. Static FP16 splits transmit the intermediate
+activation at the selected partition without reducing its numeri-
+cal precision. For the Orin Nano configuration, the Early Split
+(l = 3) produces a 1.8 MB activation and requires 0.38 J
+of communication energy at K = 2, increasing to 1.54 J at
+K = 8. The Late Split (l = 8) produces a 2.4 MB activation,
+resulting in 0.46 J and 1.84 J at the same stream counts.
+The proposed formulation jointly selects the partition loca-
+tion and layer precision. Layers whose calibrated INT8 penal-
+ties satisfy constraint (23) can execute at reduced precision,
+while the stream-specific cut determines the activation trans-
+mitted over the V2V link. Communication energy increases
+from 0.14 J at K = 2 to 0.55 J at K = 8. Relative to
+the Uniform INT8 split, this corresponds to a 33.3–36.0%
+reduction across the evaluated stream counts. Relative to the
+FP16 static splits, the reduction ranges from 63.2% to 70.1%
+for the reported comparisons. Total energy combines compute
+energy on both active nodes and modeled V2V transmission
+energy. On the Orin Nano configuration, Full Local FP16
+increases from 0.88 J at K = 2 to 3.92 J at K = 8 as
+concurrent load increases. At K = 8, the proposed method
+requires 3.07 J, corresponding to a 21.7% reduction relative
+to Full Local FP16. The reduction relative to Uniform INT8
+is smaller, from 3.16 J to 3.07 J (2.8%), while the proposed
+configuration also provides lower latency and higher mAP50.
+B. End-to-End Latency and Stream Scaling
+End-to-end latency increases with concurrency because the
+profiled layer latency τ(l, n, b, K) includes the effect of si-
+multaneous inference streams on each compute node. On
+the Orin Nano, Full Local FP16 increases from 58.4 ms at
+K = 2 to 248.5 ms at K = 8. Static partitioning reduces the
+computation assigned to the local node but introduces V2V
+transfer delay, whose contribution depends on the activation
+size at the selected cut and the available stream-specific link
+rate. At K = 8, the proposed method reaches 98.4 ms on the
+Orin Nano, compared with 149.2 ms for Uniform INT8 and
+176.2 ms for the Static Early Split. These values correspond
+to latency reductions of 34.0% and 44.2%, respectively. On
+the Orin NX, the proposed configuration reaches 86.7 ms,
+compared with 129.5 ms for Uniform INT8 and 158.6 ms for
+the Static Early Split, giving reductions of 33.1% and 45.3%.
+C. 3D Detection Accuracy and Precision Allocation
+Unified FP16 execution provides a reference 3D detection
+accuracy of 79.2% mAP50. Uniform INT8 execution reaches
+74.3% at K = 8, corresponding to a 4.9 percentage-point re-
+duction. The layer-wise sensitivity calibration shows that quan-
+tization sensitivity is non-monotonic across the transformer
+backbone. As shown in Fig. 2(a), layers l ∈{1, 6, 9, 11, 12}
+incur comparatively larger INT8 sensitivity penalties and are
+retained in FP16, whereas layers l ∈{2, 3, 4, 5, 7, 8, 10} have
+lower penalties and are assigned INT8. The resulting allocation
+satisfies the quality constraint in (23) while avoiding uniform
+quantization across layers with different measured sensitivities.
+The communication effect of the selected precision con-
+figuration is shown in Fig. 2(b). At layers l ∈{2, 3, 4, 5},
+the intermediate activation size decreases from 1.8 MB under
+FP16 to 0.9 MB under INT8. The optimizer selects partition
+points within l ∈{3, 4, 5} for the bandwidth-constrained
+
+
+--- Page 7 ---
+(a) Layer-wise INT8 sensitivity and selected FP16/INT8 assignment.
+(b) Intermediate activation size across candidate partition layers.
+Fig. 2: Effect of layer-wise mixed-precision selection on quantization sensitivity and intermediate activation size.
+cases, thereby combining a smaller transmitted activation with
+reduced-precision execution before the V2V transfer. Layers
+retained in FP16 preserve the corresponding FP16 activa-
+tion representation. Across all evaluated stream counts, the
+proposed mixed-precision configuration achieves 75.1–76.1%
+mAP50 on the Orin Nano and 75.3–76.1% on the Orin NX.
+Relative to the 79.2% FP16 reference, the measured reduction
+remains within 3.1–4.1 percentage points.
+D. Solver Execution Runtime
+The SCIP 8.0 solver runs on the AGX Orin coordinator.
+SCIP returns an optimal solution for each evaluated instance
+without reaching the configured time limit. Solver time in-
+creases with stream count, from 4.2 ms to 8.4 ms on the Orin
+Nano configuration and from 4.1 ms to 8.1 ms on the Orin NX
+configuration as K increases from 2 to 8. Across all evaluated
+stream counts, solver execution remains below 10 ms.
+VI. CONCLUSION
+This paper explored an edge orchestration framework for
+split inference of vision transformer in connected automated
+vehicles. The framework jointly optimizes adaptive model
+partitioning and layer-wise INT8/FP16 selection through a
+Mixed-Integer Linear Program that minimizes compute and
+communication energy subject to end-to-end latency and task-
+quality constraints. The framework was evaluated on Jetson
+Orin Nano, Jetson Orin NX, and Jetson AGX Orin plat-
+forms using OPV2V-driven multi-stream workloads with K ∈
+2, 4, 6, 8. Across the evaluated configurations, joint partition
+and precision selection reduces V2V communication energy
+by 33.3–36.0% relative to the Uniform INT8 split and by
+up to 70.1% relative to the static FP16 splits. At K = 8,
+end-to-end latency decreases from 149.2 ms to 98.4 ms on
+the Orin Nano and from 129.5 ms to 86.7 ms on the Orin
+NX relative to Uniform INT8. The selected mixed-precision
+configurations limit the reduction in 3D detection accuracy
+to 3.1–4.1 percentage points in mAP50 relative to FP16
+execution. Future exploration will consider communication-
+aware intermediate token reduction and targeting additional
+V2X link conditions.
+REFERENCES
+[1] Q. Qi and X. Wang, “Tgbformer: Transformer-graphformer blender net-
+work for video object detection,” in Proceedings of the AAAI Conference
+on Artificial Intelligence, vol. 39, no. 6, 2025, pp. 6559–6567.
+[2] A. Sharshar, L. U. Khan, W. Ullah, and M. Guizani, “Vision-language
+models for edge networks: A comprehensive survey,” IEEE Internet of
+Things Journal, vol. 12, no. 16, pp. 32 701–32 724, 2025.
+[3] Y. Fu, P. Qin, and C. Jiang, “Edge ai inference in 6g mobile networks:
+From communication-efficient techniques to task-oriented optimization,”
+IEEE Communications Surveys & Tutorials, 2026.
+[4] Y. Matsubara and M. Levorato, “Neural compression and filtering for
+edge-assisted real-time object detection in challenged networks,” in 2020
+25th International Conference on Pattern Recognition (ICPR).
+IEEE,
+2021, pp. 2272–2279.
+[5] M. Zhang, J. Fang, Z. Teng, Y. Liu, and S. Wu, “Joint dnn partitioning
+and task offloading based on attention mechanism-aided reinforcement
+learning,” IEEE Transactions on Network and Service Management,
+vol. 22, no. 3, pp. 2914–2927, 2025.
+[6] A. Devoto, J. Pomponi, M. Merluzzi, P. Di Lorenzo, and S. Scardapane,
+“Adaptive semantic token communication for transformer-based edge
+inference,” IEEE Transactions on Machine Learning in Communications
+and Networking, 2026.
+[7] E. E. Uslu and O. Dagdeviren, “Distributed edge inference for llms and
+dnns: An assessment of optimization techniques, coverage gaps, and
+research directions,” in 2026 2nd International Symposium on AI-Driven
+Engineering Systems (ISADES).
+IEEE, 2026, pp. 1–8.
+[8] Z. Wang, Q. Zeng, H. Zheng, and K. Huang, “Revisiting outage for
+edge inference systems,” IEEE Transactions on Communications, 2026.
+[9] G. Gaddi, “Post-training quantization of a transformer-based au-
+tonomous driving neural network,” Ph.D. dissertation, Politecnico di
+Torino, 2025.
+[10] J. Moosmann, H. M¨uller, N. Zimmerman, G. Rutishauser, L. Benini, and
+M. Magno, “Flexible and fully quantized lightweight tinyissimoyolo for
+ultra-low-power edge systems,” IEEE Access, vol. 12, pp. 75 093–75 107,
+2024.
+[11] C. El Zeinaty, W. Hamidouche, G. Herrou, and D. Menard, “Designing
+object detection models for tinyml: Foundations, comparative analysis,
+challenges, and emerging solutions,” ACM Computing Surveys, vol. 58,
+no. 2, pp. 1–48, 2025.
+[12] D. Katare, M. Janssen, and A. Y. Ding, “Energy-aware adaptive frame-
+work for cav,” in 2025 IEEE 15th Annual Computing and Communica-
+tion Workshop and Conference (CCWC).
+IEEE, 2025, pp. 626–632.
+[13] D. Katare, E. Marin, N. Kourtellis, M. Janssen, and A. Y. Ding, “Arasec:
+Adaptive resource allocation and model training for serverless edge
+computing,” IEEE Internet Computing, 2024.
+[14] N. Mayumu, D. Xiaoheng, P. Mukala, S. U. R. Khan, and M. U.
+Saeed, “Omni-v2x: A vision-language model for actionable insights in
+vehicle-to-everything systems,” in 2025 International Joint Conference
+on Neural Networks (IJCNN).
+IEEE, 2025, pp. 1–8.
+[15] D. Katare and A. Y. Ding, “Energy-efficient edge approximation for
+connected vehicular services,” in 2023 57th Annual Conference on
+Information Sciences and Systems (CISS).
+IEEE, 2023, pp. 1–6.

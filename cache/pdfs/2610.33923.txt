@@ -1,0 +1,1355 @@
+--- Page 1 ---
+Queuing for Inference: Dynamic Memory Footprints and
+Costly Preemption
+JIAHUI NI, Purdue University, USA
+VISHRANT TRIPATHI, Purdue University, USA
+Modeling inference workloads for transformer-based neural networks poses unique challenges due to their
+dynamic memory footprints, head-of-line blocking caused by heavy-tailed request distributions, and memory-
+dependent preemption overhead arising from the need to load/unload cache state. In this paper, we introduce
+a new queuing model that captures the impacts of these features on system stability and scheduling design.
+We show that the Gittins-index policy, which minimizes mean response time in the standard M/G/1 setting,
+can incur substantial preemption overhead in our model. Motivated by this limitation, we propose the Multi-
+Level-Priority-Threshold (MLPT) policy, that limits preemption while preserving priority for short jobs. We
+characterize the mean response time under MLPT and provide empirical rules-of-thumb to solve the resulting
+threshold-optimization problem. Our key observation is that optimal scheduling is a balance between reducing
+the response times of shorter jobs and limiting the overhead incurred when preemption occurs. These results
+provide a theoretical framework for understanding scheduling in memory constrained queuing systems for
+inference tasks.
+1
+Introduction
+Transformer-based inference is becoming a major contributor to traffic growth in large-scale in-
+frastructure and compute serving systems. Over the past three decades, traditional performance
+modeling and queuing literature has served the computing infrastructure community well in ana-
+lyzing the fundamental limits of system performance and in designing more efficient architectures.
+However, modern inference workloads have characteristics that are not captured by classical queu-
+ing models. In particular, inference requests can have highly variable and often unknown execution
+times, their memory footprints can grow substantially as they are served, and interrupting a request
+can incur significant overhead because the state accumulated during execution must be moved
+or reconstructed. These characteristics couple scheduling decisions with memory occupancy and
+service capacity in ways that are fundamentally different from conventional compute workloads.
+A particularly important characteristic of transformer inference is its dynamically growing
+memory footprint. During autoregressive generation, a request maintains a Key-Value (KV) cache
+that grows with the generated sequence length. Consequently, the memory required by a request
+increases with its attained service: a request that has been served for a long time may occupy
+substantially more memory than a newly arrived request. Modern LLM serving systems have
+developed sophisticated mechanisms to manage this memory. For example, continuous batching
+allows requests to enter and leave a batch at iteration granularity [1], while PagedAttention
+improves KV-cache memory utilization by reducing fragmentation through paged allocation [2].
+However, these mechanisms do not eliminate the finite capacity of GPU memory. When the available
+KV-cache capacity is exhausted, requests may need to be preempted and their state transferred
+to host memory or reconstructed through recomputation, introducing additional data-movement
+and computational overhead. Thus, memory is not merely a resource that determines how many
+requests can be simultaneously admitted: as memory pressure increases, it can directly affect how
+efficiently inference work is completed.
+This distinction is important because a finite memory constraint can change the service process
+of a request. Consider a request whose memory footprint grows with its attained service. While
+Authors’ Contact Information: Jiahui Ni, Purdue University, West Lafayette, Indiana, USA, ni169@purdue.edu; Vishrant
+Tripathi, Purdue University, West Lafayette, Indiana, USA, tripathv@purdue.edu.
+arXiv:2610.33923v1  [cs.PF]  24 Oct 2026
+
+
+--- Page 2 ---
+2
+Jiahui Ni and Vishrant Tripathi
+its memory requirement remains below the available capacity, it can be served at its nominal rate.
+Once its footprint reaches the memory capacity, however, the remaining computation may have to
+be performed under memory pressure, resulting in a lower effective service rate. The amount of
+work affected by this slowdown depends on the intrinsic size of the request and on how its memory
+footprint evolves during execution. Long requests are therefore affected disproportionately: they
+are more likely to reach the memory limit and, once they do, may spend a significant fraction of
+their execution in the slower regime. This creates an interaction between job size, attained service,
+memory occupancy, and effective service capacity that is absent from the standard 𝑀/𝐺/1 model.
+Memory constraints also fundamentally change the cost of preemption. Preemption is attractive
+for inference workloads because request sizes are generally unknown upon arrival and can exhibit
+substantial variability. Under FCFS scheduling, a long request can cause significant head-of-line
+blocking for shorter requests, motivating scheduling policies that prioritize requests according
+to their attained service [3, 4]. In a classical 𝑀/𝐺/1 queue, such policies can exploit preemption
+without explicitly accounting for the cost of switching between jobs. In inference serving, however,
+preempting a request can require removing its accumulated KV cache from fast memory and
+subsequently restoring that state through data movement or recomputation. Because the amount of
+cached state grows with attained service, the cost of preemption itself can increase as a request runs.
+Thus, aggressive preemption can improve response time by reducing head-of-line blocking while
+simultaneously consuming additional system capacity through state movement or reconstruction.
+Existing serving systems mitigate these costs through mechanisms such as proactive KV-cache
+swapping and live request migration [5, 6], but the fundamental scheduling tradeoff remains.
+The resulting problem is also distinct from classical queuing models with finite buffers. In a
+finite-buffer queue, the capacity constraint limits the amount of queued work that can be stored
+in the system; when the buffer is full, newly arriving jobs may be blocked or dropped, while
+the service process of a job already in service is unaffected. In contrast, the memory constraint
+considered here is coupled to the execution of the job itself. A request can progressively increase
+its memory footprint while receiving service, reach the finite memory capacity during execution,
+and subsequently experience a reduced service rate. Moreover, if the request is preempted, its
+accumulated memory state determines the additional work required to resume it. The capacity
+constraint therefore affects not only admission or occupancy, but also the service requirement of a
+job and the cost of scheduling decisions.
+This distinction becomes increasingly important as inference is deployed across large-scale
+infrastructure as well as resource-constrained edge and on-device environments. At the edge and
+on end devices, available high-speed memory is much more limited, while moving state between
+memory hierarchies or between processing units can consume a larger fraction of the available
+computational and communication capacity. Consequently, memory pressure and state movement
+can have an even more pronounced effect on effective inference capacity in such environments.
+1.1
+Contributions
+In this work, we introduce the 𝑀/𝐺𝑔/1𝐶
+𝛽queue, a new queuing model for inference workloads
+with dynamically growing memory footprints, finite memory capacity, memory-dependent service
+degradation, and nonzero preemption overhead (see Figure 1). The model retains the basic structure
+of the classical 𝑀/𝐺/1 queue while explicitly capturing the interactions between attained service,
+memory occupancy, service rate, and preemption cost. Specifically, a job with attained service
+𝑎occupies memory according to a nondecreasing function 𝑔(𝑎); the system has finite memory
+capacity 𝐶; service proceeds at a reduced rate 𝛽once the memory requirement exceeds 𝐶; and
+preempting a job incurs additional work proportional to its accumulated memory state.
+
+
+--- Page 3 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+3
+We use this model to study both the fundamental stability implications of memory constraints and
+the scheduling tradeoffs created by costly preemption. For non-preemptive policies, we characterize
+the stability region and show how memory-induced service degradation introduces additional
+load that depends on the portion of a job served beyond the memory threshold. For preemptive
+scheduling, we show that the classical Gittins-index policy, which minimizes mean response time
+in the standard 𝑀/𝐺/1 setting, can incur substantial preemption overhead in the presence of
+memory-dependent switching costs. Motivated by this observation, we propose a Multi-Level-
+Priority-Threshold (MLPT) policy that limits preemption while retaining priority for jobs with
+small attained service. We derive the mean response time under MLPT and characterize the
+resulting threshold optimization problem, revealing how the tradeoff between scheduling gain and
+preemption overhead depends on memory capacity and the cost of restoring state.
+1.2
+Related Work
+LLM Serving Systems. Recent works have developed a range of system-level techniques to improve
+the throughput and latency of LLM serving, including continuous batching [1], chunked prefill [7],
+and prefill-decode disaggregation [8]. Efficient memory management is similarly critical because
+autoregressive generation requires a KV cache that grows with sequence length; PagedAttention
+[2] improves GPU-memory utilization by reducing KV-cache fragmentation, while systems such
+as FastServe [5] and Llumnix [6] use preemption, KV-cache swapping, and live migration to
+mitigate latency and load-imbalance under memory pressure. Nevertheless, request sizes can
+vary substantially, making FCFS-like scheduling susceptible to head-of-line blocking [3, 4], while
+preemption and KV-cache management introduce state-dependent overhead and memory pressure
+can reduce the effective serving rate. These systems primarily address these challenges through
+system design and optimization; our work provides a complementary queuing-theoretic analysis of
+scheduling when memory footprints grow during service and both service rate and preemption
+cost depend on the attained service of a job.
+Queuing Analysis. Queuing theory provides a rich framework for latency-oriented scheduling in
+𝑀/𝐺/1 queues. Since LLM request sizes are generally unknown upon arrival, inference can naturally
+be viewed as scheduling with unknown job sizes, for which the Gittins index policy minimizes mean
+response time under costless preemption [9, 10]. However, optimal scheduling with preemption
+overhead remains an open problem [11], and switching costs can invalidate conventional Gittins-
+type index policies [12]. Closer to our work, different variations of the preemption overhead setting
+have been analyzed in the 𝑀/𝐺/1 queue over the years including class-based priority [13], and
+preemptive-repeats with both LIFO scheduling [14, 15] and age-dependent scheduling [16, 17].
+However, these works do not consider memory constraints or settings where the preemption
+overhead itself is age-dependent.
+In standard 𝑀/𝐺/1 settings, it has been shown that the Gittins Index policy can be translated
+into simpler scheduling disciplines [18–20] with threshold-type structure. Our proposed MLPT
+policy is motivated by these threshold-type structures and the idea of preemption checkpointing,
+introduced in [21] to tackle costly preemptions. Classical methods like multilevel-feedback-queues
+(MLFQ) [22] provide a practical way to implement such threshold-based prioritization. Crucially,
+existing analysis and scheduling policies do not capture the coupling between attained service,
+growing memory footprint, service degradation, and preemption cost that arises in our model.
+Theoretical Modeling for LLM Inference. The closest line of work related to ours is the growing
+body of literature on theoretical modeling for LLM inference. Recent studies incorporate increas-
+ingly detailed aspects of batching and KV-cache constraints, including request-level batching
+[23], iteration-level batching and token-budget constraints [24], dynamically growing KV-cache
+occupancy under finite GPU memory [25], and memory-constrained multi-stage execution with
+
+
+--- Page 4 ---
+4
+Jiahui Ni and Vishrant Tripathi
+Fig. 1. 𝑀/𝐺𝑔/1𝐶
+𝛽queuing model
+dynamic iteration times [26, 27]. These works establish stability, throughput, or asymptotic latency
+guarantees, but do not provide an explicit steady-state characterization of mean response time
+under preemptive scheduling with memory-dependent overhead. Unlike existing LLM-specific
+models, our approach connects these memory effects directly to classical latency-oriented analysis
+and scheduling design.
+2
+System Model
+We introduce a memory-constrained queuing model for preemptive scheduling with dynamically
+growing memory footprints, finite memory capacity, and nonzero preemption overhead, which we
+denote by 𝑀/𝐺𝑔/1𝐶
+𝛽. The model retains the basic structure of a classical 𝑀/𝐺/1 queue, but differs
+from it in three key aspects: (i) the memory footprint of a job grows as a function 𝑔(·) depending
+on its attained service; (ii) the server has a finite memory capacity 𝐶, and once this capacity is
+exceeded, the service rate slows down by a factor 𝛽; and (iii) preempting a job incurs an additional
+switching cost proportional to the memory it occupies.
+Throughout, we assume that, until the memory constraint is reached, the server processes jobs
+at a normalized rate of 1. Jobs arrive according to a Poisson process with rate 𝜆. Let 𝐿denote the
+intrinsic size of a job, i.e., the amount of service required to complete the job when it is processed
+continuously at the normalized service rate of one and incurs no preemption overhead. Job sizes are
+i.i.d. according to distribution 𝐹𝐿(ℓ) with density 𝑓𝐿(ℓ). We consider the classical zero-information
+setting, in which the scheduler knows the distribution 𝐹𝐿but does not know the realization of 𝐿
+for an individual job upon arrival.
+The 𝑀/𝐺𝑔/1𝐶
+𝛽model is motivated by inference for transformer-based neural networks. In this
+setting, a job corresponds to an inference request, its size corresponds to the total amount of decode
+work, and its attained service corresponds to the amount of decoding completed so far. We focus
+on the decode phase and assume that at most one request is served at a time, so that the underlying
+queuing structure remains single-server. The model can be extended to 𝑀/𝐺𝑔/𝑘𝐶
+𝛽queues to capture
+batching, when 𝑘decode-phase requests are processed in parallel.
+2.1
+Dynamic Memory Footprint
+In our 𝑀/𝐺𝑔/1𝐶
+𝛽model, a job occupies an amount of memory that increases with its attained service.
+Let 𝑗denote the job currently in service, and let 𝑎𝑗(𝑡) denote the attained service of job 𝑗at time
+𝑡. We assume that at most one job is served at a time, and only the memory of the running job
+is retained in the server. Let 𝑔: R+ →R+ be a known monotonically non-decreasing function
+characterizing the memory requirement as a function of attained service. Then, the memory
+
+
+--- Page 5 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+5
+footprint of job 𝑗running at time 𝑡is
+𝑀(𝑡) = 𝑔 𝑎𝑗(𝑡) .
+(1)
+For transformer-based inference, this state corresponds to the KV cache accumulated during
+autoregressive decoding. As decoding progresses, each newly generated token contributes additional
+KV states that must be retained for future attention computation. The function 𝑔(·) captures the
+general behavior of KV cache growth. When a standard full-attention transformer is used, the KV
+cache size grows approximately linearly with the generated sequence length, which corresponds to
+𝑔(𝑎) = 𝛼𝜇𝑎, where the parameter 𝛼captures the memory growth associated with each generated
+token, and 𝜇captures the rate of token generation.
+2.2
+Memory Constraint and Slowdowns
+The finite memory capacity 𝐶affects the rate at which a job is served. We normalize the service
+rate to one while the memory footprint of the running job remains within the capacity 𝐶. Once the
+memory requirement exceeds this capacity, the service rate is reduced to 𝛽, where 0 < 𝛽< 1
+𝜇(𝑡) =
+(
+1,
+𝑀(𝑡) < 𝐶,
+𝛽,
+𝑀(𝑡) ≥𝐶,
+0 < 𝛽< 1.
+(2)
+Consider a job 𝑖scheduled for service at time 𝑡. It has an intrinsic job size of 𝐿𝑖. We define the
+slowdown threshold point ℓ𝐶as the smallest amount of service needed for 𝑀(𝑡) to reach 𝐶. Under
+the simple linear KV cache growth model where 𝑔(𝑎) = 𝛼𝑎, the job can receive 𝐶
+𝛼units of service
+before the memory capacity is exhausted, after which it is served at a slower service rate. Therefore,
+ℓ𝐶= 𝐶
+𝛼. The service time of job 𝑖is given by
+𝑆𝑖= 𝐿𝑖+
+ 1
+𝛽−1
+
+(𝐿𝑖−ℓ𝐶)+
+(3)
+where (𝐿−ℓ𝐶)+ = (𝐿−ℓ𝐶)1{𝐿≥ℓ𝐶}.
+Hence, the service time of a job is generally different from its intrinsic size 𝐿as the remaining
+work is processed at the slower rate 𝛽once the memory threshold is crossed. In LLM inference, this
+slowdown represents the loss of effective decoding throughput when the KV cache can no longer be
+maintained entirely in GPU memory. Practical serving systems may respond to memory pressure
+by swapping KV cache blocks to host memory, evicting cache state, or recomputing evicted state
+later. These mechanisms introduce additional data movement and computation, which reduce the
+effective rate at which decode work is completed. Rather than modeling these low-level operations
+explicitly, 𝛽captures their aggregate effect on service speed.
+2.3
+Preemption and Switching Cost
+The 𝑀/𝐺𝑔/1𝐶
+𝛽model permits preemptive scheduling, but preemption is not assumed to be free.
+When a job 𝑖is preempted after receiving 𝑎𝑖(𝑡) units of service and later resumed, its previously
+accumulated memory states must be restored. We model this restoration overhead as an additional
+service requirement proportional to the memory footprint at the time of preemption:
+𝑐𝑖(𝑡) = 𝛾𝑔(𝑎𝑖(𝑡)),
+(4)
+where𝛾≥0 denotes the restoration cost per unit of accumulated state. We make one key assumption
+for analytical tractability.
+Assumption 1. Only one job is served at a time and only the memory of the running job is
+retained in the server.
+
+
+--- Page 6 ---
+6
+Jiahui Ni and Vishrant Tripathi
+Therefore, preemption affects the queue through additional workload assigned to the preempted
+job, but it does not create persistent memory pressure for future jobs. This separation is important
+for ease of analysis: the memory-dependent slowdown experienced by a job is determined only
+by its own attained service while it is running, whereas preemption overhead is accounted for
+separately through the additional work 𝛾𝑔(𝑎𝑖(𝑡)). For LLM serving, preempting a request may
+require its KV cache to be removed from GPU memory and later restored through recomputation
+or data movement. The amount of state that must be reconstructed/transferred grows with the
+amount of KV cache generated, motivating a restoration cost proportional to attained service.
+The parameters 𝑔(·), 𝐶, 𝛽, and 𝛾therefore capture four distinct aspects of the serving system: dy-
+namic memory growth with attained service, finite fast-memory capacity, service-rate degradation
+beyond that capacity, and preemption-induced restoration overhead, respectively. The resulting
+𝑀/𝐺𝑔/1𝐶
+𝛽model preserves enough of the classical 𝑀/𝐺/1 structure to support queuing analysis
+while incorporating the system effects that are central to memory-constrained LLM scheduling.
+3
+The Stability Region of a Memory-Constrained Queue
+Fig. 2. Stability region comparison between the memory-constrained 𝑀/𝐺𝑔/1𝐶
+𝛽queue for 𝑔(𝑎) = 𝛼𝑎and the
+standard M/G/1 queue for L∼Exp(1/53) and L∼LogNorm(𝜇= 3.1, 𝜎= 1.3), where E[𝐿] = 53,𝐶= 256, 𝛼=
+3.75, 𝛽= 0.3. The vertical dashed lines show the limits of stable arrival rates.
+In this section, we derive the stability region of the proposed memory-constrained queue for
+non-preemptive policies and characterize how the dynamically growing memory footprint and
+slowdowns when the memory constraint is hit affect the stability of the 𝑀/𝐺𝑔/1𝐶
+𝛽queue. This
+analysis applies to all non-preemptive policies that do not make use of job sizes, as they have the
+same mean response time. For such policies, each job remains in service until completion and
+therefore incurs no switching or restoration overhead. Consequently, the preemption cost factor 𝛾
+does not affect the service requirement. As we assume the job size to be i.i.d., taking the expectation
+on both sides of equation (3) yields the first moment of the service time:
+E[𝑆] = E[𝐿] +
+ 1
+𝛽−1
+ ∫∞
+ℓ𝐶
+(ℓ−ℓ𝐶)𝑓𝐿(ℓ) 𝑑ℓ.
+(5)
+Since 𝑆is a deterministic function of the i.i.d. intrinsic job sizes 𝐿, the service times are also i.i.d.
+The 𝑀/𝐺𝑔/1𝐶
+𝛽queue therefore reduces to an 𝑀/𝐺/1 queue with service-time distribution induced
+by 𝑓𝐿, ℓ𝐶and 𝛽.
+
+
+--- Page 7 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+7
+Lemma 3.1. Assume E[𝑆] < ∞. The 𝑀/𝐺𝑔/1𝐶
+𝛽queue under non-preemptive non-size-aware policy
+is stable if and only if
+𝜌0 ≜𝜆E[𝑆] < 1,
+(6)
+or equivalently,
+𝜆
+
+E[𝐿] +
+ 1
+𝛽−1
+
+E[(𝐿−ℓ𝐶)+]
+
+< 1.
+(7)
+The second term in (7) quantifies the additional load induced by the memory constraint. Specifi-
+cally,
+E
+
+(𝐿−ℓ𝐶)+
+=
+∫∞
+ℓ𝐶
+(ℓ−ℓ𝐶) 𝑓𝐿(ℓ) 𝑑ℓ
+is the expected portion of a job that must be served after its memory requirement reaches the
+capacity 𝐶. Since service beyond this threshold proceeds at the reduced rate 𝛽, this excess work con-
+tributes an additional load of 𝜆
+
+1
+𝛽−1
+
+E
+
+(𝐿−ℓ𝐶)+
+. Since 𝑔(·) is a monotonically non-decreasing
+function of the attained service, increasing 𝐶delays the onset of memory-induced slowdown, while
+increasing 𝛽reduces the slowdown penalty; both enlarge the stability region.
+Figure 2 compares the mean response time, computed using the Pollaczek–Khinchine formula,
+as a function of the arrival rate for exponential and log-normal job-size distributions with the
+same mean intrinsic job size 𝐿, in the memory-constrained 𝑀/𝐺𝑔/1𝐶
+𝛽and the standard 𝑀/𝐺/1
+queue without memory constraints when 𝑔(𝑎) = 𝛼𝑎with 𝛼being a constant. For the parameters
+considered, the memory constraint substantially reduces the maximum stable arrival rate. Moreover,
+the stability region of a memory-constrained queue depends not only on the mean job size, as in
+a standard 𝑀/𝐺/1 queue, but also on the tail probability distribution via the expected remaining
+job size beyond the slowdown threshold, E
+h 𝐿−𝐶
+𝛼
++i
+. Consequently, distributions with greater
+tail mass beyond 𝐶
+𝛼, such as the log-normal distribution considered in Figure 2, incur a larger
+memory-induced load and therefore a smaller stability region in a memory-constrained queue.
+Lemma 3.1 characterizes the stability region of non-preemptive, size-unaware policies. Never-
+theless, non-preemptive policies can suffer from severe head-of-line blocking, as a long request
+may delay many shorter requests. This motivates preemptive policies that interrupt jobs with large
+attained service and give priority to newly arriving jobs that may complete sooner. In our model,
+however, preemption incurs a positive overhead. Consequently, any policy that preempts with
+positive probability increases the effective mean service requirement and therefore has a strictly
+smaller stability region than its non-preemptive counterpart. This loss in stability does not prevent
+preemption from being beneficial: at light or moderate loads, the reduction in head-of-line blocking
+can outweigh the additional preemption cost, yielding a smaller mean response time.
+4
+Scheduling Design
+4.1
+Motivation from Age-Based Scheduling
+Under the zero-information setting considered in this work, the scheduler does not know the size
+of an individual job upon arrival. The attained service of a job therefore provides an important
+source of information for scheduling decisions. Classical results for the 𝑀/𝐺/1 queue show that,
+among work-conserving preemptive policies, the Gittins index policy minimizes mean response
+time [9, 10]. The Gittins index of a job depends on its attained service and uses the conditional
+distribution of its remaining size to determine its priority. Following the notations and definitions
+used in [18], the efficiency function 𝐽(𝑎, Δ) for any Δ > 0 is defined as,
+𝐽(𝑎, Δ) =
+𝑃(𝑆−𝑎≤Δ|𝑆> 𝑎)
+E[min{𝑆−𝑎, Δ}|𝑆> 𝑎],
+
+
+--- Page 8 ---
+8
+Jiahui Ni and Vishrant Tripathi
+where 𝑎denotes the attained service and Δ is the assigned quantum of service. 𝐽(𝑎, Δ) can be
+interpreted as the ratio between the probability that a job with attained service 𝑎will complete
+with a service quantum of Δ and the expected service time a job with attained service 𝑎and service
+quantum Δ will require from the server. The Gittins index 𝐺(𝑎), 𝑎≥0 is defined as,
+𝐺(𝑎) = sup
+Δ≥0
+𝐽(𝑎, Δ).
+For any 𝑎≥0, the optimum quantum of service Δ∗(𝑎) is defined as,
+Δ∗(𝑎) = sup{Δ ≥0|𝐺(𝑎) = 𝐽(𝑎, Δ)}.
+Therefore, for each job with attained service 𝑎, the Gittins index 𝐺(𝑎) returns its highest efficiency
+ratio achieved by the optimum quantum of service Δ∗(𝑎).
+According to Theorem 2 and Definition 2 in [18], the Gittins index policy at every decision epoch
+picks the job with the highest index value 𝐺(𝑎) and assigns it a service quantum Δ∗(𝑎). The next
+decision epoch takes place once the previously selected job has received Δ∗(𝑎) units of service, or
+when the previously selected job completes its service, or when a new job arrives at the queue.
+Note that unlike the classical model, preemption is not work-conserving in the 𝑀/𝐺𝑔/1𝐶
+𝛽queue
+and the Gittins index policy might cause the queue to be unstable under special assumptions on
+the service time distribution.
+Let’s define the hazard rate of a service time distribution as ℎ(𝑥) = 𝑓(𝑥)
+¯𝐹(𝑥), where ¯𝐹(𝑥) = 1 −𝐹(𝑥)
+is the complementary cumulative distribution function of the service time distribution. A service
+time distribution belongs to the class Decreasing Hazard Rate (DHR) if ℎ(𝑥) ≥ℎ(𝑦) whenever
+𝑥≤𝑦. It has a strictly decreasing hazard rate if the inequality is strict.
+Lemma 4.1 (Instability of the classical Gittins rule under costly preemption). Assume
+that the service time distribution has a strictly decreasing hazard rate. If a new job with size greater
+than 𝑎> 0 arrives when an unfinished job is in service with attained service 𝑎, then the classical
+Gittins-index policy induces infinitely many preemptions in the 𝑀/𝐺𝑔/1𝐶
+𝛽queue and causes the queue
+to be unstable.
+Proof. According to Proposition 5 in [18], the Gittins index for a DHR service-time distribution
+is given by 𝐺(𝑎) = ℎ(𝑎). Since the hazard rate is assumed to be strictly decreasing, 𝐺(𝑎) is strictly
+decreasing in the attained service 𝑎. Moreover, under strict DHR, the efficiency function 𝐽(𝑎, Δ)
+is strictly decreasing in the service quantum Δ according to Proposition 1 in [18], so the optimal
+Gittins service quantum satisfies Δ∗(𝑎) = 0.
+Suppose that a job 𝑖is in service with attained service 𝑎> 0 when a new job 𝑗arrives. Since
+𝐺(0) > 𝐺(𝑎), job 𝑗immediately receives priority. On the event that 𝑗does not complete before
+receiving 𝑎units of service, the two unfinished jobs eventually satisfy 𝑎𝑖= 𝑎𝑗= 𝑎. At this instant
+their Gittins indices are equal.
+Now suppose that, because the server can serve only one job at a time, job 𝑖is selected. After
+receiving any positive amount 𝜖> 0 of additional service, its attained service becomes 𝑎+ 𝜖,
+whereas job 𝑗remains at attained service 𝑎. Since 𝐺(·) is strictly decreasing, 𝐺(𝑎+ 𝜖) < 𝐺(𝑎),
+and the Gittins rule therefore requires job 𝑖to be preempted in favor of job 𝑗. The same argument
+applies symmetrically after job 𝑗receives any positive amount of service. Hence no job can receive a
+strictly positive service quantum while preserving the Gittins priority ordering. An exact single-job
+implementation therefore requires service quanta converging to zero and infinitely many switches
+between the tied jobs.
+In the classical costless-preemption model, this limiting behavior is interpreted as processor
+sharing between jobs tied at the highest Gittins index. In the present model, however, every
+
+
+--- Page 9 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+9
+preemption incurs a positive overhead; when the service quantum approaches 0, the limiting
+behavior cannot be interpreted as processor sharing between jobs at a reduced rate. Let 𝑐(𝑎) > 0
+denote the preemption cost at attained service 𝑎(for example, 𝑐(𝑎) = 𝛾𝑔(𝑎) under proportional
+recomputation cost). If 𝑁preemptions occur after the jobs reach attained service 𝑎, the accumulated
+overhead is at least 𝑁𝑐(𝑎). Since an exact implementation requires 𝑁→∞, an unbounded amount
+of server work is spent on preemption overhead before any positive amount of useful service can
+be completed beyond the tie state. Therefore, once such a state is reached, the involved jobs have
+infinite response time. If this state is reachable with positive probability, the system admits no
+stable stationary regime under a direct implementation of the classical Gittins-index policy.
+□
+Previous work [19, 20] has shown that multi-level scheduling policies with age-based priority
+thresholds can perform within a constant factor of the Gittins index policy under costless preemption.
+Therefore, to limit the preemption overhead, it is natural to use a multi-level policy with age-based
+thresholds, and serve the job in each level non-preemptively and preempt the job only when it is
+demoted to a lower priority level after reaching the attained-service thresholds. This preserves the
+benefit of prioritizing jobs that are more likely to finish to mitigate head-of-line blocking, while
+limiting the accumulated preemption overhead.
+4.2
+Mean Response Time of the MLPT-(𝜃,𝑘) Policy
+We propose the following Multi-Level Priority Thresholds (MLPT)-(𝜃,𝑘) policy to balance the
+trade-off between head-of-line blocking and preemption overhead through limited preemption.
+The structure of the MLPT policy is strongly motivated by classical MLFQ scheduling [22], the
+discretized foreground-background (FB) policy analyzed in [28], and preemption checkpointing as
+discussed in [21]. The MLPT-(𝜃,𝑘) policy consists of 𝑘priority levels, denoted by 𝑄1,𝑄2, . . . ,𝑄𝑘,
+with strict priority 𝑄1 ≻𝑄2 ≻· · · ≻𝑄𝑘.
+Jobs in the same level are served in an FCFS order. A newly arriving job enters 𝑄1. For 𝑖=
+1, . . . ,𝑘−1, a job in 𝑄𝑖receives at most 𝜃units of service. If it does not complete within this
+quantum, it is preempted at attained service 𝑖𝜃and demoted to 𝑄𝑖+1. Jobs reaching 𝑄𝑘are served
+until completion. Therefore, a job can be preempted at most 𝑘−1 times when 𝑘is finite. We use
+𝑘= ∞to denote the policy that allows a job to be demoted infinitely.
+We assume that the attained service of a job does not include the preemption overheads needed
+to reschedule the job, and that a preempted job is always rescheduled successfully. A job in 𝑄𝑖is
+rescheduled only if there are no higher-priority jobs in the system, but once it resumes service, it is
+non-preemptible until the allocated 𝜃units of service are exhausted.
+Remark 1. In the MLPT-(𝜃,𝑘) policy, we assume that when a job reaches 𝜃units of service, it
+is preempted proactively, independently of whether there are jobs in higher-priority levels in the
+system. In other words, even if the system is empty, the job is preempted, demoted to 𝑄𝑖+1, and
+rescheduled immediately, which always incurs a preemption overhead.
+This simplifies the theoretical analysis, as the preemption overhead is entirely determined by the
+original service requirement of the job and independent of the arrival process. While it is natural
+to expect a practical scheduler to only preempt the job in service when there are new arrivals,
+such a scheduler is equivalent to our proposed policy if we let the preemption overhead be zero if
+𝑄1, ...𝑄𝑖+1 are all empty when a job in 𝑄𝑖attains 𝜃units of service. The fraction of time that the
+preemption overhead is zero is small if we consider reasonably large values of 𝜃and a moderately
+large system load. Therefore, our proposed policy has a mean response time close to the policy
+with arrival-dependent preemptions while remaining analytically tractable.
+The complete specification of the scheduling policy is detailed in Algorithm 1. We will next derive
+the stability condition and the mean response time of the MLPT-(𝜃,𝑘) policy. Let 𝐹𝑆(𝑥) = Pr(𝑆> 𝑥)
+
+
+--- Page 10 ---
+10
+Jiahui Ni and Vishrant Tripathi
+Algorithm 1 MLPT-(𝜃,𝑘) Scheduling Policy
+1: Maintain 𝑘priority queues 𝑄1, . . . ,𝑄𝑘with
+𝑄1 ≻𝑄2 ≻· · · ≻𝑄𝑘.
+2: Upon arrival, place job 𝑗in 𝑄1
+3: while the system is nonempty do
+4:
+Let
+𝑖𝑚= min{𝑖: 𝑄𝑖≠∅}
+5:
+Select the head-of-line job 𝑗from 𝑄𝑖𝑚
+6:
+Serve job 𝑗nonpreemptively
+7:
+if 𝑖𝑚< 𝑘then
+8:
+Continue service until either:
+(1) job 𝑗completes, or
+(2) its attained service reaches 𝑖𝑚𝜃
+9:
+if job 𝑗completes then
+10:
+Remove job 𝑗from the system
+11:
+else
+12:
+Preempt job 𝑗at attained service
+𝑎𝑗= 𝑖𝑚𝜃
+13:
+Demote job 𝑗to 𝑄𝑖𝑚+1
+14:
+Record preemption cost
+𝑐𝑖𝑚= 𝛾𝑔(𝑖𝑚𝜃)
+15:
+When job 𝑗is next scheduled, incur overhead 𝑐𝑖𝑚
+16:
+end if
+17:
+else
+18:
+Serve job 𝑗until completion
+19:
+Remove job 𝑗from the system
+20:
+end if
+21: end while
+denote the complementary CDF of the service time distribution without preemption overheads.
+We denote the preemption overhead is for a job with attained service 𝑎as 𝑐(𝑎) = 𝛾𝑔(𝑎). So, under
+the MLPT-(𝜃,𝑘) policy, the preemption cost incurred at the 𝑟th threshold is
+𝑐𝑟= 𝛾𝑔(𝑟𝜃),
+𝑟= 1, . . . ,𝑘−1.
+(8)
+Therefore, a job of size 𝑆crosses threshold 𝑟𝜃if and only if 𝑆> 𝑟𝜃. Hence, its effective service
+requirement under MLPT-(𝜃,𝑘) is
+𝑆eff
+𝑘
+= 𝑆+ 𝛾
+𝑘−1
+∑︁
+𝑟=1
+𝑔(𝑟𝜃)1{𝑆> 𝑟𝜃}.
+(9)
+Therefore,
+E
+
+𝑆eff
+𝑘
+
+= E[𝑆] + 𝛾
+𝑘−1
+∑︁
+𝑟=1
+𝑔(𝑟𝜃)𝐹𝑆(𝑟𝜃).
+(10)
+
+
+--- Page 11 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+11
+The effective system load is thus
+𝜌eff
+𝑘
+= 𝜆E
+
+𝑆eff
+𝑘
+
+= 𝜆
+ 
+E[𝑆] + 𝛾
+𝑘−1
+∑︁
+𝑟=1
+𝑔(𝑟𝜃)𝐹𝑆(𝑟𝜃)
+!
+.
+(11)
+Lemma 4.2 (Stability Condition of the MLPT-(𝜃,𝑘) policy). The 𝑀/𝐺𝑔/1𝐶
+𝛽queue under the
+MLPT-(𝜃,𝑘) policy is stable if and only if
+𝜌eff
+𝑘
+= 𝜆
+ 
+E[𝑆] + 𝛾
+𝑘−1
+∑︁
+𝑟=1
+𝑔(𝑟𝜃)𝐹𝑆(𝑟𝜃)
+!
+< 1.
+(12)
+To derive the mean response time, we adopt an approach similar to that proposed in [29]. A job
+that completes at level 𝑗< 𝑘has a service requirement
+(𝑗−1)𝜃< 𝑆≤𝑗𝜃,
+whereas a job reaches the last level 𝑄𝑘if 𝑆> (𝑘−1)𝜃. We denote such a job as a 𝑗-job, where
+𝑗≤𝑘. Define
+𝑝𝑗=
+(
+Pr (𝑗−1)𝜃< 𝑆≤𝑗𝜃,
+𝑗= 1, . . . ,𝑘−1,
+Pr 𝑆> (𝑘−1)𝜃,
+𝑗= 𝑘.
+(13)
+Let 𝑑𝑗be the total mean waiting time of a job that completes in level 𝑗. Therefore, the total mean
+response time of a job that completes in level 𝑗is given by
+E[𝑇| 𝐽= 𝑗] = 𝑑𝑗+ E[𝑆| 𝐽= 𝑗] +
+𝑗−1
+∑︁
+𝑟=1
+𝑐𝑟.
+(14)
+To obtain 𝑑𝑗, consider a transformed system in which the first 𝑗levels are merged into a single
+level, denoted by 𝑄𝐽. The maximum amount of service received by jobs in 𝑄𝐽is 𝑗𝜃for 𝑗< 𝑘,
+whereas for 𝑗= 𝑘the entire job is served in 𝑄𝐽until it completes. Let 𝑑𝐽denote the mean waiting
+time in 𝑄𝐽. To derive 𝑑𝐽, we consider the total mean service time of the waiting jobs in 𝑄𝐽and
+the remaining service time of the job in service when a tagged 𝑗-job arrives at 𝑄𝐽, including the
+preemption overhead. This yields the mean waiting time of a 𝑗-job due to the jobs already in the
+system when the tagged job arrives. 𝑑𝑗differs from 𝑑𝐽only by the amount of service time required
+for jobs that arrive after the tagged job arrives at the system and before it starts service in level 𝑗
+to attain (𝑗−1)𝜃units of service or finish service. Next, we will derive 𝑑𝐽first and then use it to
+derive 𝑑𝑗using a busy period argument.
+Lemma 4.3 (Mean waiting time in 𝑄𝐽). The mean waiting time of a job in the merged level 𝑄𝐽in
+the transformed system is
+𝑑𝐽=
+𝜆
+2E[(𝑆eff
+𝑘)2] −𝑂𝐽
+1 −𝜆𝑏𝐽
+,
+(15)
+where
+𝑂𝐽= 𝜆𝐹𝑆(𝑗𝜃)
+ 
+𝑗𝜃+
+𝑗−1
+∑︁
+𝑟=1
+𝑐𝑟
+!
+𝑣𝑗+1 + 𝜆
+𝑘−1
+∑︁
+𝑟=𝑗+1
+𝐹𝑆(𝑟𝜃) (𝜃+ 𝑐𝑟−1) 𝑣𝑟+1,
+(16)
+𝑏𝐽=
+(
+E[min{𝑆, 𝑗𝜃}] + Í𝑗−1
+𝑟=1 𝑐𝑟𝐹𝑆(𝑟𝜃)
+𝑗< 𝑘,
+E[𝑆eff
+𝑘]
+𝑗= 𝑘,
+(17)
+
+
+--- Page 12 ---
+12
+Jiahui Ni and Vishrant Tripathi
+𝑣𝑖= E
+"
+𝑆−(𝑖−1)𝜃+
+𝑘−1
+∑︁
+𝑟=𝑖−1
+𝑐𝑟1{𝑆> 𝑟𝜃}
+𝑆> (𝑖−1)𝜃
+#
+,
+𝑖= 2, . . . ,𝑘,
+(18)
+and we set 𝑐0 = 0.
+Proof. The total mean waiting time of a job in 𝑄𝐽is the sum of the total mean effective service
+time of all waiting jobs in the queue and the remaining service time of the job in service when
+it arrives at 𝑄𝐽. Let 𝑏𝐽denote the mean amount of effective service, including the preemption
+overhead, performed for jobs in 𝑄𝐽. For 𝑗< 𝑘, the amount of effective service time is the sum of
+the intrinsic service time 𝑆truncated at the maximum amount of intrinsic service 𝑗𝜃and the total
+preemption overhead incurred every time the job is rescheduled, which would be at most 𝑗−1
+times. This is given by
+𝑏𝐽= min{𝑆, 𝑗𝜃} +
+𝑗−1
+∑︁
+𝑟=1
+𝑐𝑟1{𝑆> 𝑟𝜃}.
+(19)
+For 𝑗= 𝑘, the amount of effective service time is the total effective service time 𝑆eff
+𝑘. Taking the
+expectation yields (17). Due to the PASTA property of memoryless arrivals, the expected number of
+waiting jobs in 𝑄𝐽is 𝜆𝑑𝐽. Therefore, the mean waiting time due to the waiting jobs in 𝑄𝐽is 𝜆𝑑𝐽𝑏𝐽.
+Since the total effective service requirement of a job is 𝑆eff
+𝑘, the mean residual workload con-
+tribution is 𝜆
+2 E[(𝑆eff
+𝑘)2]. However, the tagged 𝑗-job in 𝑄𝐽would not be delayed by the expected
+remaining service time when an {𝑖: 𝑖> 𝑟} job in level 𝑟= 𝐽, 𝑗+ 1, 𝑗+ 2, ...,𝑘−1 is in service,
+as the tagged 𝑗-job has priority over the jobs in these levels. Therefore, we use a correction term
+𝑂𝐽to subtract the preempted expected remaining service time of jobs with lower priorities than
+the tagged 𝑗-job. Let 𝑣𝑖denote the expected remaining effective service time of a job in level 𝑖.
+The expression of 𝑣𝑖is given by Equation (18). When an {𝑖: 𝑖> 𝐽} job in level 𝐽is in service, the
+preemptible part of its expected remaining effective service time is 𝑣𝑗+1. When an {𝑖: 𝑖> 𝑟} job
+in level 𝑟is in service for 𝑟= 𝑗+ 1, 𝑗+ 2, ...,𝑘−1, the preemptible part of its expected remaining
+effective service time is 𝑣𝑟+1 for 𝑟= 𝑗+ 1, 𝑗+ 2, ...,𝑘−1. The probability that an {𝑖: 𝑖> 𝑟} job in
+level 𝑟= 𝐽, 𝑗+ 1, 𝑗+ 2, ...,𝑘−1 is in service is given by
+𝜆𝐹𝑆(𝑗𝜃)
+ 
+𝑗𝜃+
+𝑗−1
+∑︁
+𝑟=1
+𝑐𝑟
+!
+for 𝑟= 𝐽,
+(20)
+𝜆𝐹𝑆(𝑟𝜃) (𝜃+ 𝑐𝑟−1)
+for 𝑟= 𝑗+ 1, 𝑗+ 2, ...,𝑘−1.
+(21)
+Computing the expected total preemptible remaining effective service time of all {𝑖: 𝑖> 𝑟} jobs in
+level 𝑟= 𝐽, 𝑗+ 1, 𝑗+ 2, ...,𝑘−1 yields Equation (16). The total mean waiting time of a job in 𝑄𝐽is
+given by
+𝑑𝐽= 𝜆𝑑𝐽𝑏𝐽+ 𝜆
+2E[(𝑆eff
+𝑘)2] −𝑂𝐽.
+(22)
+Rearranging the equation yields Equation (15).
+□
+Lemma 4.4 (Mean waiting time of a j-job under the MLPT-(𝜃,𝑘) policy). The mean waiting
+time of a j-job under the MLPT-(𝜃,𝑘) policy is
+𝑑𝑗= 𝑑𝐽+ 𝜆𝑎𝑗−1E[𝑋𝑗−1]
+1 −𝜆E[𝑋𝑗−1]
+,
+𝑗= 2, . . . ,𝑘,
+(23)
+where 𝑎𝑗−1 = (𝑗−1)𝜃+ Í𝑗−2
+𝑟=1 𝑐𝑟and E[𝑋𝑗−1] = E[min{𝑆, (𝑗−1)𝜃}] + Í𝑗−2
+𝑟=1 𝑐𝑟𝐹𝑆(𝑟𝜃).
+
+
+--- Page 13 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+13
+Proof. 𝑑𝑗and 𝑑𝐽only differ by the time needed for the jobs that arrive after the tagged job
+arrives at the system and before it starts service in level 𝑗to complete service or be demoted to a
+lower priority level than the tagged job. The expected duration of this period is given by 𝑑𝐽+ 𝑎𝑗−1,
+where 𝑎𝑗−1 = (𝑗−1)𝜃+ Í𝑗−2
+𝑟=1 𝑐𝑟is the effective service time of the tagged job before it starts service
+in level 𝑗. Each of the new jobs is served for 𝑋𝑗−1 = min{𝑆, (𝑗−1)𝜃} + Í𝑗−2
+𝑟=1 𝑐𝑟1{𝑆> 𝑟𝜃}, after
+which it either completes or has a lower priority than the tagged job. The expected duration of the
+busy period incurred by the jobs with service time 𝑋𝑗−1 arriving at rate 𝜆is
+E[𝑋𝑗−1]
+1−𝜆E[𝑋𝑗−1] . The total
+delay of the tagged job due to the new jobs is the total duration of the busy periods incurred by the
+service time of the new jobs. The expected number of such busy periods is equal to the expected
+number of jobs that arrive during 𝑑𝐽+ 𝑎𝑗−1, which is 𝜆(𝑑𝐽+ 𝑎𝑗−1). Therefore, the total delay due to
+the new arrivals is
+𝜆 𝑑𝐽+ 𝑎𝑗−1
+ E[𝑋𝑗−1]
+1 −𝜆E[𝑋𝑗−1]
+.
+(24)
+The mean waiting time of a 𝑗-job is the sum of its mean waiting time due to the old jobs and the
+new jobs, which is
+𝑑𝑗= 𝑑𝐽+ 𝜆 𝑑𝐽+ 𝑎𝑗−1
+ E[𝑋𝑗−1]
+1 −𝜆E[𝑋𝑗−1]
+.
+(25)
+Rearranging the equation yields Equation (23). For 𝑗= 1, we simply have 𝑑1 = 𝑑𝐽.
+□
+Theorem 4.5 (Mean Response time of the MLPT-(𝜃,𝑘) policy). Under the MLPT-(theta,k) policy,
+the mean response time of a job is
+E[𝑇MLPT(𝜃,𝑘)] = E[𝑆eff
+𝑘] +
+𝑘
+∑︁
+𝑗=1
+𝑝𝑗𝑑𝑗,
+(26)
+where E[𝑆eff
+𝑘], 𝑝𝑗, 𝑑𝑗are as in Equation (9), (13) and (23), respectively.
+Proof. Conditioned on completing in level 𝑗, the mean response time is
+E[𝑇| 𝐽= 𝑗] = 𝑑𝑗+ E[𝑆| 𝐽= 𝑗] +
+𝑗−1
+∑︁
+𝑟=1
+𝑐𝑟.
+(27)
+Averaging over the level in which the job completes gives
+E[𝑇] =
+𝑘
+∑︁
+𝑗=1
+𝑝𝑗𝑑𝑗+
+𝑘
+∑︁
+𝑗=1
+𝑝𝑗E[𝑆| 𝐽= 𝑗] +
+𝑘
+∑︁
+𝑗=1
+𝑝𝑗
+𝑗−1
+∑︁
+𝑟=1
+𝑐𝑟= E[𝑆] +
+𝑘−1
+∑︁
+𝑟=1
+𝑐𝑟𝐹𝑆(𝑟𝜃) +
+𝑘
+∑︁
+𝑗=1
+𝑝𝑗𝑑𝑗
+= E[𝑆eff
+𝑘] +
+𝑘
+∑︁
+𝑗=1
+𝑝𝑗𝑑𝑗.
+(28)
+□
+Theorem 4.5 provides a useful expression for optimizing the mean response time with respect to
+𝜃. For simplicity, we assume equal quantum 𝜃for each priority level in our analysis, so the optimal
+quantum 𝜃∗can be obtained by solving a one-dimensional optimization problem, if 𝑘is given. It is
+also convenient to extend our analysis to consider different quanta at each priority level. We can
+denote the quantum at priority level 𝑖as 𝜃𝑖for 𝑖∈{1, 2, ...,𝑘−1}, and let the jobs in the last level 𝑘
+serve to completion. So, we can represent the policy by a (𝑘−1)-dimensional vector 𝜽∈R𝑘−1
+≥0 , and
+solve a (𝑘−1)-dimensional optimization problem to optimize the mean response time.
+
+
+--- Page 14 ---
+14
+Jiahui Ni and Vishrant Tripathi
+While we note in Section 3 that any policy that preempts with positive probability increases
+the effective mean service requirement and has a smaller stability region than its non-preemptive
+counterpart, by optimizing 𝜃, the stability region of MLPT-(𝜃,𝑘) can be made arbitrarily close to the
+stability region of non-preemptive policies. Consider a base load 𝜌′
+0 arbitrarily close to 1, making
+any policy incurring positive preemption overhead unstable. Then at 𝜌0 = 𝜌′
+0, selecting 𝜃= 0 or
+𝜃= ∞will reduce the MLPT-(𝜃,𝑘) to FCFS, and thus remain stable. For any 𝜌0 < 𝜌′
+0, optimizing 𝜃
+will yield a smaller or equal mean response time for MLPT-(𝜃∗,𝑘) than FCFS. Therefore, optimizing
+𝜃∗ensures that MLPT-(𝜃∗,𝑘) always has a smaller or equal mean response time as FCFS for any 𝜌0.
+4.3
+Finding the optimal 𝜃for MLPT-(𝜃,𝑘)
+Finding a closed-form expression for the optimal 𝜃that minimizes the mean response time in Theo-
+rem (4.5) is challenging for general service time distributions and requires numerical optimization.
+In this section, we aim to propose rules of thumb for selecting an approximate optimal value of 𝜃
+to yield a low mean response time of the proposed MLPT policy for 𝑘= 2 and 𝑘> 2. To simplify
+calculation, we assume 𝑔(𝑟𝜃) = 𝑟𝜃in the following discussion.
+The number of levels 𝑘determines the granularity of the scheduler. In the simplest setting where
+we limit the number of priority levels to 𝑘= 2, the mean response time in Theorem 4.5 can be
+written more explicitly as a function of 𝜃.
+Corollary 4.6 (Mean response time of the MLPT-(𝜃, 2) policy).
+E[𝑇(𝜃)] = E[𝑆eff
+2 ] + 𝑝1𝑑1 + 𝑝2𝑑2
+= E[𝑆] + 𝛾𝜃¯𝐹𝑆(𝜃) + (1 −¯𝐹𝑆(𝜃))𝑑1 + ¯𝐹𝑆(𝜃)𝑑2
+= E[𝑆] + 𝛾𝜃¯𝐹𝑆(𝜃) + 𝑑1 + ¯𝐹𝑆(𝜃)
+𝜌eff
+2
+1 −𝜌eff
+2
+(𝜃+ 𝑑1)
+(29)
+where
+𝑆1 = min(𝑆,𝜃),
+𝑆2 = 𝑆−(1 −𝛾)𝜃| 𝑆> 𝜃,
+𝜌1 = 𝜆E[𝑆1],
+𝜌2 = 𝜆¯𝐹𝑆(𝜃)E[𝑆2],
+𝜌eff
+2
+= 𝜆E[𝑆] + 𝜆𝛾𝜃¯𝐹𝑆(𝜃) = 𝜌1 + 𝜌2,
+𝑑1 = 𝜆 E[𝑆2
+1] + ¯𝐹𝑆(𝜃)E[𝑆2
+2]
+2(1 −𝜌1)
+, and 𝑑2 =
+𝜆E[(𝑆eff
+2 )2]
+2(1−𝜌)
++ 𝜆𝜃E[𝑆1]
+1 −𝜌1
+.
+Although E[𝑇(𝜃)] is in general not convex, the stationary points at which 𝑑E[𝑇(𝜃)]
+𝑑𝜃
+= 0 still yield
+candidates for local minima, which can guide the selection of the optimal quantum 𝜃. To separate
+the impact of the intrinsic job size distribution 𝐿, the memory-induced slowdown threshold ℓ𝐶, and
+the memory slowdown factor 𝛽, we define
+𝑞(𝑥) =
+
+
+𝑥,
+𝑥≤ℓ𝐶,
+ℓ𝐶+ 𝑥−ℓ𝐶
+𝛽
+,
+𝑥> ℓ𝐶,
+and let 𝜃= 𝑞(𝑥) such that ¯𝐹𝑆(𝜃) = ¯𝐹𝑆(𝑞(𝑥)) = ¯𝐹𝐿(𝑥). The derivative of 𝑞(𝑥) is denoted by 𝑞′(𝑥).
+Let 𝑇(𝑥) ≡E[𝑇(𝑞(𝑥))] = E[𝑇(𝜃)]. Differentiating 𝑇(𝑥) with respect to 𝑥yields the following
+equation
+𝑇′(𝑥) = ¯𝐹𝐿(𝑥)𝐵(𝑥)
+𝐴(𝑥)
+𝐵(𝑥) −ℎ𝐿(𝑥)
+
+,
+(30)
+where ℎ𝐿(𝑥) = 𝑓𝐿(𝑥)
+¯𝐹𝐿(𝑥) is the hazard rate of 𝐿. 𝐴(𝑥) and 𝐵(𝑥) are defined in Appendix A.
+
+
+--- Page 15 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+15
+We note that 𝐵(𝑥) > 0 for any 𝑥> 0 and 𝜌eff
+2
+< 1. We restrict attention to the range of 𝑥satisfying
+¯𝐹𝐿(𝑥) > 0, then the derivative of the mean response time has the same sign as 𝐴(𝑥)/𝐵(𝑥) −ℎ𝐿(𝑥).
+Thus, a stationary point is a local minimum when 𝐴(𝑥)/𝐵(𝑥) crosses the hazard rate of 𝐿, ℎ𝐿(𝑥),
+from below to above. At the memory threshold ℓ𝐶, a local minimum can instead arise from a jump.
+Specifically, 𝑞′(𝑥) changes from 1 to 1/𝛽, while 𝐴(𝑥)/𝑞′(𝑥) and 𝐵(𝑥) remain continuous, so
+𝐴(ℓ+
+𝐶)
+𝐵(ℓ+
+𝐶) = 1
+𝛽
+𝐴(ℓ−
+𝐶)
+𝐵(ℓ−
+𝐶) .
+Therefore, ℓ𝐶is a strict local minimum if
+𝐴(ℓ−
+𝐶)
+𝐵(ℓ−
+𝐶) < ℎ𝐿(ℓ𝐶) < 𝐴(ℓ+
+𝐶)
+𝐵(ℓ+
+𝐶) ,
+because the derivative changes from negative to positive across the threshold. Figure 3 illustrates
+how the memory threshold ℓ𝐶affects the choice of quantum. For the smaller memory threshold,
+ℓ𝐶= 3E[𝐿], the jump crosses the hazard curve, and there are no smaller below-to-above crossings
+than ℓ𝐶. For the larger threshold, ℓ𝐶= 8E[𝐿], a below-to-above crossing occurs at 𝑥< ℓ𝐶, yielding
+a candidate quantum 𝜃smaller than ℓ𝐶, and the jump at ℓ𝐶produces no additional sign change.
+(a) ℓ𝐶= 3E[𝐿]
+(b) ℓ𝐶= 8E[𝐿]
+Fig. 3. Intersections of 𝐴(𝑥)
+𝐵(𝑥) and ℎ𝐿(𝑥) for small and large ℓ𝐶, where 𝐿∼LogNorm(5, 0.92), 𝛽= 0.39, 𝛾= 0.1,
+𝜆= 0.0036.
+These examples suggest that when ℓ𝐶is small, ℓ𝐶itself can be a strong candidate for the optimal
+quantum. Intuitively, when ℓ𝐶is small, preempting earlier than ℓ𝐶may cause frequent unnecessary
+preemptions for small jobs that are likely to finish before the slowdown starts, while preempting
+later than ℓ𝐶lets long jobs receive some slow service before being preempted, which would delay
+the service of the waiting small jobs. Figure 4 and Figure 5 illustrate the impact of 𝛽and 𝛾on
+the optimal quantum for small and large ℓ𝐶. When ℓ𝐶is large, larger 𝛾and smaller 𝛽encourage
+choosing a larger quantum; when ℓ𝐶is small, the impact of ℓ𝐶dominates the choice of quantum, as
+more jobs encounter the slowdown. However, when ℓ𝐶is very small, choosing 𝜃= ℓ𝐶causes a large
+fraction of jobs to require preemption, adding overhead to a system already burdened by prolonged
+service in the slow-service region. Increasing 𝜃reduces the fraction of jobs requiring preemption;
+when this benefit outweighs the higher cost per preemption and the additional delay from longer
+first-level service, the optimal quantum lies above ℓ𝐶. Therefore, there would be a lower and upper
+bound for ℓ𝐶for it to be a useful threshold for preemption in the two-level policy.
+Although two levels limit each job to at most one preemption, they also limit the scheduler’s
+ability to distinguish jobs after their initial service period. Once a job enters the second level,
+it is served nonpreemptibly to completion. A job with a large remaining service requirement
+
+
+--- Page 16 ---
+16
+Jiahui Ni and Vishrant Tripathi
+(a) ℓ𝐶= 3E[𝐿]
+(b) ℓ𝐶= 8E[𝐿]
+Fig. 4. Intersections of 𝐴(𝑥)
+𝐵(𝑥) and ℎ𝐿(𝑥) for different slowdown factors 𝛽when ℓ𝐶is small and large, where
+𝐿∼LogNorm(5, 0.92), 𝛾= 0.1, 𝜆= 0.0036
+(a) ℓ𝐶= 3E[𝐿]
+(b) ℓ𝐶= 8E[𝐿]
+Fig. 5. Intersections of 𝐴(𝑥)
+𝐵(𝑥) and ℎ𝐿(𝑥) for different preemption cost factor 𝛾when ℓ𝐶is small and large.
+can therefore block subsequent arrivals, including short jobs. Increasing 𝜃reduces the remaining
+second-level work of each surviving job and allows more jobs to finish without preemption, but
+also delays the opportunity to give waiting jobs priority and incurs higher preemption overhead
+for the preempted jobs. Consequently, a single boundary must balance several competing effects.
+Allowing 𝑘> 2 provides additional opportunities to reassign priority as jobs accumulate service,
+postponing entry into the terminal, nonpreemptible level until age (𝑘−1)𝜃. This can reduce the
+blocking caused by long jobs. The benefit comes at the cost of additional overhead. A job with
+service requirement 𝑆undergoes 𝑁demotions and incurs a total preemption overhead of
+𝐻𝑘(𝜃) = 𝛾𝜃
+𝑁
+∑︁
+𝑟=1
+𝑟= 𝛾𝜃
+2 𝑁(𝑁+ 1),
+𝑁= min
+𝑆
+𝜃
+
+,𝑘−1
+
+.
+Thus, additional levels provide greater scheduling flexibility but can substantially increase the
+effective load, particularly for long jobs. Increasing 𝑘therefore requires a careful choice of the
+quantum 𝜃to avoid excessive preemption.
+These observations motivate a moment-based approximation for the quantum. When many
+levels are available, replacing the overhead sum by an integral gives the rough approximation
+E[𝐻∞(𝜃)] = 𝛾𝜃
+∞
+∑︁
+𝑟=1
+𝑟¯𝐹𝑆(𝑟𝜃) ≈𝛾
+𝜃
+∫∞
+0
+𝑎¯𝐹𝑆(𝑎) 𝑑𝑎= 𝛾E[𝑆2]
+2𝜃
+.
+
+
+--- Page 17 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+17
+This approximation captures the inverse dependence of cumulative overhead on the quantum.
+Balancing this effect against a roughly linear penalty for delaying priority changes suggests a
+square-root scale. We therefore consider the empirical rule
+b𝜃= E[𝑆] + 2
+√︄
+𝛾E[𝑆2]
+1 −𝜌0
+,
+𝜌0 = 𝜆E[𝑆] < 1.
+(31)
+Here, 𝜌0 is the base load, excluding preemption overhead. Larger overhead costs or service-time
+variability favor a larger quantum, while a smaller spare-capacity margin 1 −𝜌0 makes additional
+overhead more costly. The additive term E[𝑆] and the multiplicative factor 2 mainly come from
+numerical observations.
+Therefore, we suggest the following empirical rule of thumb for selecting the quantum 𝜃:
+b𝜃=
+
+
+ℓ𝐶,
+𝑘= 2, and 𝑎≤
+ℓ𝐶
+E[𝐿] ≤𝑏,
+E[𝑆] + 2
+√︄
+𝛾E[𝑆2]
+1 −𝜌0
+,
+otherwise.
+(32)
+Here, 𝑎and 𝑏are configurable constants defining the range of normalized memory thresholds over
+which choosing 𝜃= ℓ𝐶is effective for 𝑘= 2. For the simulation setup in Section 5, we find that
+𝑎= 3 and 𝑏= 7 provide a reasonable approximation. These values are empirical and may vary with
+the job-size distribution 𝑓𝐿and system parameters 𝛽and 𝛾.
+Our rule of thumb provides interesting insights on how to set the quantum 𝜃given the system
+parameters. Intuitively, a larger cost factor𝛾favors a larger quantum 𝜃and less frequent preemption.
+b𝜃also suggests the memory threshold ℓ𝐶as a useful threshold when only two priority levels are
+allowed under limited memory space. With larger ℓ𝐶and higher scheduler granularity, the impact
+of memory-induced slowdown ℓ𝐶and 𝛽is addressed implicitly in E[𝑆], E[𝑆2], and 𝜌0. Notably, the
+second-moment dependence reflects the cumulative overhead of preemption costs proportional to
+attained service. In Appendix B, we plot 𝜃∗and b𝜃under varying system parameters and arrival
+rates. The result shows that b𝜃follows the trends in 𝜃∗as the system parameters vary, supporting
+our proposed rule of thumb as a reasonable placeholder for 𝜃∗.
+5
+Numerical Simulations
+In this section, we evaluate scheduling policies in the 𝑀/𝐺𝑔/1𝐶
+𝛽queue using mean response
+time as the performance metric. Unless otherwise stated, the intrinsic job size follows 𝐿∼
+LogNormal(5, 0.92), the slowdown factor is 𝛽= 0.39, and the preemption-cost factor is 𝛾= 0.1.
+Each simulation measures the response times of 100,000 jobs following 20,000 warm-up arrivals.
+Results are averaged over eight independent random seeds, using matched arrival and job-size
+traces across policies. Error bars represent one standard error across the eight seed means.
+As the stability and the mean response time of the proposed MLPT-(𝜃,𝑘) policy depend on the
+choice of quantum 𝜃and the number of priority levels 𝑘, we will first evaluate how the mean
+response time of MLPT-(𝜃,𝑘) policy varies with 𝜃and 𝑘, and compare it with FCFS. For these
+simulations, we set the slowdown factor 𝛽= 0.39, the preemption cost factor𝛾= 0.1, and the arrival
+rate 𝜆= 0.0036. Figure 6 shows the mean response time of MLPT-(𝜃,𝑘) and FCFS for 𝑘= 2, 5, 10, ∞
+when the memory threshold ℓ𝐶= 6E[𝐿], corresponding to a base load 𝜌0 = 𝜆E[𝑆] ≈0.8233. We
+can observe that at 𝜃= 0, MLPT-(𝜃,𝑘) is reduced to FCFS for finite 𝑘. At 𝜃∗, MLPT-(𝜃∗, 2) decreases
+the mean response time by 21.7% and MLPT-(𝜃∗, ∞) decreases the mean response time by 32.2%
+compared to FCFS. This shows the performance gain from increasing the priority levels in the
+scheduler. At b𝜃given by the proposed rule of thumb, MLPT-(b𝜃, ∞) decreases the mean response
+
+
+--- Page 18 ---
+18
+Jiahui Ni and Vishrant Tripathi
+Fig. 6. Mean response time of the MLPT-(𝜃,𝑘) policy as a function of 𝜃for 𝑘= 2, 5, 10, ∞and ℓ𝐶= 6E[𝐿],
+where 𝐿∼LogNorm(5, 0.92), 𝛽= 0.39, 𝛾= 0.1, 𝜆= 0.0036.
+Fig. 7. Mean response time of the MLPT-(𝜃,𝑘) policy as a function of 𝜃for 𝑘= 2, 5, 10, ∞and ℓ𝐶= 3E[𝐿],
+where 𝐿∼LogNorm(5, 0.92), 𝛽= 0.39, 𝛾= 0.1, 𝜆= 0.0036.
+time by 31.9% compared to FCFS, only 0.3 percentage points below the gain at 𝜃∗. This indicates
+that the rule provides a useful operating point without numerical optimization.
+Figure 7 and Figure 8 show the performance gain of MLPT-(𝜃,𝑘) compared to FCFS for 𝑘=
+2, 5, 10, ∞when we vary the memory threshold ℓ𝐶to 3E[𝐿] and 8E[𝐿]. It is clear from Figure 7
+that with a small memory threshold at ℓ𝐶= 3E[𝐿], even using the simplest MLPT-(𝜃∗, 2) policy
+reduces the mean response time by 46.6% compared to FCFS, while MLPT-(𝜃∗, ∞) reduces the mean
+response time by 50.3%. This highlights the importance of smarter scheduling under memory-
+limited settings. When the memory threshold ℓ𝐶is large, MLPT-(𝜃∗, 2) reduces the mean response
+time by 14.9%, while MLPT-(𝜃∗, ∞) reduces the mean response time by 24.6%. The performance
+
+
+--- Page 19 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+19
+Fig. 8. Mean response time of the MLPT-(𝜃,𝑘) policy as a function of 𝜃for 𝑘= 2, 5, 10, ∞and ℓ𝐶= 8E[𝐿],
+where 𝐿∼LogNorm(5, 0.92), 𝛽= 0.39, 𝛾= 0.1, 𝜆= 0.0036.
+gain of the MLPT-(𝜃∗,𝑘) with different priority levels 𝑘also suggests that increasing the scheduler
+complexity brings more benefit when the memory capacity is large. When the memory capacity is
+small, a single preemption improves upon the FCFS policy significantly, and increasing the priority
+levels does not improve the performance of the MLPT-(𝜃∗, 2) policy by much. When the memory
+capacity is large, increasing the scheduler granularity leads to more performance gain. We can
+also observe that the mean response time of MLPT-(𝜃,𝑘) converges to the mean response time of
+MLPT-(𝜃, ∞) as 𝑘increases in the stable range of 𝜃, suggesting that the mean response time of
+MLPT-(𝜃, ∞) can be approximated with MLPT-(𝜃,𝑘) with finite 𝑘.
+The curves labeled as MLPT′-(𝜃, ∞) in Figure 6, Figure 7, and Figure 8 show the mean response
+time of the MLPT-(𝜃, ∞) policy when we remove the assumption in Remark 1; that is, when a job
+has attained 𝑖𝜃units of service and demoted to 𝑄𝑖+1, the preemption overhead is incurred only
+if there are jobs with higher priorities in the system. We observe that the mean response time of
+MLPT′-(𝜃, ∞) is very close to the mean response time of MLPT-(𝜃, ∞). This supports our claim
+that despite the simplification in the analysis of the MLPT-(𝜃,𝑘) policy, the mean response time of
+the MLPT-(𝜃,𝑘) policy is a close approximation of the mean response time of its counterpart with
+arrival-dependent preemption under heavy load.
+Figure 9 compares the mean response time of MLPT-(𝜃∗, 2) and MLPT-(𝜃∗, ∞) against FCFS and
+other benchmark policies under different base loads 𝜌0, where we vary the arrival rate 𝜆and keep
+E[𝑆] fixed. We use Capped Gittins (𝑘) as an age-based scheduling benchmark, where we apply the
+Gittins Index policy, but limit the total number of preemptions of each job to at most (𝑘−1) times,
+to avoid instability. Figure 9 shows that when the base load is low, all policies have comparable
+performance. As the base load gets higher, the mean response time of Capped Gittins (𝑘) surges
+and becomes worse than the mean response time of FCFS. The last data point of Capped Gittins
+(3) is omitted as the simulation becomes unstable at the highest base load. On the other hand,
+MLPT-(𝜃∗, 2) and MLPT-(𝜃∗, ∞) remain stable under heavy loads with much lower increase in the
+mean response time than FCFS and Capped Gittins (𝑘).
+
+
+--- Page 20 ---
+20
+Jiahui Ni and Vishrant Tripathi
+Fig. 9. Comparison of the mean response time of FCFS, MLPT-(𝜃∗, 2), MLPT-(𝜃∗, ∞), and Gittins Index
+policy with limited preemption at 𝑘= 2 and 𝑘= 3 under different base loads, where 𝐿∼LogNorm(5, 0.92),
+ℓ𝐶= 6E[𝐿], 𝛽= 0.39, 𝛾= 0.1
+6
+Conclusion
+In this work, we introduced the 𝑀/𝐺𝑔/1𝐶
+𝛽queue, a new model for inference workloads with dynam-
+ically growing memory footprints, finite memory capacity, memory-dependent service degradation,
+and nonzero preemption overhead. Using this model, we characterized the fundamental stability
+implications of memory constraints and the scheduling tradeoffs created by costly preemption.
+We showed that the classical Gittins-index policy can incur substantial preemption overhead, and
+proposed the MLPT policy to limit preemption while retaining priority for jobs with small attained
+service. We derived the mean response time under MLPT and also proposed an empirical rule of
+thumb for setting the quantum.
+For future work, we plan to relax the assumption that only a single job runs inference at a
+time. This will allow us to capture multiple servers sharing a common memory capacity and the
+interaction between batching, scheduling, and memory contention. We also plan to allow preempted
+jobs to retain their state in local memory. This can avoid transfer and recomputation overhead
+upon resumption, but reduce the memory available to other jobs and may increase their service
+times. On the implementation side, we plan to explore how our analytical insights and MLPT style
+scheduling can be integrated into LLM inference serving systems in practice.
+References
+[1] Gyeong-In Yu, Joo Seong Jeong, Geon-Woo Kim, Soojeong Kim, and Byung-Gon Chun. Orca: A distributed serving
+system for Transformer-Based generative models. In 16th USENIX Symposium on Operating Systems Design and
+Implementation (OSDI 22), pages 521–538, Carlsbad, CA, July 2022. USENIX Association. ISBN 978-1-939133-28-1. URL
+https://www.usenix.org/conference/osdi22/presentation/yu.
+[2] Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody Hao Yu, Joseph Gonzalez, Hao
+Zhang, and Ion Stoica. Efficient memory management for large language model serving with pagedattention. In
+Proceedings of the 29th Symposium on Operating Systems Principles, SOSP ’23, page 611–626, New York, NY, USA,
+2023. Association for Computing Machinery.
+ISBN 9798400702297.
+doi: 10.1145/3600006.3613165.
+URL https:
+//doi.org/10.1145/3600006.3613165.
+
+
+--- Page 21 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+21
+[3] Haoyu Zheng, Yongqiang Zhang, Fangcheng Fu, Xiaokai Zhou, Hao Luo, Hongchao Zhu, Yuanyuan Zhu, Hao Wang,
+Xiao Yan, and Jiawei Jiang. Scheduling llm inference with uncertainty-aware output length predictions, 2026. URL
+https://arxiv.org/abs/2604.00499.
+[4] Yichao Fu, Siqi Zhu, Runlong Su, Aurick Qiao, Ion Stoica, and Hao Zhang. Efficient llm scheduling by learning to rank.
+In Proceedings of the 38th International Conference on Neural Information Processing Systems, NIPS ’24, Red Hook, NY,
+USA, 2024. Curran Associates Inc. ISBN 9798331314385.
+[5] Bingyang Wu, Yinmin Zhong, Zili Zhang, Shengyu Liu, Fangyue Liu, Yuanhang Sun, Gang Huang, Xuanzhe Liu, and
+Xin Jin. Fast distributed inference serving for large language models, 2024. URL https://arxiv.org/abs/2305.05920.
+[6] Biao Sun, Ziming Huang, Hanyu Zhao, Wencong Xiao, Xinyi Zhang, Yong Li, and Wei Lin. Llumnix: dynamic
+scheduling for large language model serving. In Proceedings of the 18th USENIX Conference on Operating Systems
+Design and Implementation, OSDI’24, USA, 2024. USENIX Association. ISBN 978-1-939133-40-3.
+[7] Amey Agrawal, Nitin Kedia, Ashish Panwar, Jayashree Mohan, Nipun Kwatra, Bhargav S. Gulavani, Alexey Tumanov,
+and Ramachandran Ramjee. Taming throughput-latency tradeoff in llm inference with sarathi-serve. In Proceedings of
+the 18th USENIX Conference on Operating Systems Design and Implementation, OSDI’24, USA, 2024. USENIX Association.
+ISBN 978-1-939133-40-3.
+[8] Yinmin Zhong, Shengyu Liu, Junda Chen, Jianbo Hu, Yibo Zhu, Xuanzhe Liu, Xin Jin, and Hao Zhang. Distserve:
+disaggregating prefill and decoding for goodput-optimized large language model serving. In Proceedings of the 18th
+USENIX Conference on Operating Systems Design and Implementation, OSDI’24, USA, 2024. USENIX Association. ISBN
+978-1-939133-40-3.
+[9] Ziv Scully and Mor Harchol-Balter. The gittins policy in the m/g/1 queue. In 2021 19th International Symposium
+on Modeling and Optimization in Mobile, Ad hoc, and Wireless Networks (WiOpt), pages 1–8, 2021. doi: 10.23919/
+WiOpt52861.2021.9589051.
+[10] John Gittins, Kevin Glazebrook, and Richard Weber. Superprocesses, Precedence Constraints and Arrivals, chapter 4,
+pages 79–114. John Wiley & Sons, Ltd, 2011. ISBN 9780470980033. doi: https://doi.org/10.1002/9780470980033.ch4.
+URL https://onlinelibrary.wiley.com/doi/abs/10.1002/9780470980033.ch4.
+[11] Ziv Scully. Open problem—m/g/1 scheduling with preemption delays. Stochastic Systems, 9(3):311–312, 2019. doi:
+10.1287/stsy.2019.0047. URL https://doi.org/10.1287/stsy.2019.0047.
+[12] M. Asawa and D. Teneketzis. Multi-armed bandits with switching penalties. IEEE Transactions on Automatic Control,
+41(3):328–348, 1996. doi: 10.1109/9.486316.
+[13] Shefali Ramakrishna, Edwin Peng, and Ziv Scully. Priority scheduling in the m/g/1 with preemption overhead, 2026.
+URL https://arxiv.org/abs/2605.01522.
+[14] Søren Asmussen and Peter W. Glynn. On preemptive-repeat LIFO queues. Queueing Systems, 87(1):1–22, October 2017.
+ISSN 1572-9443. doi: 10.1007/s11134-017-9532-3. URL https://doi.org/10.1007/s11134-017-9532-3.
+[15] Jacob Bergquist and Karl Sigman. Stationary workload and service times for some nonwork-conserving m/g/1
+preemptive lifo queues. Stochastic Models, 38:515–544, 05 2022. doi: 10.1080/15326349.2022.2074458.
+[16] Linus Schrage. A mixed-priority queue with applications to the analysis of real-time systems. Operations Research, 17
+(4):728–742, 1969. ISSN 0030364X, 15265463. URL http://www.jstor.org/stable/168543.
+[17] Steve Drekic and David A. Stanford. Reducing Delay in Preemptive Repeat Priority Queues. Operations Research, 49
+(1):145–156, 2001. ISSN 0030364X, 15265463. URL http://www.jstor.org/stable/222961.
+[18] Samuli Aalto, Urtzi Ayesta, and Rhonda Righter. On the Gittins index in the M/G/1 queue. Queueing Systems, 63(1):437,
+September 2009. ISSN 1572-9443. doi: 10.1007/s11134-009-9141-x. URL https://doi.org/10.1007/s11134-009-9141-x.
+[19] Samuli Aalto and Urtzi Ayesta. Optimal scheduling of jobs with a DHR tail in the M/G/1 queue. In Proceedings
+of the 3rd International Conference on Performance Evaluation Methodologies and Tools, ValueTools ’08, pages 1–8,
+Brussels, BEL, October 2008. ICST (Institute for Computer Sciences, Social-Informatics and Telecommunications
+Engineering). ISBN 978-963-9799-31-8. doi: 10.4108/ICST.VALUETOOLS2008.4335. URL https://dl.acm.org/doi/10.
+4108/ICST.VALUETOOLS2008.4335.
+[20] Ziv Scully, Mor Harchol-Balter, and Alan Scheller-Wolf. Simple near-optimal scheduling for the m/g/1. Proc. ACM
+Meas. Anal. Comput. Syst., 4(1), May 2020. doi: 10.1145/3379477. URL https://doi.org/10.1145/3379477.
+[21] Ziv Scully and Mor Harchol-Balter. How to schedule near-optimally under real-world constraints, 2021. URL
+https://arxiv.org/abs/2110.11579.
+[22] Fernando J Corbató, Marjorie Merwin-Daggett, and Robert C Daley. An experimental time-sharing system. In
+Proceedings of the May 1-3, 1962, spring joint computer conference, pages 335–344, 1962.
+[23] Yuqing Yang, Yuedong Xu, and Lei Jiao. A queueing theoretic perspective on low-latency llm inference with variable
+token length, 2025. URL https://arxiv.org/abs/2407.05347.
+[24] Yueying Li, Jim Dai, and Tianyi Peng. Throughput-optimal scheduling algorithms for llm inference and ai agents,
+2025. URL https://arxiv.org/abs/2504.07347.
+
+
+--- Page 22 ---
+22
+Jiahui Ni and Vishrant Tripathi
+[25] Chengyi Nie, Nian Si, and Zijie Zhou. A queueing-theoretic framework for stability analysis of llm inference with kv
+cache memory constraints, 2026. URL https://arxiv.org/abs/2605.04595.
+[26] Agrim Bari, Parikshit Hegde, and Gustavo de Veciana. Optimal scheduling algorithms for llm inference: Theory and
+practice. Proc. ACM Meas. Anal. Comput. Syst., 9(3), December 2025. doi: 10.1145/3771574. URL https://doi.org/10.1145/
+3771574.
+[27] Ruicheng Ao, Gan Luo, David Simchi-Levi, and Xinshang Wang. Optimizing llm inference: Fluid-guided online
+scheduling with memory constraints, 2026. URL https://arxiv.org/abs/2504.11320.
+[28] Ziv Scully, Mor Harchol-Balter, and Alan Scheller-Wolf. Soap: One clean analysis of all age-based scheduling policies.
+Proc. ACM Meas. Anal. Comput. Syst., 2(1), April 2018. doi: 10.1145/3179419. URL https://doi.org/10.1145/3179419.
+[29] Ronald W. Wolff. Time sharing with priorities. SIAM Journal on Applied Mathematics, 19(3):566–574, 1970. ISSN
+00361399. URL http://www.jstor.org/stable/2099267.
+A
+Explanation of the terms in 𝑇′(𝑥)
+𝐴(𝑥) and 𝐵(𝑥) in Equation (30) is given by
+𝐴(𝑥) = 𝑞′(𝑥)
+"𝜆
+
+1 + ¯𝐹𝐿(𝑥)
+𝜌(𝑥)
+1 −𝜌(𝑥)
+
+1 −𝜌1(𝑥)
+𝑄(𝑥) + 𝛾+
+𝜌(𝑥)
+1 −𝜌(𝑥) + (𝑞(𝑥) + 𝑑1(𝑥))
+𝜆𝛾¯𝐹𝐿(𝑥)
+(1 −𝜌(𝑥))2
+#
+,
+𝐵(𝑥) =
+𝜆
+
+1 + ¯𝐹𝐿(𝑥)
+𝜌(𝑥)
+1 −𝜌(𝑥)
+
+1 −𝜌1(𝑥)
+𝛾2𝑞(𝑥)2
+2
++ 𝛾𝑞(𝑥) +
+𝜌(𝑥)
+1 −𝜌(𝑥) (𝑞(𝑥) + 𝑑1(𝑥))
++ (𝑞(𝑥) + 𝑑1(𝑥)) 𝜆𝛾¯𝐹𝐿(𝑥)𝑞(𝑥)
+(1 −𝜌(𝑥))2 ,
+where
+𝑄(𝑥) = 𝑑1(𝑥) + 𝑞(𝑥) −(1 −𝛾)E[𝑆2],
+𝑆1 = min(𝑆,𝑞(𝑥)),
+𝑆2 = 𝑆−(1 −𝛾)𝑞(𝑥) | 𝑆> 𝑞(𝑥),
+𝜌1(𝑥) = 𝜆E[𝑆1],
+𝜌(𝑥) = 𝜆E[𝑆] + 𝜆𝛾𝑞(𝑥) ¯𝐹𝐿(𝑥),
+and
+𝑑1(𝑥) = 𝜆 E[𝑆2
+1] + ¯𝐹𝐿(𝑥)E[𝑆2
+2]
+2(1 −𝜌1(𝑥))
+.
+B
+Optimal quantum 𝜃with varying system parameters
+Figure 10 shows how the optimal quantum 𝜃∗for MLPT-(𝜃,𝑘) varies with ℓ𝐶, 𝛽, and 𝛾, comparing
+𝑘= 2 and 𝑘= ∞at a fixed arrival rate 𝜆= 0.0036. For the 𝛽and 𝛾sweeps, we consider a small-
+memory setting, ℓ𝐶= 3E[𝐿], and a large-memory setting, ℓ𝐶= 8E[𝐿]. Figure 10a shows that
+both policies require a large quantum when ℓ𝐶is very small. In this regime, memory-induced
+slowdown increases job service requirements and pushes the base load close to saturation, leaving
+little capacity for preemption overhead. For ℓ𝐶< 3.5E[𝐿], the infinite-level policy selects a larger
+quantum than the two-level policy, consistent with the need to control repeated preemptions of
+long jobs. The two-level policy incurs this cost at most once per job. As ℓ𝐶increases, slowdown
+and cumulative overhead become less restrictive, and the ordering eventually reverses. Additional
+priority levels allow moderately sized jobs to retain priority over longer jobs after leaving the first
+level, enabling the infinite-level policy to use a smaller quantum. In contrast, the two-level policy
+benefits from allowing more jobs to finish before entering its final, nonpreemptible level.
+The 𝛽and𝛾sweeps further illustrate this tradeoff. For ℓ𝐶= 3E[𝐿], the two-level optimum remains
+at ℓ𝐶throughout the tested 𝛾range and most of the tested 𝛽range. The infinite-level optimum
+decreases with 𝛽and increases with 𝛾, with a plateau at ℓ𝐶over part of each sweep. Increasing 𝛽
+reduces the service requirements of jobs entering the slowdown region, lowering both the base
+
+
+--- Page 23 ---
+Queuing for Inference: Dynamic Memory Footprints and Costly Preemption
+23
+load and the number of quantum boundaries crossed by long jobs. Increasing 𝛾makes preemptions
+more expensive and therefore favors a larger quantum. For ℓ𝐶= 8E[𝐿], both policies select smaller
+quanta as 𝛽increases and larger quanta as 𝛾increases, with the infinite-level optimum consistently
+below the two-level optimum. Together, these results suggest that the memory boundary can
+anchor the optimal quantum under limited memory, while with more memory, the balance between
+priority separation and preemption overhead becomes more prominent. Figure 10 also shows how
+our proposed rule of thumb for the optimal quantum b𝜃varies with the system parameters. We
+observe that b𝜃closely follows the trends in 𝜃∗as the system parameters vary.
+These observations support our proposed rule of thumb in Section 4.3.
+(a) 𝜃∗, b𝜃vs ℓ𝐶, 𝛽= 0.39, 𝛾= 0.1
+(b) 𝜃∗, b𝜃vs 𝛽, ℓ𝐶= 3E[𝐿], 𝛾= 0.1
+(c) 𝜃∗, b𝜃vs𝛾,ℓ𝐶= 3E[𝐿], 𝛽= 0.39
+(d) 𝜃∗, b𝜃vs 𝛽, ℓ𝐶= 8E[𝐿], 𝛾= 0.1
+(e) 𝜃∗, b𝜃vs𝛾,ℓ𝐶= 8E[𝐿], 𝛽= 0.39
+Fig. 10. 𝜃∗for MLPT-(𝜃, 2) and MLPT-(𝜃, ∞) with varying ℓ𝐶, 𝛽, and 𝛾, where 𝐿∼LogNorm(5, 0.92), 𝜆=
+0.0036.

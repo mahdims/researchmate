@@ -1,0 +1,3044 @@
+--- Page 1 ---
+Toward Self-Evolving Geospatial Algorithms: An
+LLM-Driven Framework with a Case Study on Spatial
+Regime Discovery⋆,⋆⋆
+Xiayin Loua, Peng Luob,c,∗, Liqiu Menga
+aChair of Cartography and Visual Analytics, Technical University of Munich, Munich, Germany
+bSchool of Earth, Environment, and Sustainability, University of Iowa, Iowa City, IA, USA
+cSenseable City Lab, Massachusetts Institute of Technology, Cambridge, MA, USA
+Abstract
+Geospatial algorithms have been developed through expert-driven discovery: a re-
+searcher spots a limitation, proposes a structural fix, and checks it by hand. With
+LLM-driven multi-agent systems becoming practical, much of the candidate-generation,
+evaluation, and selection work can now be largely automated, while the researcher’s
+role shifts upstream toward problem formulation, evaluation design, and interpretation.
+We refer to this paradigm as Self-Evolving Geospatial Algorithms (SEGA) and propose
+a framework with three required modules: a two-loop architecture with embedded geo-
+graphic knowledge as the inner-loop engine; an automatic code formatter that converts
+any raw geospatial algorithm into the standardized triple required by the inner loop;
+and a simulation-driven training protocol, in which evolution runs only on synthetic
+data with known ground truth, and the discovered algorithm is applied unchanged to
+real data, keeping real-world results out-of-sample. We use spatial regime discovery as
+a case study, seeded with the Two-stage K-Models algorithm. Evolution uses the Rand
+Index against the ground-truth partition as fitness signal; the frozen algorithm is then
+evaluated on 150 simulated grids and 11 real-world datasets across climate, health,
+hydrology, and politics. The evolved algorithm outperforms its seed, knowledge-free
+baselines, and four classical regionalization methods. Ablations further indicate that
+the channel of geographic-knowledge injection, structured retrieval versus prompt-level
+hints, is itself load-bearing. In this case study, LLM-assisted search sped up the inner
+loop; whether it does so for other seeds and task families remains open. The geog-
+rapher’s role — asking the right questions, designing trustworthy evaluation — grows
+more central.
+Keywords:
+Geospatial modeling, large language models, algorithm discovery
+⋆This is the authors’ accepted manuscript of an article accepted for publication in the Annals of
+the American Association of Geographers (in proof). The final version may differ from this preprint.
+⋆⋆Project page: https://peng-luo.com/sega/. It summarizes the framework and the results, and
+links to the code and data repository and to an interactive round-by-round trace of the evolution
+reported here.
+∗Corresponding author.
+Email addresses: xiayin.lou@tum.de (Xiayin Lou), peng-luo@uiowa.edu (Peng Luo),
+liqiu.meng@tum.de (Liqiu Meng)
+Accepted manuscript (in proof) — Annals of the American Association of Geographers
+arXiv:2611.11669v1  [physics.soc-ph]  8 Nov 2026
+
+
+--- Page 2 ---
+1. Introduction
+Geospatial modeling sits at the core of geospatial research, supporting tasks such
+as spatial partitioning (Anselin and Amaral, 2024; Duque et al., 2007; Assunção et al.,
+2006), prediction (Brunsdon et al., 1998; Fotheringham et al., 2002, 2017), spatial
+dependence modeling (Anselin, 1988; LeSage and Pace, 2009; Anselin, 1995), and un-
+certainty quantification (Lou et al., 2025). The development of these models has typ-
+ically grown out of an expert-driven process that brings together theoretical insights,
+empirical observations, and domain knowledge, often accumulating over decades of
+methodological refinement (Cressie, 1993; Goodchild, 2004). Such development can be
+characterized as expert-driven discovery: a researcher identifies a limitation, hypothe-
+sizes a structural improvement (e.g., adding spatial weights, restructuring a clustering
+objective, or proposing a new estimator), implements it, and validates it against es-
+tablished baselines. Each discovery step is conceptually rich but is also human-paced,
+costly in time, and naturally limited by the cognitive and institutional resources avail-
+able to any single research group.
+The rapid development of large language models (LLMs), including ChatGPT
+(Singh et al., 2025), Gemini (Gemini Team et al., 2023), DeepSeek (Liu et al., 2024),
+and Qwen (Yang et al., 2025), together with the rise of LLM-based multi-agent ar-
+chitectures (Park et al., 2023), suggests that much of the routine engineering work of
+algorithm development can now be largely automated. Working in this complementary
+mode, the researcher delegates the work of generating candidate programs, evaluating
+them, and keeping the better ones to an LLM-driven system, while retaining respon-
+sibility for deciding what to optimize, setting up the evaluation, and making sense of
+what comes out. Working in this mode, researchers spend less time writing and de-
+bugging small algorithmic variants by hand, and more time on the upstream questions:
+what is a good solution to this problem, what fitness signal captures it, and what do the
+resulting algorithms tell us. The two modes are best seen as complementary: expert-
+driven discovery continues to mark out the design space and the objectives that matter,
+while LLM-assisted search systematically explores parts of that space that would be
+tedious to cover manually (Novikov et al., 2025; Romera-Paredes et al., 2024). Within
+geospatial science, the convergence of GeoAI (Janowicz et al., 2020; Mai et al., 2023)
+and LLM-based agents is opening up new directions for spatial analysis and knowledge
+discovery.
+It is useful to distinguish at the outset between two complementary lines of LLM-
+based research now active in geospatial science. The first treats the LLM as an or-
+chestrator of a fixed library of pre-existing geospatial tools and algorithms: the model
+interprets a user request, selects appropriate operations, and emits glue code that in-
+vokes them, while the underlying spatial algorithms remain entirely human-authored.
+We refer to this as the usage layer of the algorithm stack. The second treats the LLM
+as an author that proposes and mutates algorithm source code itself, generating new
+algorithmic logic rather than choosing among existing tools. We refer to this as the
+design layer. The present paper, together with the GeoEvolve framework it builds on
+(Luo et al., 2025), sits firmly at the design layer: the toolbox is the object that gets
+evolved, not the menu that gets chosen from. Section 2 reviews both lines in detail and
+identifies the specific inner-loop engines we adopt; here we only flag the distinction so
+as to keep the technical premise of the rest of the paper visible.
+2
+
+
+--- Page 3 ---
+The central message of the present paper is that the combination of these two
+modes describes a noticeable shift in how geospatial algorithms can be developed,
+and that this shift deserves to be named and characterized as such. We refer to this
+LLM-assisted paradigm as Self-Evolving Geospatial Algorithms (SEGA), denoting a
+structured, evaluation-driven search over the space of executable geospatial programs,
+in which candidate algorithms are continuously generated, evaluated, and selected by
+an LLM-powered multi-agent system. We propose a working hypothesis to guide its
+scope: if the optimization objective of a geospatial problem can be specified clearly
+enough for computational evaluation, the inner loop of algorithm development can be
+largely delegated to a multi-agent LLM system, while the outer loop of formulating the
+problem and interpreting the results remains the responsibility of the researcher. We
+do not claim that algorithm design has become trivial; rather, we observe that, given
+a well-defined objective, LLM-driven evolutionary systems can systematically explore
+parts of the design space that are difficult to traverse manually.
+A natural starting point for realizing SEGA is the recently proposed GeoEvolve
+framework (Luo et al., 2025), which extends flat, single-loop, domain-agnostic evolu-
+tionary engines such as OpenEvolve (Sharma, 2025) by wrapping the inner LLM-driven
+code-evolution loop with an outer dialogue that retrieves geographic knowledge from
+a curated corpus and injects it into the next mutation. This two-loop architecture
+with embedded geographic knowledge is, in our view, the necessary substrate for any
+practical SEGA system, and we adopt it as the inner-loop engine of our framework
+without redesign. Two further extensions, however, are required before this engine
+can be used routinely on new geospatial problems. The first concerns the input side:
+raw geospatial algorithms are written in heterogeneous styles, and integrating each
+new seed by hand re-introduces a manual-engineering bottleneck that the inner loop is
+supposed to remove. An LLM-driven automatic code formatter that converts any raw
+geospatial algorithm into the standardized triple (evolvable program, evaluator module,
+configuration file) required by the inner loop is therefore needed to make the frame-
+work reusable across tasks. The second concerns the evaluation side: when evolution
+is driven directly by the algorithm’s performance on the very data on which its output
+will be reported, real-world metrics become both training target and evaluation target,
+and the resulting numbers tell us less than they appear to. A simulation-driven train-
+ing protocol with a controlled data-generating process, in which evolution is run only on
+synthetic data with a known ground truth and the discovered algorithm is then applied
+unchanged to real data, is therefore needed to keep real-world results as out-of-sample
+evidence rather than direct optimization targets. The three pieces together, GeoE-
+volve’s two-loop architecture, an automatic code formatter, and a simulation-driven
+training protocol, constitute the conceptual framework developed in the remainder of
+this paper.
+To make this paradigm shift concrete rather than abstract, the bulk of the paper
+develops a case study on spatial regime discovery, taking the Two-stage K-Models
+algorithm (Guo et al., 2023) as the seed algorithm A0.
+We chose this case study
+for three reasons: it represents the current state of the art among non-LLM spatial
+regime methods, its two-stage structure of initial over-partitioning followed by region
+merging exposes a small number of clearly evolvable modules that an LLM-driven inner
+loop can target, and its piecewise-linear regime assumption admits a clean simulated
+ground truth required by the train-on-simulation / apply-on-real evaluation protocol
+3
+
+
+--- Page 4 ---
+described below. As a single case study, it shows that the framework works on this task;
+applying it to further seeds and task families in future work is needed to establish that
+it generalizes. A more complete account of the spatial regime literature and Two-stage
+K-Models is given in Section 2.4.
+Within the case study, evolution happens exclusively on simulated grids using a
+single bounded fitness signal (Rand Index against the ground-truth partition); the re-
+sulting algorithm is then applied unchanged to 11 real-world datasets across climate,
+health, hydrology, and politics, where SSR, SSR Reduction, RMSE, and Variance Ratio
+are used as evaluation metrics disjoint from the fitness signal. On top of this, we con-
+duct a structured ablation that varies both the level and the specificity of geographic-
+knowledge injection (details in Section 4.4.1), so as to test how (not merely whether)
+domain knowledge should enter the inner loop of the two-loop architecture.
+The remainder of the paper is organized as follows. Section 2 reviews related work
+on LLM-based autonomous agents, distinguishes earlier LLM-based search over short
+programs and expressions (Section 2.2) from the more recent AlphaEvolve paradigm
+of LLM-driven algorithm discovery (Section 2.3) on which this paper builds, and closes
+with a background subsection on the spatial regime literature that motivates the case
+study (Section 2.4). Section 3 develops the SEGA framework, with a conceptual sub-
+section that frames the paradigm and formalizes it as a quintuple (Section 3.1) and a
+detailed subsection that implements the three required modules (Section 3.2). Section 4
+presents the spatial regime case study together with its experimental design, includ-
+ing the problem definition, the simulation experiment with its six knowledge-injection
+variants, and the real-world experiment with its four classical regionalization baselines.
+Section 5 reports the empirical results on both simulated and real-world data. Section 6
+discusses what the discovered algorithm modified, the insights and complementarity
+with expert-driven design, and limitations, framed around the broader question of how
+autonomous geospatial algorithm discovery should proceed. Section 7 concludes.
+2. Related Works
+2.1. LLM-based Autonomous Agents
+LLM-based autonomous agents have begun to be explored in geographical infor-
+mation science (GIScience), where agents are designed to support spatial analysis and
+mapping workflows. Across this line of work the LLM operates at what we call the usage
+layer of the algorithm stack: it acts as a decision core that interprets user intent and
+orchestrates a fixed library of pre-existing geospatial tools, while the underlying spatial
+algorithms remain entirely human-authored. Early studies use LLMs to translate spa-
+tial problems into executable geoprocessing steps, ranging from spatial data retrieval
+to invoking spatial algorithms (Zhang et al., 2023; Li and Ning, 2023). Multi-agent
+pipelines have also been used to decompose spatial tasks into planner-worker struc-
+tures for operations such as shapefile processing and spatial analysis (Lin et al., 2025).
+Other work investigates automated geospatial data discovery agents that generate and
+run programs to locate appropriate spatial datasets (Ning et al., 2025). By emulating
+cartographic workflows, LLM agents can also be guided to design, add, or modify map
+elements as part of an interactive mapping process (Zhang et al., 2024). Related ef-
+forts include LLM-powered QGIS spatial-analysis copilots (Akinboyewa et al., 2025),
+harness-engineered research agents that span the broader GIScience research lifecycle
+4
+
+
+--- Page 5 ---
+(Zhou et al., 2026), and the wider autonomous-GIS research agenda (Li et al., 2025).
+While these efforts demonstrate the value of LLM agents for assembling and orches-
+trating existing spatial operations, they typically rely on pre-defined tools rather than
+directly proposing new algorithmic structures. Recent work suggests that LLMs may
+also support more open-ended forms of geospatial scientific exploration, in which agents
+help propose hypotheses, identify candidate spatial patterns, and combine heteroge-
+neous datasets to generate further insight.
+2.2. LLM-Based Search over Short Programs and Expressions
+The use of LLMs has prompted reconsideration of how new algorithms and math-
+ematical expressions can be discovered. In contrast to the usage-layer agents reviewed
+above, the systems considered here operate at the design layer of the algorithm stack:
+the LLM is not selecting among existing algorithms but authoring them, generating
+and mutating the source code that implements the algorithmic logic itself.
+An early line of work treats the LLM as a high-level variation operator embed-
+ded inside an evolutionary or search loop, applied to compact single-file programs.
+Eureka (Ma et al., 2023) used an LLM to evolve dense reward functions for reinforce-
+ment learning by editing short candidate programs.
+LMX (Meyerson et al., 2024)
+explored LLM-driven variation over linguistic genotypes as a generic operator. Fun-
+Search (Romera-Paredes et al., 2024) applied the same idea to mathematical reasoning,
+using the LLM to mutate short Python functions and reporting novel constructions for
+problems such as the cap-set problem and online bin-packing. LLM-SR (Shojaee et al.,
+2024) adapted symbolic regression in the same spirit, treating the discovery of compact
+mathematical expressions as program search.
+Common to these systems is that the unit being evolved is a single short function
+or expression rather than the broader algorithmic framework in which it is embedded:
+the LLM proposes local edits inside a few-line, single-file program. While these re-
+sults demonstrate that LLM-driven search can produce novel solutions on well-scoped
+function-level problems, the mutation envelope is too narrow to express the structural
+moves required to evolve a full geospatial algorithm with multiple stages, parameters,
+and data pipelines, for example swapping an initialization strategy, restructuring a clus-
+tering objective, or adding a per-region penalty term. The next subsection introduces
+the more recent line of work that targets this larger unit of evolution.
+2.3. LLM-Driven Algorithm Discovery: The AlphaEvolve Paradigm
+A second, more recent line of work targets the discovery of full algorithms rather
+than short functions, by allowing the LLM to mutate program text spanning multiple
+files and many lines of logic.
+We refer to this as the AlphaEvolve paradigm.
+The
+three systems described below, AlphaEvolve as the original proposal, OpenEvolve as
+its open-source implementation, and GeoEvolve as its first geospatial specialization,
+jointly characterize this paradigm. Because this paper uses OpenEvolve and GeoEvolve
+directly as the inner-loop engine Φ of Section 3 rather than proposing a new engine, this
+subsection describes what each system actually provides before the case study begins.
+AlphaEvolve. AlphaEvolve (Novikov et al., 2025) extends LLM-driven evolution from
+single short functions to entire multi-file codebases, reporting measurable improvements
+on long-standing algorithmic problems including matrix multiplication and other open
+5
+
+
+--- Page 6 ---
+mathematical questions. The methodological move is significant: instead of evolving
+a short single function of a few dozen lines, the system mutates and recomposes al-
+gorithmic structures of hundreds of lines, including initialization strategies, iteration
+schedules, and helper subroutines. This brings algorithm discovery, rather than merely
+function discovery, within reach of LLM-driven search.
+OpenEvolve. OpenEvolve (Sharma, 2025) is an open-source implementation in the
+spirit of AlphaEvolve, packaging the same inner loop as a domain-agnostic engine.
+Given a seed program with clearly marked evolvable blocks, a fitness function, and an
+iteration budget, OpenEvolve executes a flat loop of propose mutation →run →eval-
+uate →select. It is intentionally domain-agnostic: it carries no notion of geographic
+space, no curated scientific corpus, and no mechanism for steering the search beyond
+whatever text happens to be in the prompt. Within this paper, OpenEvolve serves
+both as a standalone baseline, used directly with or without hand-written geographic-
+knowledge hints in the prompt, and as the underlying mutation engine that GeoEvolve
+wraps.
+GeoEvolve. GeoEvolve (Luo et al., 2025) is the first geospatial specialization of the
+AlphaEvolve paradigm: it wraps the OpenEvolve loop in three agent-level modules so
+that geographic domain knowledge can enter each round of evolution through struc-
+tured retrieval rather than only through static prompts. A Code Analyzer is a di-
+agnostic LLM agent that reads the current evolved code together with its evaluation
+metrics and outputs (in strict JSON) which pieces of geographic knowledge appear
+missing or misapplied, along with search queries for the knowledge retriever and flags
+indicating whether code examples or theoretical background are needed. A Knowledge
+Retriever (GeoKnowRAG) maintains a curated corpus of geospatial documents and re-
+turns ranked passages relevant to the Analyzer’s queries through retrieval-augmented
+generation. The corpus, embedding model, vector store, and retrieval procedure are all
+configurable; the specific choices used in this paper are documented in Appendix B. Fi-
+nally, a Geo-informed Prompt Generator assembles the retrieved knowledge passages,
+the analyzer’s diagnostic notes, and the current code into a structured prompt that is
+fed back into the next OpenEvolve mutation step. The result is a two-loop architecture
+in which geographic knowledge enters the search at the retrieval level, conditioned on
+the current state of the evolved code, rather than only as fixed prompt context.
+Implication for this paper. The distinction between OpenEvolve (prompt-level knowl-
+edge only, if any) and GeoEvolve (prompt-level + retrieval-level geographic knowledge)
+defines a natural design space for ablation. Section 4.4.1 uses this design space to
+construct six algorithm variants spanning no knowledge, a general prompt hint, a task-
+specific prompt hint, multi-agent dialogue without retrieval, and multi-agent dialogue
+with full GeoKnowRAG, in addition to the unevolved seed. We use these six variants
+across the case study to test the hypothesis that the channel of knowledge injection
+(prompt versus retrieval) is itself a load-bearing design choice.
+2.4. Spatial Regime Discovery
+Because the case study (Section 4) is grounded in spatial regime discovery, we briefly
+review the relevant methodological background here. Spatial regime modeling seeks to
+partition a study area into contiguous subregions within which the data-generating
+6
+
+
+--- Page 7 ---
+process relating covariates to a response variable is locally homogeneous but differs
+across regions (Anselin, 1988; Anselin and Amaral, 2024).
+It is a central method-
+ological tool for handling spatial heterogeneity (Fotheringham et al., 2017) and sits
+at the intersection of three long-standing traditions: contiguity-preserving regionaliza-
+tion (Openshaw, 1977; Openshaw and Rao, 1995; Assunção et al., 2006; Duque et al.,
+2007), geographically weighted regression (Brunsdon et al., 1998; Fotheringham et al.,
+2002, 2017), and graph-based spatial clustering followed by regression (Helbich et al.,
+2013). Recent work has unified these threads by embedding regression objectives di-
+rectly into the partitioning procedure: Anselin and Amaral (2024) extend SKATER
+with a regression-SSR cut criterion (Skater-reg), while Guo et al. (2023) propose Two-
+stage K-Models, Regional-K-Models, and a regression-aware variant of the Automatic
+Zoning Procedure. Among these, the Two-stage K-Models algorithm is reported by its
+authors to “largely outperform existing approaches on model fitting, region reconstruc-
+tion and coefficient estimation” (Guo et al., 2023), making it the strongest non-LLM
+baseline currently available for spatial regime discovery. This is the algorithm we adopt
+as the seed A0 throughout the case study; the rationale for this choice was previewed
+in the Introduction.
+3. Methods: The SEGA Framework
+This section develops the SEGA framework introduced in Section 1. Section 3.1
+sets up the concept and the division of labor between researcher and agent, formalized
+as a quintuple. Section 3.2 then specifies each of the three required modules in turn.
+3.1. Conceptualizing SEGA: From Paradigm Shift to Quintuple
+The basic idea of SEGA is to treat algorithm development not as a replacement
+for expert-driven design but as a complement to it: alongside the conceptual moves
+researchers make by hand, parts of algorithm refinement can be carried out as a struc-
+tured, evaluation-driven search over executable programs. Two observations motivate
+this view. First, the historical record of geospatial algorithm development is domi-
+nated by what we call expert-driven discovery: discrete, conceptually rich modifications
+that come out of a researcher noticing a limitation and proposing a fix (for example,
+adding spatial weights into a regression model, replacing a Euclidean dissimilarity with
+a contiguity-aware one, or adding a penalty against spatially fragmented partitions).
+These discoveries are valuable but slow, and the design space between them is large.
+Second, LLMs and LLM-based multi-agent systems now provide the technical means
+to automate large parts of the candidate-generation, evaluation, and selection process.
+The resulting division of labor is straightforward: the agent system handles the genera-
+tion, evaluation, and selection of variants on top of any given seed algorithm, while the
+researcher retains responsibility for formulating the problem, designing the objective,
+defining the evaluation, and interpreting the result. SEGA, in this sense, is an attempt
+to make use of the second observation without giving up the first.
+Figure 1 contrasts the two paradigms in stylized form. In the expert-driven paradigm
+(right panel), progress relies on conceptual innovations from researchers; each contribu-
+tion typically requires identifying a limitation, hypothesizing a structural modification,
+implementing and testing it, and iterating. This process is inherently human-paced
+and is naturally shaped by available time and disciplinary context. In the self-evolving
+7
+
+
+--- Page 8 ---
+paradigm (left panel), candidate algorithms are continuously refined through auto-
+mated mutation, evaluation, and selection within a unified computational framework,
+but the researcher still owns the upstream decisions: what to optimize, what counts as
+a good answer, and what the resulting algorithms tell us. Both modes have value: the
+former provides conceptual depth, the latter offers breadth of exploration.
+Figure 1: A schematic comparison of expert-driven discovery (green panel) and self-evolving discov-
+ery (blue panel).
+Expert-driven discovery typically advances through conceptual innovations con-
+tributed by individual researchers and groups, whereas self-evolving discovery follows a more central-
+ized, metric-driven evolutionary trajectory. In SEGA, the inner loop of how to refine an algorithm
+is largely delegated to the agent, while the outer loop of what question to ask remains with the re-
+searcher. The two paradigms are complementary rather than mutually exclusive.
+Formalization as a quintuple. We formalize SEGA as a quintuple (A0, D, E, K, Φ). Here
+A0 is the seed algorithm, an initial executable program implementing a baseline
+geospatial method; D = {(si, Xi, Yi)}N
+i=1 is the spatial dataset, with si ∈R2 the
+spatial coordinates, Xi ∈RK the explanatory variables, and Yi the response variable;
+E : A × D →Rm is the evaluation protocol, a mapping from an algorithm–dataset
+pair to an m-dimensional performance vector that provides a fitness signal for evolu-
+tionary selection; K is the geographic knowledge base, a curated corpus of spatial
+theories, statistical methods, and established geographic principles; and Φ is the evolu-
+tion engine, an LLM-powered operator that proposes structural variants of candidate
+8
+
+
+--- Page 9 ---
+algorithms guided by performance feedback and domain knowledge. After T rounds
+the system returns the discovered algorithm A⋆, its performance profile E(A⋆, D), and
+(if logging is enabled) the evolution trace.
+Humans define ‘what’, agents figure out ‘how’. The quintuple makes explicit which
+components remain a researcher’s responsibility and which can be delegated to the
+agent, and the division it draws is exactly the one shown in Figure 1: the researcher
+defines the what, the question and the metric that counts as a good answer, while
+the agent (in the self-evolving mode) figures out the how. Concretely, the researcher
+chooses A0 (which existing algorithm to use as the starting point), constructs D (which
+simulated and real-world data to use), designs E (what counts as a good solution
+and how to measure it), and curates K (what geographic knowledge the system can
+draw on); the agent, via Φ, handles the inner loop, generating candidate variants of
+A0, running them on D, scoring them with E, and selecting which to keep. Three
+modules are required to turn this abstract quintuple into a system that can actually
+be applied to a new geospatial problem, and they are exactly the three pieces flagged
+in the Introduction: the Evolution Engine
+1
+(Section 3.2.1), the Code Formatter
+2 (Section 3.2.2), and the Simulation-Driven Training Protocol
+3 (Section 3.2.3).
+Figure 2 provides the abstract block-level architecture of SEGA; Figure 3 expands each
+of the three modules to show, in an infographic form, the agent-level workings inside
+them.
+9
+
+
+--- Page 10 ---
+Search 
+queries
+updated 
+prompt
+Code 
+Evolver
+Evolved code
+metrics
+Round t
+Retrieved 
+knowledge
+Code 
+Analyzer
+Evaluator
+Knowledge 
+Retriever
+Prompt 
+Generator
+Knowledge 
+Base 
+Trace 
+Raw Code
+1
+2
+Code 
+Formatter
+Input
+Output
+Evolution Engine
+3
+Simulation-Driven 
+Training Protocol 
+Simulated data
+Real-world data
+Evolved 
+Code
+Figure 2: Schematic of the SEGA framework, organized around the three required modules marked by
+the 1 , 2 , and 3 badges.
+1 the Evolution Engine Φ (top dashed panel): a two-loop architecture
+in which four LLM agents collaborate within each round t, the Code Analyzer reads the current evolved
+code and its evaluation metrics; the Knowledge Retriever queries the curated Knowledge Base K with
+the analyzer’s search queries and returns retrieved knowledge; the Prompt Generator assembles that
+knowledge into the next mutation prompt; the Code Evolver produces the next candidate program.
+The Evaluator and Knowledge Base sit outside the engine; the engine returns the evolution trace
+{Ai}T
+i=1.
+2
+the Code Formatter (bottom-left panel): converts user-supplied raw code Araw into the
+standardized triple (Ainit, Eeval, Cconfig) consumed by the engine, and rewrites the discovered algorithm
+A⋆back to the user-facing format.
+3 the Simulation-Driven Training Protocol (bottom-right panel):
+the engine sees only simulated data during evolution; real-world data is used only post-evolution as
+held-out evaluation. Pink arrows denote inputs, blue arrows denote outputs.
+10
+
+
+--- Page 11 ---
+1
+This is my geospatial 
+model — help improve 
+its performance!
+Well received!
+Revise the 
+program
+Evaluate the 
+program
+Geospatial 
+knowledge database
+Geospatial knowledge 
+search queries 
+Extract the knowledge to 
+further improve the algorithm
+Train on a controlled simulator,
+evaluate on real data
+Turn raw code file/folder into 
+well-formatted files
+The model does not consider the 
+spatial dependence.
+Knowledge-Informed
+Prompt
+Spatial dependence can 
+be modeled by…
+Code 
+evolver
+Analyze the 
+generated algorithm
+Prompt with the useful 
+knowledge
+2
+3
+Evolved model
+Evolved code folder/file
+Initial code folder/file
+Initial model
+Evaluator
+Configuration
+Simulation data
+Real world data
+Figure 3: Agent-level details of each SEGA module, complementing the abstract block diagram of
+Figure 2.
+1
+Inside the Evolution Engine (left, purple dashed panel): the four agents collaborate in
+one round of evolution, the Code Evolver submits the current geospatial model (“This is my geospatial
+model, help improve its performance!”); the Code Analyzer inspects the produced program, diagnoses
+a missing geographic consideration (“The model does not consider the spatial dependence”), and
+emits search queries to the geospatial knowledge database; the Knowledge Retriever returns relevant
+passages (e.g., “Spatial dependence can be modeled by. . . ”); the Prompt Generator wraps the retrieved
+knowledge into a knowledge-informed prompt; the Code Evolver revises the program, and the inner
+loop “Revise the program →Evaluate the program” iterates.
+2 Inside the Code Formatter (bottom-
+right, blue panel): an LLM-driven formatting agent turns a raw code folder/file into the standardized
+triple of Initial model, Evaluator, and Configuration (together with the corresponding code folder/file),
+and re-emits the discovered algorithm as a user-facing evolved model and code folder.
+3
+Inside
+the Simulation-Driven Training Protocol (top-right, green panel): the algorithm being evolved sees
+only simulated data during training and is then applied unchanged to real-world data for held-out
+evaluation. Pink arrows denote inputs to the engine, blue arrows denote outputs.
+3.2. Implementing SEGA: Three Required Modules
+3.2.1. Module
+1 : Two-Loop Architecture with Embedded Geographic Knowledge
+The first module specifies how the evolution engine Φ is organized so that geographic
+domain knowledge K can be brought to bear on each round of mutation. We require a
+two-loop architecture: an inner loop that performs LLM-driven code evolution (propose
+mutation →run →evaluate →select), wrapped by an outer loop that analyzes the
+current evolved code, retrieves relevant geographic knowledge from K, and feeds the
+retrieved knowledge back into the next inner-loop mutation as a structured prompt.
+The inner loop is responsible for exploring the space of algorithmic variants; the outer
+loop is responsible for steering that exploration with established geographic theory.
+Formally, the inner loop computes
+A⋆= arg
+min
+A∈ΦT (P0) L(A, Dsim),
+(1)
+where P0 is the initial candidate set seeded from A0, ΦT(·) is the evolutionary process
+over T iterations, L is the fitness function, and Dsim is the simulated dataset used
+during evolution (the use of Dsim rather than D is enforced by Module
+3 below).
+Adopted realization: GeoEvolve. The two-loop architecture is the central methodolog-
+ical innovation of GeoEvolve (Luo et al., 2025), distinguishing it from flat, single-
+loop, domain-agnostic engines such as OpenEvolve (Sharma, 2025) in which geographic
+11
+
+
+--- Page 12 ---
+knowledge can enter only as static prompt text. We adopt GeoEvolve as our off-the-
+shelf inner-loop engine, with its default agent architecture, prompts, and hyperparam-
+eters from the original paper (background on the four agents is given in Section 2.3);
+the top dashed panel ( 1 ) of Figure 2 shows how the four agents are wired together
+within the Evolution Engine Φ. In practice we use the open-source Python package
+geoevolve released alongside Luo et al. (2025), which packages the entire two-loop
+architecture (Code Evolver, Code Analyzer, Knowledge Retriever, and Geo-informed
+Prompt Generator) behind a single configuration interface, so that adopting GeoEvolve
+as the inner-loop engine requires no re-implementation.
+Design space of knowledge integration. A practical question remains open even after
+adopting GeoEvolve: how geographic knowledge enters Φ through the outer loop. We
+characterize the design space along two axes. The first axis is the level at which knowl-
+edge is injected: prompt-level injection encodes domain knowledge as natural-language
+instructions in a static prompt, whereas retrieval-level injection dynamically retrieves
+relevant knowledge from a curated corpus and conditions it on the current state of
+the evolved code. The second axis is the specificity of the injected knowledge: none,
+general (e.g., Tobler’s first law, spatial autocorrelation, scale effects), or task-specific
+(e.g., contiguity penalties, region-size balancing for spatial regimes). The combination
+of these two axes defines the six algorithm variants used in our case-study ablation
+(Section 4.4.1).
+3.2.2. Module
+2 : Automatic Code Formatter
+The second module operates on the seed algorithm A0: it specifies how a raw
+geospatial algorithm, written in whatever style its authors prefer, is turned into the
+standardized input that the inner-loop engine Φ requires.
+Without this step every
+new seed requires manual engineering before evolution can begin; with it, the same
+evolutionary infrastructure is designed to be reusable across different seeds and tasks
+with little or no manual adaptation. We state this as a property of the design rather
+than a demonstrated one: the formatter is exercised here on a single seed (Section 4),
+and whether it generalizes across algorithm families remains untested (Section 6.5).
+We define the formatting problem as a transformation that takes a raw geospatial
+algorithm Araw as input and returns a standardized triple
+Format(Araw) →(Ainit, Eeval, Cconfig),
+(2)
+in which Ainit is an initial program with clearly marked evolvable blocks and a stan-
+dardized entry function that returns predictions together with any auxiliary outputs
+(region labels, coefficients, etc.) needed by the evaluation step; Eeval is an evaluator
+module that implements the evaluation protocol E and computes the fitness signal and
+the held-out evaluation metrics from the algorithm’s outputs; and Cconfig is a configu-
+ration specification that records the evolutionary hyperparameters (population size,
+number of iterations, mutation strategy) and any task-specific settings (target number
+of regions, convergence criteria, soft constraints). This standardized triple acts as a
+contract between the candidate algorithm and the inner-loop engine: regardless of how
+the underlying algorithm is written, each candidate exposes a uniform interface for
+execution, evaluation, and comparison.
+12
+
+
+--- Page 13 ---
+In our implementation, the formatting step itself is performed automatically by
+an LLM-driven parser: given a raw script that solves a geospatial task in some style,
+the parser identifies the core algorithmic logic, marks the evolvable blocks, generates
+the standardized entry function, writes the evaluator module against the user-specified
+metrics, and emits a configuration file together with metadata for traceability. Re-
+searchers therefore only need to provide a working implementation of their geospatial
+algorithm; the engineering work of preparing it for evolutionary search is handled by
+the formatter. We use this formatter to prepare the Two-stage K-Models seed used
+throughout the case study. A worked example of the formatter operating on the Two-
+stage K-Models seed is provided in Appendix E, showing the raw input, the resulting
+evolvable program Ainit with marked blocks, the generated evaluator module Eeval, and
+the configuration Cconfig.
+3.2.3. Module
+3 : Simulation-Driven Training Protocol with a Controlled DGP
+The third module operates on the pair (D, E): it specifies what dataset the inner
+loop is allowed to see during evolution, and what metric the inner loop is asked to opti-
+mize. We argue that these two choices should be made together, and at the framework
+level, because they determine whether the resulting algorithm is being evolved against
+something geographically meaningful or simply against statistical convenience. Con-
+cretely, we propose three principles, all centered on the idea of training on a controlled
+simulator and evaluating on real data.
+Principle 1: Run the inner loop only on synthetic data. The inner loop Φ is run only
+on a synthetic dataset Dsim whose ground-truth structure S⋆is known by construction
+(for example, a known partition, a known surface, or a known set of intervals). S⋆
+gives a clear, unambiguous fitness signal, and the real-world data is never seen by the
+mutation, selection, or knowledge-retrieval steps, so real-world results count as out-
+of-sample evidence rather than as a target the system has quietly been optimizing
+against.
+Principle 2: Apply the discovered algorithm directly, without further tuning on real data.
+After T rounds, the discovered algorithm A⋆is frozen and applied unchanged to each
+real-world dataset. No hyperparameters are retuned, no additional evolution rounds
+are run, and no knowledge retrieval is done on the real-world side. Any performance
+difference observed on real-world data can then be attributed to the structure of A⋆
+itself, rather than to per-dataset adjustments.
+Principle 3: Use different metrics for driving the search and for reporting results. The
+metrics in the system play two distinct roles. A fitness signal drives the inner loop Φ;
+its purpose is to steer the search toward better algorithms. Evaluation metrics describe
+the discovered algorithm after the search is over; their purpose is to tell the reader how
+well it actually performs. We recommend keeping these two sets separate, because
+using the same metric in both roles is uninformative: any algorithm produced by an
+evolutionary search that explicitly optimizes a metric M will, by construction, score
+well on M.
+What makes a good fitness signal?. Within these three principles, a useful fitness signal
+is a bounded, dimensionless metric that compares the algorithm’s output to the ground-
+truth structure S⋆directly. Examples include clustering-agreement indices such as the
+13
+
+
+--- Page 14 ---
+Rand Index for partitioning tasks, coverage–width scores for prediction-interval tasks,
+and bounded ranking measures for retrieval tasks. Such fitness signals are bounded
+(the search has a stable target), robust to trivial structural choices (they cannot be
+gamed by simply producing more, smaller regions, as SSR-family metrics can), and
+on a different scale from the usual evaluation metrics, which keeps the evaluation set
+genuinely held-out.
+One intended consequence of these principles is that the same protocol should be
+reusable, with minor adjustments, across very different SEGA tasks: only Dsim, S⋆,
+the fitness signal, and the evaluation metrics need to be re-specified per task, while the
+surrounding inner-loop machinery is held fixed. This too is a consequence of the design
+rather than a result: the protocol is instantiated here for one task (Section 4.2.1), and
+whether the re-specification is as contained as the argument suggests is a question for
+the further demonstrations called for in Section 6.5.
+4. Case Study: Spatial Regime Algorithm Discovery
+In this section we apply SEGA to spatial regime discovery. Section 4.1 states the
+problem and the seed algorithm. Section 4.2 describes the simulation experiment used
+to evolve the algorithm, including the simulator and the fitness signal. Section 4.3
+describes the real-world experiment used as held-out evaluation, including the eleven
+datasets across four domains. Section 4.4 then specifies the ten algorithms compared
+throughout both experiments: six Two-stage K-Models variants (the unevolved seed
+and five evolved variants spanning a 2×3 knowledge-injection design) and four classical
+regionalization baselines. The same ten algorithms are evaluated under the same pro-
+tocol in both the simulation experiment (Section 5.2) and the real-world experiment
+(Section 5.3).
+4.1. Problem Definition and Seed Algorithm
+Spatial regime modeling. Let S ∈R2 be a geographical area partitioned into R mutually
+exclusive and exhaustive subregions:
+S =
+R
+[
+r=1
+Sr, Sr ∩Sr′ = ∅for r̸ = r′.
+(3)
+For an observational unit i located at si ∈S, a spatial regime exists when the data
+generation process differs across these spatial partitions:
+Yi = Fr(i)(Xi) + ϵi,
+(4)
+where Fr : RK →R is a regime-specific functional relationship, ϵi is an error term,
+Yi is the dependent variable, and Xi = {xi,1, ..., xi,K} is the vector of K independent
+variables for spatial unit i. The objective of spatial regime modeling is to reduce within-
+region structural variability while increasing between-region structural differentiation
+in the data generation mechanism. Spatial regime discovery is thus a descriptive par-
+titioning task, in the same family as clustering and regionalization: given the observed
+units of a study area, the algorithm assigns each unit to a regime and fits regime-
+specific relationships, and the recovered regime structure is itself the analytical result
+— a characterization of how the data-generating process varies across the study area.
+14
+
+
+--- Page 15 ---
+Unlike predictive spatial models, a regime model makes no prediction at unobserved
+locations and assigns no regime to units outside the data it partitions; its outputs
+are evaluated by how well the partition accounts for structural heterogeneity within
+the given data, in the same way that a fitted regression is summarized by its good-
+ness of fit. This distinction determines how the algorithms in this paper are evaluated
+(Section 4.3.1).
+Seed algorithm: Two-stage K-Models. We use the Two-stage K-Models (2KModels) al-
+gorithm (Guo et al., 2023) as the seed algorithm A0. 2KModels is a two-stage method
+that first partitions a region into M subregions {S1, ..., SM} (with M > R a hyperpa-
+rameter controlling the number of initial clusters), and then iteratively merges these
+subregions into geographically connected regions until R regions are reached. As dis-
+cussed in Section 2.4, 2KModels is the current state of the art among non-LLM spatial
+regime methods.
+4.2. Simulation Experiment
+4.2.1. Design
+We instantiate the train-on-simulation / apply-on-real protocol of Section 3.2.3 for
+spatial regime discovery as follows.
+Simulated datasets. We generated a series of datasets to evaluate the performance of
+both the original and evolved versions of the spatial regime algorithm under known
+ground-truth spatial regimes. Given the response variable Y and explanatory variables
+X1, X2, the data generation process (DGP) is defined as:
+Y = β0(u, v) + β1(u, v)X1 + β2(u, v)X2 + ϵ,
+(5)
+where X1, X2 ∼U[0, 1), i.i.d,
+(6)
+ϵ ∼N(0, σ2), i.i.d.
+(7)
+where (u, v) is one of 625 georeferenced observations on a 25 × 25 regular grid, U[0, 1) is
+the uniform distribution on [0, 1), N(0, σ2) is the normal distribution with mean 0 and
+variance σ2, and βi(u, v) are spatially varying coefficients that change across regions.
+The grid is divided into five spatially connected regions S⋆= {S⋆
+1, ..., S⋆
+5} that consti-
+tute the ground-truth partition. The intercept term β0 is set to 0, and the covariate
+coefficients β1, β2 take values in {−2, −1, 0, 1, 2} depending on the subregion of each
+cell. Three latent spatial regime patterns are used. In the Rectangular pattern, the
+grid is split into five rectangular regions, each sized 5 × 25 units. In the Voronoi pat-
+tern, five cells are randomly chosen as seeds and the resulting Voronoi diagram defines
+five spatially contiguous regions. In the Arbitrary pattern, five cells are randomly
+chosen as seeds and each seed expands at random to generate five connected regions.
+We produce 150 grids in total at the high-noise level, evenly split across the three
+patterns.
+Fitness signal: Rand Index. Following Principle 3 of Module
+3 (Section 3.2.3), the
+inner loop Φ optimizes a single bounded fitness signal that compares the algorithm’s
+output against the ground-truth partition S⋆. We use the Rand Index (RandI):
+RandI =
+TP + TN
+TP + FN + FP + TN
+(8)
+15
+
+
+--- Page 16 ---
+where TP, FN, FP, and TN denote true positive, false negative, false positive, and
+true negative pairs of cells, respectively. RandI is bounded in [0, 1], robust to inflated
+k (it penalizes both over- and under-segmentation), and disjoint in scale from the
+SSR-family metrics reserved for post-hoc evaluation. It is the only metric the inner
+loop Φ sees: the LLM-driven mutation, selection, and knowledge-retrieval steps do not
+access SSR, RMSE, or any other downstream metric. For computational tractability,
+the inner loop does not evaluate every candidate program on all 150 grids; instead,
+evolution operates on a fixed subset of three representative grids, one per spatial pattern
+(Rectangular #5, Voronoi #75, Arbitrary #149), and the per-round fitness reported
+during evolution is the mean RandI across these three grids. The discovered algorithm
+A⋆is then evaluated, frozen, on the full 150-grid pool in Section 5.2; the per-round
+fitness during evolution (mean RandI over the three training grids) and the per-pattern
+metrics in Table 3 (means over the full 150-grid pool, which contains those three
+grids) are therefore aggregated over different grid sets and are not directly comparable;
+excluding the three training grids from the 150-grid evaluation changes the reported
+means by less than 0.2 SSR and 0.001 ARI.
+Evaluation-harness isolation. The harness prevents a generated candidate from ever
+seeing the ground-truth partition.
+A candidate receives only (X, Y, w, p, min_size)
+through a fixed entry point and returns a label vector; RandI is computed by the har-
+ness outside the candidate’s process, and a static scan rejects, with fitness zero, any
+program that references ground-truth labels, computes label-agreement metrics inter-
+nally, or performs file or network I/O. Every program generated in the reported runs
+was additionally audited for ground-truth references; none were found. The discovered
+algorithm’s own internal objective is likewise label-free — it selects among candidate
+partitions by post-merge SSR under a connectivity constraint — so the frozen algorithm
+runs on real data, where no ground truth exists, exactly as it does on simulation.
+Inner-loop budget and LLM backbone. Each of the five evolved variants runs for the
+same total budget of 100 inner-loop iterations. The framework is LLM-agnostic in
+principle; in this case study we use a weighted pair of OpenAI models accessed through
+OpenRouter: openai/gpt-4o as the primary model (sampling weight 0.8) and openai/gpt-4.1
+as the secondary model (weight 0.2), with sampling parameters temperature = 0.7,
+top_p = 0.95, and max_tokens = 8192. The same backbone is shared by all four GeoE-
+volve agents. Full hyperparameter settings, including the MAP-Elites population and
+GeoKnowRAG configuration, are reported in Appendix B.
+4.3. Real-world Experiment
+4.3.1. Design
+Following Principle 2 of Module
+3 (Section 3.2.3), the algorithm discovered on
+simulation is frozen and applied unchanged to each real-world dataset, with no further
+evolution, no hyperparameter retuning, and no knowledge retrieval on the real-world
+side. All algorithms in the real-world comparison are run with the same target number
+of regions p (inferred from administrative units) and the same six-nearest-neighbor
+spatial weights matrix. Because each variant was evolved three times (Section 5.2), one
+program per variant must be carried forward to the real-world study. We select, for
+each variant, the run with the best simulation performance, and freeze that program;
+the selection uses simulation results only and no real-world data, so the real-world
+16
+
+
+--- Page 17 ---
+evaluation remains out-of-sample with respect to both evolution and selection. This
+is the best-of-N protocol a practitioner would follow — run the search a few times,
+keep the best algorithm — and we report it explicitly because it means the real-world
+numbers reflect the best attainable program per variant rather than the average one.
+The corresponding distributions across all three runs are the ones given in Table 3.
+Evaluation metrics. Following Principle 3 of Module
+3 , the metrics used to report
+real-world performance are disjoint from the RandI fitness signal that drives the in-
+ner loop. Because regime discovery is a descriptive partitioning task (Section 4.1),
+the quantities below are model-fit statistics — how much structural heterogeneity a
+partition accounts for — computed by the evaluation harness identically for every al-
+gorithm, with the same target number of regions p, the same spatial weights, and the
+same data. Whether an algorithm recovers the correct regime structure is established
+on the simulated data, where ground truth exists and agreement is measured by ARI
+(Section 5.2); the real-world study then asks whether the algorithm discovered there
+— the best simulation run per variant, frozen with no further evolution or tuning —
+transfers unchanged to data it has never seen. Let {(Xi, Yi)} denote the dataset and
+ˆYi = F(Xi) the predictions of a candidate algorithm. We use four evaluation metrics.
+The Sum of Squared Residuals (SSR) measures absolute prediction error,
+SSR =
+R
+X
+r=1
+X
+i∈Sr
+(Yi −Fr(Xi))2,
+(9)
+where Fr is the regime-specific fit on region Sr. The SSR Reduction ratio summarizes
+the proportional improvement of a multi-regime spatial model over a single global OLS
+fit:
+SSR Reduction = 1 −
+PR
+r=1 SSRlocal,r
+SSRglobal
+.
+(10)
+The Variance Ratio reports the proportion of total variance in the target variable
+associated with between-region differences:
+Variance Ratio =
+σ2
+between
+σ2
+within + σ2
+between
+.
+(11)
+The Root Mean Squared Error (RMSE) reports cross-dataset prediction accuracy
+as the root mean squared deviation between predicted and observed Y . These four
+metrics are computed post-hoc and are never fed back into the evolution loop, so the
+LLM cannot game them.
+4.3.2. Datasets
+To evaluate the original and evolved versions of the spatial regime algorithm in
+a more realistic setting, we collected a set of empirical datasets covering both natu-
+ral and socioeconomic topics. Table 1 provides a summary of each dataset, including
+topic, source, target variable, and number of samples. The datasets vary in size (from
+hundreds to tens of thousands of samples) and span several domains, including cli-
+mate, hydrology, politics, and health. Detailed descriptions, including the explanatory
+variables, are provided in Appendix A.
+17
+
+
+--- Page 18 ---
+Topic
+Dataset
+Target Variable
+#Samples
+Climate
+ERA5-Land
+hourly
+data
+(Muñoz-Sabater
+et al., 2021)
+Temperature of air at 2m
+above the surface
+83731
+Hydrology
+Catchment Attributes and Meteorology for
+Large-sample Studies (Addor et al., 2017)
+Mean daily discharge
+671
+Politics
+US Presidential Election 2020 (Fotheringham
+and Li, 2023)
+The percentage of votes for
+Democratic Party
+3108
+Health
+PLACES:
+Local
+Data
+for
+Better
+Health
+(Greenlund et al., 2022)
+Prevalence of a type of disease
+2350
+Table 1: An overview of real-world datasets, covering climate, hydrology, politics, and health.
+4.4. Comparison Methods
+Both the simulation experiment (Section 4.2) and the real-world experiment (Sec-
+tion 4.3) compare the same ten algorithms under a unified protocol. The ten algorithms
+fall into two groups: six Two-stage K-Models variants, which share an algorithmic an-
+cestry with the seed and isolate the effect of LLM-driven evolution along a structured
+knowledge-injection design; and four classical regionalization baselines, drawn from
+the broader spatial regime / regionalization literature, which examine whether any
+observed gains generalize beyond the K-Models family.
+4.4.1. Six Two-stage K-Models variants
+The six variants in this group share the Two-stage K-Models seed as their com-
+mon starting point. The unevolved seed acts as the no-evolution lower bound. The
+remaining five variants span a 2×3 design that crosses the level at which geographic
+knowledge enters the search (prompt-level vs. retrieval-level) with the specificity of
+that knowledge (none / general / task-specific). Table 2 summarizes the design; the
+corresponding runtime configuration is given in Appendix B.
+Variant
+Multi-agent
+Prompt-level
+Retrieval-level
+Engine
+dialogue
+knowledge
+knowledge
+2KModels (seed)
+–
+–
+–
+seed only
+OpenEvolve (No GeoKnow.)
+no
+none
+none
+OpenEvolve
+OpenEvolve (General GeoKnow.)
+no
+general hint
+none
+OpenEvolve
+OpenEvolve (Specific GeoKnow.)
+no
+task-specific hint
+none
+OpenEvolve
+GeoEvolve (No GeoKnowRAG)
+yes
+analyzer-generated
+disabled
+GeoEvolve
+GeoEvolve
+yes
+analyzer-generated
+GeoKnowRAG
+GeoEvolve
+Table 2: Six Two-stage K-Models variants placed along the two-axis knowledge-injection design.
+“Multi-agent dialogue” indicates whether the Code Analyzer / Knowledge Retriever / Prompt Gen-
+erator loop is active. “Analyzer-generated” indicates that the prompt content is produced at runtime
+by the Code Analyzer rather than written by hand. All five evolved variants run for the same total
+budget of 100 inner-loop iterations.
+This design allows us to decompose what would otherwise be a single “GeoEvolve
+vs. seed” comparison into two more informative sub-questions. The first asks whether
+multi-agent control is needed, or whether a static knowledgeable prompt already suf-
+fices. Comparing OpenEvolve (Specific GeoKnow.), which encodes task-specific geo-
+graphic hints in a fixed prompt, against GeoEvolve (No GeoKnowRAG), which has the
+same agent dialogue but no curated knowledge corpus, isolates the contribution of the
+outer analyzer / prompt-generator loop. The second asks whether retrieval-level knowl-
+edge dominates prompt-level knowledge. Comparing all three OpenEvolve variants (no,
+18
+
+
+--- Page 19 ---
+general, or task-specific prompt) against the full GeoEvolve pipeline isolates the con-
+tribution of structured retrieval through GeoKnowRAG over static prompt-encoded
+hints. We hold the total evolutionary budget constant at 100 inner-loop iterations
+across all five evolved variants, so any performance difference reflects the structure of
+the inner loop rather than search-budget disparities.
+4.4.2. Four classical regionalization baselines
+A natural concern is that all six K-Models variants share the same algorithmic an-
+cestry: the evolved variants are obtained by applying LLM-driven evolutionary search
+to the Two-stage K-Models seed. To examine whether the observed gains generalize
+beyond this seed family, we additionally compare against four representative algorithms
+drawn from the broader spatial regime / regionalization literature. The four baselines
+span distinct algorithmic paradigms developed over the past decades.
+AZP is the regression-aware variant (Guo et al., 2023) of the classical Auto-
+matic Zoning Procedure (Openshaw, 1977; Openshaw and Rao, 1995) that performs
+local moves of border units between regions while preserving spatial contiguity and
+minimum-size constraints, accepting moves that reduce the total within-region SSR.
+Region-K-Models (Guo et al., 2023) is a partitioning method that iteratively reas-
+signs each unit to the region whose local OLS fit best explains its observation, subject
+to spatial-neighbor and connectivity constraints. GWR-Skater (Helbich et al., 2013)
+is a two-stage approach that first estimates location-specific regression coefficients via
+Geographically Weighted Regression and then clusters the resulting coefficient surface
+using SKATER, a minimum-spanning-tree-based regionalization algorithm. Skater-
+reg (Anselin and Amaral, 2024) is an extension of SKATER that uses regression-fit
+residuals as the dissimilarity measure when cutting edges of the minimum spanning
+tree, directly aligning the partitioning objective with regression-fit quality.
+The four classical baselines are matched to the K-Models variants on protocol (same
+target number of regions p, same six-nearest-neighbor spatial weights, same evaluation
+metrics) but differ in algorithmic family, so any performance gap reflects modeling-
+philosophy differences rather than implementation disparities.
+5. Empirical Results: Simulated and Real-world Studies
+This section reports the empirical results of running the ten algorithms (six Two-
+stage K-Models variants from Section 4.4.1, and four classical regionalization baselines
+from Section 4.4.2) under the unified evaluation protocol of Section 4. We begin in
+Section 5.1 by introducing the algorithm discovered by SEGA as a new spatial regime
+model in its own right, comparing it with the Two-stage K-Models seed and tracing
+how the inner loop arrived at it over ten evolutionary rounds. Section 5.2 then reports
+simulation performance on the full 150-grid evaluation set, and Section 5.3 reports
+the real-world results, focusing on GeoEvolve versus the four classical baselines; the
+detailed cross-variant comparison within the K-Models family on real-world data is
+provided in Appendix F.
+5.1. The Evolved Algorithm: GeoEvolve-2KModels
+We refer to the algorithm produced by SEGA on the Two-stage K-Models seed as
+GeoEvolve-2KModels. This subsection introduces it as a new spatial regime model in
+19
+
+
+--- Page 20 ---
+its own right: how it differs structurally from the original 2KModels, how the inner
+loop arrived at those differences over ten evolutionary rounds, and what geographic-
+knowledge themes are embodied in the result.
+Structural differences from the 2KModels seed. Compared with the original 2KModels,
+the discovered algorithm introduces two structural refinements, both visible in the
+round-by-round trace of Figure 4. First, the number of first-stage clusters is no
+longer a fixed hyperparameter: where the seed always over-partitions into 20 clusters,
+the discovered algorithm evaluates a small candidate set (2.5p, 4p, √n, and p to p+2),
+runs each candidate through the merge stage, and keeps the partition with the lowest
+post-merge SSR — turning a hand-set constant into an internal model-selection step.
+Second, it appends a connectivity-preserving batch border-refinement stage:
+after merging, border units are reassigned between adjacent regimes whenever the move
+lowers a spatially penalized SSR, subject to two connectivity checks that guarantee
+both the donor and the acceptor region remain contiguous, with early stopping under
+a patience rule bounding the added cost. Both refinements select internally by label-
+free SSR; neither involves any agreement-with-ground-truth quantity (Section 4.2.1).
+1st Round
+0.9400
+0.9500
+0.9600
+0.9700
+0.9800
+0.9900
+2nd Round
+3rd Round
+4th Round
+5th Round
+6th Round
+Per-unit → batch border 
+refinement (best-gain 
+moves)
+Score: 0.9645
+refine max_iter 20; restarts 
+10 → 5; K-Models max_iter 
+10000 → 5000 
+Search over initial cluster 
+counts (2.5p, 4p, √n; 
+selected by post-merge SSR) 
+Score: 0.9816
+Spatial penalty on border 
+moves
+Early stopping with patience
+Score: 0.9823
+Stop when labels stop 
+changing
+Add p to candidate set; 
+penalty  0.35± 0.01
+Score: 0.9842
+Add p+1, p+2 to candidate 
+set; penalty 0.33± 0.008; 
+refine max_iter 30 -> 36, 
+patience 3 -> 4
+Score: 0.9850
+Refine max_iter 36 -> 30, 
+patience 4 -> 3
+penalty 0.29±0.005; refine 
+max_iter 36, patience 4
+Neighbor-count tie-
+breaking in border moves
+Score: 0.9852
+7th Round
+8th Round
+9th Round 10th Round
+New Ideas
+Modification
+Parameter Change
+Initial
+Score:
+0.9482
+Border unit reassignment 
+with connectivity checks
+Score: 0.9498
+Restarts 4 -> 10
+Figure 4: Round-by-round trajectory of the SEGA inner-loop search starting from the Two-stage
+K-Models seed, for the GeoEvolve (GeoKnowRAG) run reported in this paper. Annotated rounds
+add new ideas (+, green), code modifications (⟲, orange), or parameter changes ({#}, blue), with
+per-round scores marked in the figure. The plotted score is the inner-loop fitness: the mean Rand
+Index across the three grids used during evolution (Rectangular #5, Voronoi #75, Arbitrary #149;
+Section 4.2.1), rising from 0.9482 at the seed to 0.9852 at round 10. The vertical axis is truncated
+because RandI is inflated by chance agreement on this task; the round-by-round changes, and the
+chance-corrected held-out results, are described in the text.
+How the evolution unfolded over ten rounds. Figure 4 traces the inner-loop trajectory
+of the GeoEvolve (GeoKnowRAG) run across ten rounds, during which the mean Rand
+Index on the three training grids rises from 0.9482 at the seed to 0.9852. The gain is
+concentrated in the first three rounds, which contribute +0.0334 of the total +0.0370;
+20
+
+
+--- Page 21 ---
+the remaining seven rounds add +0.0036 between them, and three of those rounds (5,
+6 and 8) accept no new variant at all. Round 1 adds a border-unit reassignment
+step guarded by two connectivity checks, so that a unit only moves to a neighbouring
+region when both the donor and the acceptor remain spatially connected, and raises
+the number of restarts from 4 to 10; this operationalizes the geographic principle that
+adjacent units are more likely to share a regime than distant ones (Tobler’s first law
+(Tobler, 1970)) as a local, topology-preserving move rather than a global re-partition.
+Round 2 converts that step from per-unit to batch reassignment, evaluating all can-
+didate moves and applying the best-gain set in one pass, and lifts the score to 0.9645
+— the single largest jump before round 3. Round 3 makes the one change that al-
+ters the algorithm’s search space: the number of first-stage clusters, fixed at 20 in
+the seed, becomes a small search over 2.5p, 4p and √n, each run through the merge
+stage and selected by SSR; the same round adds a spatial penalty on border moves
+and early stopping with patience, and the score reaches 0.9816. Rounds 4–10 tune this
+machinery rather than extend it: the candidate set is widened to include p, p + 1 and
+p+2, the spatial penalty is annealed from 0.35 to 0.29 with a small deterministic jitter
+for diversity across restarts, and the refinement budget is adjusted between 30 and
+36 iterations with patience 3–4, ending at 0.9852. The end-of-trajectory algorithm is
+the GeoEvolve-2KModels reported in the remainder of this paper. Two cautions apply
+to this figure. First, the trajectory score is the mean RandI over the three training
+grids #5, #75 and #149 and is therefore not comparable with the per-pattern val-
+ues in Table 3, which are computed on the 150-grid pool; the same algorithm scores
+0.9634 RandI there. Second, RandI is the optimization signal rather than an indepen-
+dent measure of quality, and it is inflated by chance agreement on this task, which is
+why Table 3 reports the chance-corrected ARI as the agreement metric. A complete
+round-by-round trace of this evolutionary process, including the full source code at
+each round, the LLM-generated edits, and the per-round fitness, is provided as an in-
+teractive web page, linked from the project page (https://peng-luo.com/sega/), as
+a supplement to Figure 4.
+Geographic-knowledge themes embodied in the evolved algorithm. Across these refine-
+ments, three geographic-knowledge themes are repeatedly invoked. On spatial con-
+tiguity, every border-unit move is guarded by two connectivity checks that guarantee
+both the donor and the acceptor region remain spatially connected — the algorithm
+treats contiguity as a hard constraint to be preserved through every local improve-
+ment, not repaired afterwards. On local spatial dependence, the border-refinement
+stage operationalizes Tobler’s first law (Tobler, 1970): reassignments are confined to
+units on regime boundaries, where a unit’s regime membership is most uncertain and
+most informed by its neighbours, and a spatial penalty on border moves discourages
+jagged, noise-driven boundaries. On scale as a modelling choice, the search over
+the number of first-stage clusters (2.5p, 4p, √n) treats the initial partition scale not as
+a fixed hyperparameter but as a quantity to be selected against the data by post-merge
+SSR, echoing the sensitivity of regionalization outcomes to the chosen unit scale. The
+broader interpretation of these themes for autonomous geospatial algorithm discovery
+is taken up in Section 6.1.
+21
+
+
+--- Page 22 ---
+5.2. Simulation Results
+Performance on the simulated grids. The K-Models family outperforms the four clas-
+sical regionalization baselines by a wide margin under the same protocol (Table 3): the
+baselines’ average SSR ranges from ≈206 (AZP) to ≈403 (Skater-reg) against ≈68–87
+for the family, and their ARI from 0.330 to 0.624 against 0.806–0.869 — a separa-
+tion an order of magnitude larger than any run-to-run spread, and consistent with the
+fact that the simulated data follow a piecewise-linear regime model whose assumption
+2KModels and its descendants share but methods clustering GWR coefficient surfaces
+or attribute distances do not directly optimize. Within the evolved family, averaged
+over three independent runs, GeoEvolve with GeoKnowRAG attains the best three-
+pattern averages — SSR 67.53 ± 18.24, ARI 0.869 ± 0.027, a 14.9% SSR reduction and
+a +0.057 ARI gain over the seed — but it does not dominate every pattern (GeoEvolve
+without GeoKnowRAG has the lower SSR on Voronoi and Arbitrary), and the effect of
+geographic knowledge is non-monotone: OpenEvolve without geographic knowledge is
+worse than the seed it started from (SSR 86.64 versus 79.38; ARI 0.806 versus 0.812),
+a general knowledge prompt improves SSR to 72.95, a task-specific one only to 78.30.
+Because the run-to-run standard deviations (5.32–18.24 on average SSR) are of the
+same order as the gaps between variants (67.53–86.64), we report the ordering among
+evolved variants as descriptive rather than as evidence that one is reliably better than
+another. Complementing this run-to-run view, the discovered algorithm itself is reli-
+ably better than the seed on the evaluation pool: a paired Wilcoxon signed-rank test
+over the 150 grids gives a median SSR improvement of 15.0 (p < 10−23) and a median
+ARI gain of 0.080 (p < 10−17). Finally, the runtime column shows that the cost of
+the accuracy gain is not intrinsic: the evolved algorithms range from 0.91 to 10.45
+seconds per grid, excluding one run without early stopping that averages 188.9 s, an
+ordering that follows how much search each performs at inference time rather than
+how accurate it is; full token, elapsed-time and inference-time accounting is given in
+Appendix C. A matched-budget control confirms that these gains are not an artifact
+of additional search effort. Giving the unmodified seed the same cluster-count search
+with random restarts, under the evolved algorithm’s own per-grid time budget, does
+narrow the SSR gap — SSR being the quantity any such search optimizes directly —
+but still leaves it short on recovery of the true regime structure, which is what the task
+is defined on and which the comparison should therefore be read on (ARI 0.854 versus
+0.894, p = 2.3 × 10−10); one-component ablations locate the advantage in the border-
+refinement stage and its spatial penalty rather than in the cluster-count search — the
+penalty being a component whose value is negative in the algorithm’s own selection
+objective, which no tuning of the seed’s parameters against that objective could have
+reached (Appendix D).
+Figure 5 illustrates the reconstructed spatial regimes on the three grids used during
+SEGA evolution (Rectangular #5, Voronoi #75, Arbitrary #149), comparing the seed,
+the two best evolved variants, and the four classical regionalization baselines on the
+same grids. Within the K-Models family, both evolved versions of 2KModels produce
+regions that resemble the ground truth, while the original 2KModels exhibits some
+misidentified boundaries and less coherent regions; the GeoEvolve-evolved version is
+the closest to the ground truth across all three patterns. The four classical baselines re-
+veal a sharper qualitative gap: AZP and Region-K-Models produce visibly fragmented
+partitions, particularly on the Rectangular grid where the ground-truth structure is the
+22
+
+
+--- Page 23 ---
+most regular; GWR-Skater preserves the main horizontal structure on Rectangular but
+loses coherence on Voronoi and Arbitrary; Skater-reg merges the central regions and re-
+duces the partition to two or three dominant regions on all three patterns. These visual
+differences are consistent with the SSR gap reported in Table 3, which the K-Models
+family closes by directly optimizing within-region regression fit.
+Rectangular
+(#5)
+Ground Truth
+Seed
+OpenEvolve
+GeoEvolve
+AZP
+Region-K-Models
+GWR-Skater
+Skater-reg
+Voronoi
+(#75)
+Arbitrary
+(#149)
+Figure 5: Region delineation results on the three grids used during SEGA evolution, Rectangular #5
+(top row), Voronoi #75 (middle row), Arbitrary #149 (bottom row). The first column shows the
+ground-truth spatial regime. The next three columns show reconstructions from the seed (Two-stage
+K-Models, “Seed”) and two representative evolved variants (OpenEvolve with general geographic-
+knowledge prompt and GeoEvolve with full GeoKnowRAG; see Table 3). The last four columns show
+reconstructions from the four classical regionalization baselines (AZP, Region-K-Models, GWR-Skater,
+Skater-reg). All algorithms are evaluated on the same grid under the unified protocol of Section 4;
+colors are aligned across columns using Hungarian assignment so that the same region in different
+columns shares a color where possible.
+Algorithm
+SSR ↓
+ARI ↑
+Time (s)
+Rect.
+Voronoi
+Arb.
+Avg.
+Rect.
+Voronoi
+Arb.
+Avg.
+Skater-reg
+476.82
+342.18
+390.66
+403.22
+0.253
+0.391
+0.347
+0.330
+5.46
+Region-K-Models
+388.13
+295.68
+355.04
+346.28
+0.348
+0.457
+0.429
+0.411
+0.02
+GWR-Skater
+215.31
+204.66
+288.54
+236.17
+0.613
+0.691
+0.567
+0.624
+6.83
+AZP
+237.92
+171.73
+208.32
+205.99
+0.435
+0.531
+0.511
+0.492
+0.59
+OpenEvolve (No GeoKnow.)
+80.92 ± 11.08
+79.42 ± 10.61
+99.57 ± 16.76
+86.64 ± 12.79
+0.804 ± 0.006
+0.860 ± 0.015
+0.754 ± 0.015
+0.806 ± 0.010
+2.99 ± 1.85
+2KModels (seed)
+75.46
+72.29
+90.38
+79.38
+0.804
+0.863
+0.770
+0.812
+0.67
+OpenEvolve (Specific GeoKnow.)
+73.38 ± 4.63
+71.60 ± 5.15
+89.91 ± 6.58
+78.30 ± 5.32
+0.820 ± 0.016
+0.876 ± 0.015
+0.769 ± 0.019
+0.821 ± 0.016
+7.42 ± 8.53
+OpenEvolve (General GeoKnow.)
+66.69 ± 9.16
+66.96 ± 9.34
+85.20 ± 14.41
+72.95 ± 10.66
+0.843 ± 0.038
+0.891 ± 0.028
+0.799 ± 0.033
+0.844 ± 0.030
+0.91 ± 0.45
+GeoEvolve (No GeoKnowRAG)
+67.43 ± 10.56
+63.17 ± 9.06
+75.16 ± 15.49
+68.58 ± 11.64
+0.806 ± 0.015
+0.883 ± 0.017
+0.780 ± 0.021
+0.823 ± 0.017
+1.68 ± 1.60
+GeoEvolve (GeoKnowRAG)
+55.60 ± 1.60
+63.64 ± 15.41
+83.35 ± 39.77
+67.53 ± 18.24
+0.909 ± 0.083
+0.898 ± 0.031
+0.799 ± 0.049
+0.869 ± 0.027
+69.95 ± 103.05 (10.45†)
+Table 3: Simulation comparison of four classical regionalization baselines, the unevolved Two-stage
+K-Models seed, and the five evolved variants on the 150 high-noise grids (50 per pattern). All metrics
+are computed externally by the evaluation harness (Section 4.2.1); each evolved row is the mean ±
+SD over three independent evolution runs, while the seed and the baselines are deterministic given the
+data. ARI is the chance-corrected agreement metric; RandI serves only as the inner-loop fitness signal
+(Figure 4). Time is the mean runtime per 625-cell grid (Appendix C); for GeoEvolve (GeoKnowRAG),
+the value in parentheses is the trimmed mean† excluding one run whose refinement step lacks early
+stopping. Rows sorted from worst to best by average SSR; bold = best within column.
+5.3. Real-world Results
+We now turn from simulated data, where the ground-truth partition is known and
+the fitness signal can be evaluated directly, to real-world data, where neither is avail-
+able and the discovered algorithm is asked to generalize out of sample.
+We apply
+23
+
+
+--- Page 24 ---
+the frozen GeoEvolve algorithm to the 11 real-world datasets and compare it against
+the unevolved Two-stage K-Models seed and the four classical regionalization base-
+lines under the unified evaluation protocol of Section 4.3.1. Figure 6 reports a com-
+pact ten-algorithm SSR-Reduction summary by domain (which also includes the three
+OpenEvolve variants and GeoEvolve without GeoKnowRAG), and Table 4 reports
+cross-dataset means on the four quality metrics for the six-algorithm main comparison
+(seed, four classical baselines, GeoEvolve). The detailed within-family comparison of
+all six K-Models variants on real-world data (per-dataset, four-metric breakdown, with
+corresponding regime maps and dominant-covariate maps) is provided in Appendix F.
+Compared with the simulation, the real-world picture is more nuanced.
+GeoEvolve attains the lowest cross-dataset average RMSE (1.220) and the highest
+SSR Reduction (0.658), with nine first-place wins on SSR Reduction out of 11 datasets,
+six wins on average R2, and five wins on RMSE, more than any other algorithm on
+all three metrics; on Variance Ratio it has the highest mean (0.482) and four wins
+(second to Skater-reg’s five). AZP reaches the highest mean R2 (0.830) and is the
+most competitive classical baseline on per-dataset R2 and RMSE wins (4 each out of
+11), illustrating that older regionalization methods remain competitive on individual
+datasets when the underlying regimes are nearly piecewise constant in the response
+variable. The unevolved 2KModels seed (mean R2 0.816, mean SSR Reduction 0.625)
+holds its own as a strong baseline, ahead of all four classical baselines on SSR Reduction.
+Among the four classical regionalization baselines, three (Region-K-Models, GWR-
+Skater, Skater-reg) fall noticeably behind on SSR Reduction (0.488–0.582 vs. 0.658 for
+GeoEvolve and 0.625 for the seed).
+Two qualitative conclusions follow. First, an algorithm discovered entirely on simu-
+lated grids transfers to real data without modification: GeoEvolve is competitive with,
+or better than, every classical regionalization baseline on real-world data, despite the
+simulator being matched to the K-Models modeling assumption. The claim here is
+about transfer of the algorithm, not about predictive generalization to unobserved lo-
+cations: these are fit statistics on the datasets being partitioned (Section 4.3.1), and
+what they show is that a procedure developed against a synthetic regime model re-
+mains well behaved on empirical data whose generating process it was never shown.
+Second, no single algorithm dominates across all metrics and all datasets: AZP is
+unexpectedly strong on R2, Skater-reg wins the most datasets on Variance Ratio de-
+spite a lower mean, and GeoEvolve provides the tightest regression fit, the largest SSR
+Reduction, and the highest mean Variance Ratio. This suggests that performance is
+metric-dependent and that practitioners should consider their downstream use case
+when selecting an algorithm.
+The spatial structure underlying these metric differences is visible in the regime-
+partitioning maps. Figure 7 shows the partitions produced by the four classical base-
+lines on four representative datasets (Climate / Health / Hydrology / Politics). The
+four classical baselines tend to produce more spatially fragmented partitions, particu-
+larly in the politics and health domains. The corresponding regime maps for the six
+K-Models family variants (and a fine-grained cross-variant breakdown) are provided in
+Appendix F (Figure S4); they generate more spatially coherent regimes with clearer
+boundaries, with GeoEvolve being the most coherent.
+24
+
+
+--- Page 25 ---
+ERA5
+Health (avg of 8)
+CAMELS
+Voting
+0.0
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+SSR Reduction
+Climate
+Health
+Hydro.
+Politics
+2KModels (seed)
+AZP
+Region-K-Models
+GWR-Skater
+Skater-reg
+OE (no knowledge)
+OE (general)
+OE (specific)
+GE (no RAG)
+GeoEvolve
+Best per column
+Figure 6: Ten-algorithm SSR-Reduction comparison across the four real-world domains, with one
+column per domain (Climate, Health, Hydro., Politics) on tinted backgrounds. The Health column
+reports the mean over the eight Health datasets (Arthritis, BPHigh, Cancer, Asthma, Depression,
+Diabetes, Obesity, Stroke); the other three domains each contain one dataset (ERA5, CAMELS,
+Voting). The ten algorithms are the unevolved Two-stage K-Models seed (grey), the four classical
+regionalization baselines (AZP, Region-K-Models, GWR-Skater, Skater-reg), the three OpenEvolve
+variants (no / general / task-specific GeoKnow. prompt), GeoEvolve without GeoKnowRAG, and the
+full GeoEvolve with GeoKnowRAG (red, highlighted with a darker outline). Gold stars mark the
+best algorithm per column. The corresponding cross-dataset means on the four real-world metrics are
+reported in Table 4; the per-dataset breakdown on all 11 real-world datasets and the corresponding
+regime maps are provided in Appendix F.
+Algorithm
+Avg. R2 ↑
+Avg. RMSE ↓
+SSR Red. ↑
+Var. Ratio ↑
+2KModels (seed)
+0.816
+1.273
+0.625
+0.465
+Classical regionalization baselines
+AZP
+0.830
+1.228
+0.586
+0.373
+Region-K-Models
+0.789
+1.440
+0.489
+0.344
+GWR-Skater
+0.800
+1.303
+0.488
+0.358
+Skater-reg
+0.812
+1.335
+0.582
+0.395
+GeoEvolve
+0.825
+1.220
+0.658
+0.482
+Table 4: Real-world summary: cross-dataset means on the four quality metrics. Bold = best within col-
+umn. The detailed within-family breakdown of all six K-Models variants (the seed, three OpenEvolve
+variants, and GeoEvolve with and without GeoKnowRAG), with per-dataset and per-metric values,
+is given in Figure S2 (Appendix F).
+25
+
+
+--- Page 26 ---
+Climate
+(a) Climate (ERA5)  AZP (k=9)
+AZP
+(b) Climate (ERA5)  Region-K-Models (k=9)
+Region-K-Models
+(c) Climate (ERA5)  GWR-Skater (k=9)
+GWR-Skater
+(d) Climate (ERA5)  Skater-reg (k=9)
+Skater-reg
+Health
+(e) Health (Cancer)  AZP (k=8)
+(f) Health (Cancer)  Region-K-Models (k=8)
+(g) Health (Cancer)  GWR-Skater (k=8)
+(h) Health (Cancer)  Skater-reg (k=8)
+Hydrology
+(i) Hydrology (CAMELS)  AZP (k=10)
+(j) Hydrology (CAMELS)  Region-K-Models (k=10)
+(k) Hydrology (CAMELS)  GWR-Skater (k=12)
+(l) Hydrology (CAMELS)  Skater-reg (k=12)
+Politics
+(m) Politics (Voting)  AZP (k=8)
+(n) Politics (Voting)  Region-K-Models (k=8)
+(o) Politics (Voting)  GWR-Skater (k=8)
+(p) Politics (Voting)  Skater-reg (k=8)
+Figure 7: Regime-partitioning maps produced by the four classical baselines on four representative
+real-world datasets (Climate / Health / Hydrology / Politics). Classical regionalization baselines tend
+to produce more spatially fragmented partitions, particularly in the politics and health domains. The
+corresponding K-Models family regime maps are provided in Appendix F (Figure S4).
+6. Discussion: Toward Autonomous Geospatial Algorithm Discovery
+In this section we step back and interpret what the case study suggests about the
+SEGA framework introduced in Section 3. Building on the structural description of
+the discovered algorithm given in Section 5.1, Section 6.1 asks what general lessons can
+be drawn from those refinements and how SEGA complements expert-driven design.
+Section 6.5 outlines limitations and risks.
+6.1. Insights and Complementarity with Expert-driven Design
+Taken together, the case study supports a more general suggestion: when the opti-
+mization objective for a geospatial problem can be specified in a computable form, SEGA
+can be a useful complement to traditional, expert-driven algorithm development. In the
+spatial regime case, the objective of reducing within-region structural variability while
+increasing between-region differentiation was encoded as the bounded, ground-truth-
+anchored Rand Index. Within this setting, the multi-agent system surfaced algorithmic
+refinements (an internal search over the initial partition scale, connectivity-preserving
+border refinement, spatially penalized reassignment) that align with established geo-
+graphic intuitions and are useful starting points for further analysis. Table 5 outlines
+26
+
+
+--- Page 27 ---
+several other geospatial problems for which optimization objectives can plausibly be
+formalized and which may therefore benefit from a similar treatment.
+Geospatial Problem
+Formalizable Objective
+Possible
+Direction
+for
+LLM-
+Assisted Exploration
+Spatial interpolation
+Minimize prediction error at unob-
+served locations (e.g., cross-validated
+RMSE)
+Search over interpolation strategies,
+kernel functions, neighborhood struc-
+tures
+Spatial clustering
+Increase
+spatial
+coherence
+and
+at-
+tribute homogeneity (e.g., silhouette
+score + contiguity)
+Evolve partitioning strategies, distance
+metrics, merge criteria
+Spatial prediction with
+uncertainty
+Reduce prediction interval width while
+maintaining
+coverage
+(e.g.,
+interval
+score)
+Explore variants of conformal predic-
+tion and calibration methods
+Change detection
+Improve detection accuracy under spa-
+tial and temporal constraints (e.g., F1-
+score)
+Evolve feature extraction, threshold-
+ing, and post-processing pipelines
+Table 5: Examples of geospatial problems with formalizable objectives that may be amenable to
+SEGA-style algorithm discovery. In each case, the most demanding intellectual work remains the
+formulation step.
+SEGA is best understood as complementary to expert-driven design rather than a
+replacement. Conceptual innovations from researchers, adding spatial weights to a re-
+gression model, embedding contiguity constraints, introducing new estimators, continue
+to mark out the design space and define what counts as a good answer; LLM-assisted
+search then fills in parts of that space that are tedious to explore manually. The prac-
+tical value of SEGA comes less from any single “intelligent” move and more from two
+properties LLMs supply at low marginal cost: diversity (many candidate structural
+modifications generated and tried within a short time window) and iteration speed
+(each round of variation, evaluation, and selection completing in minutes rather than
+weeks). The combination of an internal model-selection step over the initial partition
+scale with a connectivity-guarded batch border refinement assembled in our evolved
+2KModels is one such combination that no individual researcher would have necessarily
+prioritized in advance, but that the search procedure surfaced by trying many alter-
+natives. The implication for GIScience is that the bottleneck in geospatial algorithm
+development is shifting from implementation effort toward specification effort: the ge-
+ographer’s role takes on additional dimensions as a problem architect who defines the
+objective landscape in which the LLM-driven search operates, while classical spatial
+algorithms remain valuable both as seeds for evolution and as baselines that anchor
+the comparison.
+6.2. Shared Infrastructure: Benchmarks, Traces, and Validation
+Making algorithm discovery a normal mode of geospatial research, rather than a
+series of one-off demonstrations, requires shared infrastructure for evaluating what the
+searches produce. The central object is a common benchmark: a fixed interface (in-
+put/output signature), a fixed evaluation protocol in which metrics are computed by
+the harness rather than by the candidate, and an explicit split between the instances a
+search may optimize against and those reserved for reporting. Validation then happens
+on that benchmark: evolved algorithms should be compared against human-designed
+algorithms of the same class — not only against their own seed — reported as dis-
+tributions over independent evolution runs rather than single trajectories, and finally
+27
+
+
+--- Page 28 ---
+evaluated on data the search never touched.
+Seed algorithms and injected domain
+knowledge, by contrast, should not be standardized: they are the researcher’s contri-
+bution, the analogue of a hypothesis, and different seeds and knowledge bases exploring
+the same benchmark is precisely the diversity that makes shared evaluation informa-
+tive. The remaining piece is a standard evolution-trace format, recording per round
+the candidate program, its fitness, and the prompt or knowledge that produced it. Be-
+yond reproducibility, traces make credit assignable — a discovery is jointly produced
+by whoever contributed the seed, the knowledge corpus, and the objective and search
+design — and they are research material in their own right: with a common format,
+questions such as which prompting regimes produce structural innovation rather than
+parameter tuning become empirical questions answerable across laboratories.
+6.3. Beyond Single-Objective, Simulation-Friendly Tasks
+Extending SEGA past single-objective tasks requires distinguishing two situations.
+When several objectives must all be respected but no trade-off curve is needed (e.g., ac-
+curacy alongside runtime), lightweight randomized scalarization suffices: recent LLM-
+driven evolution systems define several fitness metrics and randomly select one per
+generation (Li et al., 2026). When the trade-off curve itself is the object of interest —
+within-region homogeneity against region-size balance, or accuracy against uncertainty-
+interval width — the search must instead maintain a set of non-dominated alternatives,
+via explicit non-dominated sorting (Deb et al., 2000) or a quality-diversity archive in-
+dexed by the competing objectives (Mouret and Clune, 2015); the MAP-Elites feature
+map already used here for (score, complexity) is a natural place for that substitution.
+Characterizing which geospatial problems need a frontier rather than a compromise is,
+to us, the most concrete piece of future work.
+6.4. Toward Trustworthy and Responsible Self-Evolving GeoAI
+Self-evolution sharpens a known ethical problem of spatial analysis. Chen et al.
+(2026) show that endogenous bias arises whenever a global optimization goal diverges
+from the local needs of particular regions or communities: the aggregate looks sound
+while some places or groups are systematically disadvantaged. An evolutionary search
+is an aggregate optimizer by construction, keeping any variant that raises mean fit-
+ness, even one that concentrates errors in a few regions, and since no one designed
+the evolved mechanism, such trade-offs are easily missed. Three checkpoints follow.
+Before the search, the problem should be deliberately delimited, and where distri-
+butional consequences matter, the objective should register them (e.g., worst-region
+terms alongside the mean, Section 6.3) rather than average them away; our restric-
+tion of regime discovery to descriptive partitioning (Section 4.1) is a modest instance.
+Before deployment, the evolved algorithm should be diagnosed, not only scored: vi-
+sual analytics (Chen et al., 2026) can map its errors and uncertainty, which are rarely
+uniform over space and so translate into spatially uneven risk, and check the spatial
+continuity of the parameters it estimates. At deployment, performance established
+in one study region cannot be assumed to transfer, so local diagnostics, recalibra-
+tion where needed, and disaggregation of results by spatial unit and population group
+should precede any decision. However much of the search is delegated, the judgement
+of whom its results serve remains the geographer’s.
+28
+
+
+--- Page 29 ---
+6.5. Limitations and Risks
+While the present results are encouraging, several limitations and risks deserve
+attention. Dependence on objective-function quality. The hypothesis that prob-
+lems with well-defined objectives can be partly addressed by autonomous search places
+a heavy burden on the objective itself. Poorly specified loss functions may lead the
+evolutionary system to favor algorithms that optimize the metric while drifting away
+from the intended geographic phenomenon; the choice of RandI as the fitness signal
+in our case study is a concrete instance of how carefully this choice must be made.
+Problems with ill-defined objectives. Not all geospatial problems admit clean,
+easily formalizable objectives. Tasks such as cartographic generalization, place char-
+acterization, or qualitative spatial reasoning involve aesthetic, cognitive, or contextual
+judgements that are difficult to reduce to a single scalar metric; for such problems,
+hybrid approaches combining human judgement with autonomous search are likely to
+be needed. Interpretability and trust. Evolved algorithms can be more difficult
+to interpret than manually designed ones; the evolved 2KModels’ interacting heuris-
+tics — a candidate-set search over initial cluster counts nested inside the two-stage
+procedure, and a border-refinement stage whose penalty magnitude, iteration budget
+and patience were tuned by the search rather than derived from theory — lack the
+conceptual transparency of methods derived from first principles, which raises legiti-
+mate concerns for scientific reproducibility. Knowledge-base bias. The geographic
+knowledge base K inevitably reflects the choices, blind spots, and disciplinary tenden-
+cies of its source materials; over-representing certain methodological traditions (e.g.,
+spatial econometrics) while under-representing others (e.g., qualitative geography) can
+steer the evolutionary search toward a narrow region of the solution space. Single
+seed and task family.
+All empirical evidence comes from one seed algorithm in
+one task family: the case study demonstrates feasibility, not generality. Establishing
+SEGA as a general paradigm requires demonstrations across algorithm families under
+the same evaluation discipline; until then, framework-level statements should be read
+as scoped to problems resembling the one studied here. Computational cost and
+reproducibility. LLM-driven evolution requires substantial computational resources
+and depends on language models whose behavior may change across versions, making
+bit-for-bit reproducibility difficult.
+7. Conclusion
+This paper presented Self-Evolving Geospatial Algorithms (SEGA), a framework
+for developing geospatial algorithms through a structured, evaluation-driven LLM-
+assisted inner loop alongside the traditional expert-driven discovery carried out by
+researchers. SEGA rests on three required modules: a two-loop architecture with em-
+bedded geographic knowledge (adopted from GeoEvolve), an automatic code formatter
+that turns any raw seed algorithm into the standardized input the inner loop requires,
+and a simulation-driven training protocol that disciplines the use of data and metrics
+so that real-world performance counts as out-of-sample evidence. The spatial regime
+case study validates the full stack: the knowledge-guided evolved Two-stage K-Models
+outperforms both its seed and knowledge-free baselines on 150 simulated grids, trans-
+fers without retuning to 11 real-world datasets across climate, health, hydrology, and
+politics, and remains competitive with four classical regionalization baselines on real
+29
+
+
+--- Page 30 ---
+data. We close with a hypothesis that this case study supports but cannot yet estab-
+lish: when a geospatial problem admits a computable optimization objective, much
+of the inner-loop work of algorithm refinement may be delegable to LLM-driven sys-
+tems; demonstrating this beyond a single seed and task family is the necessary next
+step. What the study does show is the geographer’s contribution shifting upstream,
+toward articulating new questions, designing meaningful loss functions, and building
+trustworthy evaluation protocols.
+8. Data and Code Availability
+The complete code and data accompanying this paper, together with an interactive
+trace of the evolution it reports, are available from the project page: https://peng-
+luo.com/sega/.
+9. Disclosure Statement
+No conflict of interest exists in this manuscript, and the manuscript was approved
+by all authors for publication.
+The authors used Claude (Anthropic, Claude Opus 5) to polish the language of
+the manuscript.
+The tool was used only for wording and readability; all research
+design, analysis, results and conclusions are the authors’ own, and the authors take
+full responsibility for the content of the manuscript. The use of large language models
+as the object of study is described in Section 4.2.1 and Appendix B.
+Appendix A. Details of Real-world Datasets
+In this section, we present details on the real-world datasets, including geographical
+locations, regional divisions, target variables, and associated explanatory variables. In
+the health dataset, we use eight conditions as target variables: cancer, arthritis, high
+blood pressure, asthma, depression, diabetes, obesity, and stroke.
+Column Name
+Real Name
+Description
+lat
+gauge_lat
+Latitude
+lon
+gauge_lon
+Longitude
+region
+state
+USA state name
+Y
+t2m
+Temperature of air at 2m above the surface
+X1
+tp
+Total precipitation
+X2
+sp
+Surface pressure
+X3
+u10
+10m u-component of wind
+X4
+v10
+10m v-component of wind
+X5
+pev
+Potential evaporation
+X6
+strd
+Surface thermal radiation downwards
+X7
+ssrd
+Surface solar radiation downwards
+X8
+lai_hv
+Leaf area index, high vegetation
+X9
+lai_lv
+Leaf area index, low vegetation
+Table A.1: Details of the climate dataset
+30
+
+
+--- Page 31 ---
+Column Name
+Real Name
+Description
+lat
+gauge_lat
+Latitude
+lon
+gauge_lon
+Longitude
+region
+region
+2-digit USGS hydrologic unit code
+Y
+q_mean
+Mean daily discharge
+X1
+p_mean
+Mean daily precipitation
+X2
+pet_mean
+Mean daily potential evapotranspiration
+X3
+aridity
+Aridity index (PET/P), the ratio of mean PET to mean precipitation
+X4
+elev_mean
+catchment mean elevation
+X5
+slope_mean
+catchment mean slope
+X6
+frac_forest
+forest fraction
+X7
+lai_max
+maximum monthly mean of the leaf area index
+X8
+soil_depth_statsgo
+soil depth (maximum 1.5m, layers marked as water and bedrock were excluded)
+X9
+sand_frac
+sand fraction
+X10
+soil_porosity
+volumetric porosity
+Table A.2: Details of the hydrology dataset
+Column Name
+Real Name
+Description
+proj_X
+proj_X
+X on the projected coordinate system
+proj_Y
+proj_Y
+Y on the projected coordinate system
+region
+state
+US States 2-letter code
+Y
+new_pct_dem
+The percentage of people who voted for the Democratic Party
+X1
+sex_ratio
+sex ratio
+X2
+pct_black
+The percentage of African Americans,
+X3
+pct_hisp
+The percentage of Hispanics
+X4
+pct_bach
+The percentage of the population with a bachelor’s degree
+X5
+median_income
+Median household income
+X6
+pct_65_over
+The percentage of the population aged sixty-five and over
+X7
+pct_age_18_29
+The percentage of the population aged eighteen to twenty-nine
+X8
+gini
+Gini index
+X9
+pct_manuf
+The percentage of the population employed in the manufacturing industry
+X10
+ln_pop_den
+Natural logarithm of population density
+X11
+pct_3rd_party
+The percentage of third-party vote
+X12
+turn_out
+The voter turnout
+X13
+pct_fb
+The percentage of foreign-born
+X14
+pct_uninsured
+The percentage of the health-insured population
+Table A.3: Details of the politics dataset
+Column Name
+Real Name
+Description
+lat
+lat
+Latitude
+lon
+lon
+Longitude
+region
+StateAbbr
+USA State abbreviation
+Y
+CANCER_AdjPrev
+Prevalence of cancer (non-skin) or melanoma among adults, 2022
+ARTHRITIS_AdjPrev
+Prevalence of arthritis among adults, 2022
+BPHIGH_AdjPrev
+Prevalence of high blood pressure among adults, 2022
+CASTHMA_AdjPrev
+Prevalence of current asthma among adults, 2022
+DEPRESSION_AdjPrev
+Prevalence of depression among adults, 2022
+DIABETES_AdjPrev
+Prevalence of diagnosed diabetes among adults, 2022
+OBESITY_AdjPrev
+Prevalence of obesity among adults, 2022
+STROKE_AdjPrev
+Prevalence of stroke among adults, 2022
+X1
+ACCESS2_AdjPrev
+Prevalence of lack of health insurance among adults aged 18-64 years, 2022
+X2
+CHECKUP_AdjPrev
+Prevalence of routine checkup within the past year among adults, 2022
+X3
+DENTAL_AdjPrev
+Prevalence of visited dentist or dental clinic in the past year among adults, 2022
+X4
+BINGE_AdjPrev
+Prevalence of binge drinking among adults, 2022
+X5
+CSMOKING_AdjPrev
+Prevalence of current cigarette smoking among adults, 2022
+X6
+LPA_AdjPrev
+Prevalence of no leisure-time physical activity among adults, 2022
+X7
+SLEEP_AdjPrev
+Prevalence of short sleep duration among adults, 2022
+X8
+EMOTIONSPT_AdjPrev
+Prevalence of lack of social and emotional support among adults, 2022
+Table A.4: Details of the health dataset
+31
+
+
+--- Page 32 ---
+Appendix B. Configuration of GeoEvolve Used in the Case Study
+This appendix records the runtime configuration used to evolve the spatial regime
+algorithms reported in this paper, so that the case study can be reproduced without
+consulting Luo et al. (2025). Settings not listed here are inherited from that system
+paper without modification.
+B.1 LLM backbone and evolutionary search
+The framework is LLM-agnostic in principle; any chat-completions backbone may
+be substituted via a single configuration entry. In this case study we used a weighted
+pair of OpenAI models accessed through OpenRouter: openai/gpt-4o as the pri-
+mary model (weight 0.8) and openai/gpt-4.1 as the secondary model (weight 0.2),
+with sampling parameters temperature = 0.7, top_p = 0.95, and max_tokens = 8192.
+The same backbone is used by all agents (Code Evolver, Code Analyzer, Knowledge
+Retriever, and Geo-informed Prompt Generator).
+The code evolver is OpenEvolve
+(Sharma, 2025), which serves as the inner loop. Concretely, all GeoEvolve-based vari-
+ants are run through the open-source Python package geoevolve, distributed alongside
+Luo et al. (2025); the package handles the orchestration of the four agents and exposes
+the configuration entries described below. The total evolutionary budget is held con-
+stant at 100 iterations across all variants: for OpenEvolve-based variants this is a single
+flat loop of 100 iterations; for GeoEvolve-based variants it is 10 outer-loop cycles, each
+invoking the analyzer, retriever (when enabled), and prompt generator once, with 10
+inner-loop iterations per cycle. The search uses a MAP-Elites population of 50 pro-
+grams with archive size 20, organized into 5 islands, with elite/exploration/exploitation
+selection ratios of (0.1, 0.2, 0.7) and a 10 × 10 (score, complexity) feature map. Each
+evaluation is allowed up to 100 seconds and at most three retries.
+B.2 Algorithm variants
+Five variants are compared in addition to the unevolved seed: (i) OpenEvolve
+(No GeoKnow.), the vanilla code-evolution loop with no domain-knowledge injection;
+(ii) OpenEvolve (General GeoKnow.), a fixed natural-language hint about general
+spatial-modeling concerns (Tobler’s first law, spatial autocorrelation, scale effects); (iii)
+OpenEvolve (Specific GeoKnow.), a fixed hint additionally listing spatial-regime-
+specific modifications such as contiguity penalties and region-size balancing; (iv) Geo-
+Evolve (No GeoKnowRAG), the full multi-agent dialogue with the retrieval module
+disabled; and (v) GeoEvolve, the complete pipeline with GeoKnowRAG enabled. The
+prompt templates for (ii) and (iii) match those in Luo et al. (2025, Section 4).
+B.3 GeoKnowRAG and code analyzer
+The geospatial knowledge database is reused unchanged from Luo et al. (2025): 124
+documents (75,228 chunks in the vector store, verified against the archived database
+used for the reported runs) drawn from peer-reviewed publications, Wikipedia entries,
+and open-source GitHub repositories, organized into five categories (geostatistics, spa-
+tial theory, GIScience, spatial statistics, and spatial modeling). Representative key-
+words span kriging theory, Tobler’s first law, spatial autocorrelation, the modifiable
+areal unit problem, and spatial-interaction models. Chunks of 300 tokens (50-token
+overlap) are embedded with text-embedding-3-large, stored in a Chroma vector
+32
+
+
+--- Page 33 ---
+database, and retrieved with RAG-Fusion (reciprocal rank fusion over multi-angle
+sub-queries).
+The Code Analyzer is prompted to (i) identify missing or problem-
+atic geographic knowledge, (ii) suggest up to three search queries for the retriever,
+and (iii) flag whether code examples or theoretical background are needed; it re-
+turns strict JSON with keys missing_or_problematic_knowledge, search_queries,
+need_code_examples, and need_geographical_theory.
+B.4 Task-specific settings for spatial regime discovery
+The settings below differ from Luo et al. (2025) only because the case study ad-
+dresses a different task. The seed algorithm A0 is Two-stage K-Models (Guo et al.,
+2023) (Section 4.1). The simulator produces 150 grids of size 25 × 25 (Section 4.2.1),
+evenly split across three latent regime patterns (Rectangular, Voronoi, Arbitrary) at
+the high-noise level. The fitness signal is the Rand Index against the ground-truth
+partition (Section 4.2.1); no SSR-family metric is used as a fitness signal. The target
+number of regions is p = 5 on simulated data, and on real-world data p is inferred
+from the dataset’s administrative-unit structure (Section 4.3.1). The spatial weights
+matrix is a rook-contiguity matrix from libpysal.weights.lat2W on the 25×25 grid
+for simulated data, and a row-standardized k-nearest-neighbor matrix with k = 6 for
+real-world data. The minimum region size is 10 cells (simulated) and 10 observa-
+tions (real-world). The evaluation metrics (SSR, SSR Reduction, RMSE, Variance
+Ratio) are computed post-hoc by the evaluation harness and are never observed by Φ
+during evolution; on real-world data they are model-fit statistics rather than predictive
+scores, for the reasons set out in Section 4.3.1.
+Appendix C. Computational Cost of the Case Study
+This appendix reports what it cost to run the case study, separating two quantities
+that are easily conflated: the cost of discovering an algorithm (the evolution loop)
+and the cost of running the discovered algorithm (inference). Both are measured, not
+estimated.
+Token counts are recorded per API call by instrumenting the client SDK, so they
+cover the inner evolution loop, the four GeoEvolve agents, and GeoKnowRAG retrieval
+and embedding calls alike. We report token counts rather than monetary cost because
+tokens are a property of the run, whereas prices depend on the provider and change
+over time; a reader can convert to their own provider’s rates. (At the provider list
+prices in effect in August 2026, the measured usage corresponds to roughly US$6–11
+per 100-iteration run: US$5.5–6.4 for the GeoEvolve variants and US$10.3–11.3 for the
+OpenEvolve variants.)
+Elapsed time is measured from the start of an evolution run to the completion of
+its final iteration, and inference time is the mean runtime of a discovered algorithm
+per grid over the 150 grids. All timings were measured on one machine (Apple M5);
+inference used six worker processes.
+Three observations follow from Table C.5. First, a complete 100-iteration evolution
+is inexpensive in absolute terms: under 4M tokens and roughly an hour of elapsed time
+at most for every variant. Discovery cost is therefore not the binding constraint on this
+kind of work; run-to-run variance is (Section 5.2).
+33
+
+
+--- Page 34 ---
+Variant
+Evolution (one 100-iteration run)
+Inference
+API calls
+Tokens (millions)
+Elapsed time (min)
+Seconds per grid
+Input
+Output
+GeoEvolve (GeoKnowRAG)
+213
+1.66
+0.17
+32
+69.95 ± 103.05 (10.45†)
+GeoEvolve (No GeoKnowRAG)
+100
+1.88
+0.19
+52
+1.68
+OpenEvolve (General GeoKnow.)
+100
+3.82
+0.18
+20
+0.91
+OpenEvolve (Specific GeoKnow.)
+100
+3.97
+0.18
+11
+7.42
+OpenEvolve (No GeoKnow.)
+100
+3.69
+0.17
+10
+2.99
+Table C.5: Average measured computational cost per variant. Evolution columns refer to one 100-
+iteration evolution run; Inference is the runtime of the discovered algorithm on one 625-cell grid. For
+GeoEvolve (GeoKnowRAG) the inference column reports the mean ± SD over all three evolution runs,
+followed in parentheses by the trimmed mean† that excludes the one run whose refinement step lacks
+early stopping (tail behaviour described in the text); no other variant has any run excluded from any
+column. Measurement conditions are described in the text.
+Second, the GeoEvolve variants consume roughly half the input tokens of the
+OpenEvolve variants (1.7–1.9M versus 3.7–4.0M) despite issuing about twice as many
+API calls. The reason is structural rather than a property of retrieval: GeoEvolve
+restarts the inner loop every ten iterations, so the program database — from which the
+prompt draws its top-performing and diverse exemplars — is rebuilt each round and
+supplies fewer exemplars in the early iterations of every round. A flat 100-iteration loop
+instead accumulates a full archive and quickly saturates the prompt. Measured per-call
+prompt length shows this directly: GeoEvolve prompts follow a sawtooth from ∼7k to-
+kens at the start of each round to ∼40k by its end (median ∼22k), whereas OpenEvolve
+prompts sit near ∼42k throughout. Disabling GeoKnowRAG leaves this profile essen-
+tially unchanged (median 21.7k versus 21.8k with retrieval enabled), confirming that
+the saving comes from the two-loop schedule and not from retrieval compression.
+Third, inference cost varies far more across variants than discovery cost does, and
+the ordering does not follow accuracy. The overhead of the GeoEvolve algorithm rel-
+ative to the seed comes from two explicit and adjustable choices — the number of
+candidate cluster counts searched in stage one, and the iteration budget and patience
+of the border-refinement step — rather than from any fixed property of the framework.
+One evolved program illustrates the risk of leaving those choices unconstrained: its re-
+finement step has no early stopping, so although its median grid takes 4.8 s, it exceeds
+ten minutes on 19 of the 150 grids, for a per-grid mean of 188.9 s. The missing early
+stopping makes it slow, not unreliable: like every other frozen program, it completes
+all 150 grids. This slow behaviour is itself an outcome of the discovery process, so
+Table C.5 reports the inference cost of GeoEvolve (GeoKnowRAG) over all three runs,
+with the clearly marked trimmed mean that excludes this run summarizing typical
+behaviour rather than the tail. Evolution optimizes the fitness signal it is given, and
+runtime was not part of that signal; a multi-objective fitness that prices runtime would
+be a natural extension (Section 6).
+Appendix D. Evolved Algorithm versus Seed under a Matched Budget, and
+Component Ablations
+Compared with its seed, the evolved algorithm spends more computation at infer-
+ence: it searches six initial cluster counts and adds a border-refinement stage. This
+34
+
+
+--- Page 35 ---
+appendix asks whether its advantage in Table 3 comes from that extra computation
+or from its algorithmic content. Two analyses answer the question: a comparison with
+the seed given the same search under a matched budget, and one-component ablations
+of the evolved algorithm.
+ARI, not SSR, is the comparison of record in this appendix. The reason
+is structural. Because no ground-truth information may enter a candidate program
+(Principle 4, Section 3.2.3), every selection rule available in this study — inside the
+evolved algorithm and inside the matched-budget wrapper alike — must rank candidate
+partitions by post-merge SSR. SSR is therefore the one quantity that additional search
+can buy directly, and a search-based baseline will narrow the SSR gap whether or not it
+has recovered any more of the regime structure. ARI, agreement with the ground-truth
+partition, is reachable by no selection rule here, and it is the quantity spatial regime
+discovery is defined on. Closeness on SSR between a search-based baseline and the
+evolved algorithm is accordingly weak evidence of equivalence, and the two columns
+are read separately below.
+All variants are evaluated by the harness of Section 4.2.1 on the same 150 grids, in
+a single batch on one machine. The reference row is the single frozen algorithm A⋆that
+is carried forward to the real-world study, scored grid by grid; its figures are therefore
+not the three-run means of Table 3, where the spread is across evolution runs rather
+than across grids. Table D.6 reports the results; the programs, the runner, and the
+per-grid results are in the project repository.
+Evolved algorithm versus seed under a matched budget. This analysis tests whether
+extra search alone reproduces the evolved algorithm’s advantage. The baseline is the
+seed program, left unmodified, called by an external wrapper. The wrapper repeats
+the seed’s partition-and-merge procedure over the same six initial cluster counts that
+the evolved algorithm searches, {⌊2.5p⌋, 4p, ⌊√n⌋, p, p+1, p+2}, draws a fresh random
+restart on each pass, and returns the run with the lowest post-merge SSR, which is the
+label-free selection rule the evolved algorithm itself uses. It stops once it has used the
+evolved algorithm’s mean per-grid runtime in the same batch (7.5 s). The remaining
+asymmetries favour the baseline: it always completes at least one full pass over the
+six counts, and it checks the budget only between runs, so it actually takes 1.11 times
+as long as the evolved algorithm. The outcome divides along exactly the line drawn
+above. On ARI, which no selection rule in this study can target, the gap persists in all
+three spatial patterns: the evolved algorithm recovers the true regimes better (0.894
+versus 0.854; median ∆ARI +0.043, p = 2.3×10−10), and the budgeted search recovers
+only a little over half of the seed’s deficit (0.801 →0.854, against 0.801 →0.894 for the
+evolved algorithm). On SSR, the quantity the wrapper selects on directly, additional
+search closes most of the gap (seed 80.5, baseline 60.6, evolved 59.0), leaving a small
+but significant margin (median ∆SSR −1.90, p = 2.1×10−5). Additional computation
+therefore accounts for most of the SSR advantage but not for the recovery of the regime
+structure itself, and the asymmetry between the two columns is what a baseline that
+optimizes one of them and not the other should be expected to produce.
+Component ablations. The ablations locate the advantage that remains, and they do
+so in the direction opposite to what a parameter-search account of the gains would
+predict. Each removes one component from the frozen evolved algorithm with a single
+commented change: the initial-cluster-count search (replaced by the seed’s fixed count
+35
+
+
+--- Page 36 ---
+of 20); border refinement (the stage that reassigns boundary units after merging); the
+spatial penalty inside that stage (which discourages moving a unit into a region where
+it has fewer neighbours); or KMeans++ initialization (replaced by the seed’s random
+assignment).
+The one component that is purely a matter of search effort, the initial-cluster-
+count search, contributes the least of the three that contribute at all (median ∆SSR
+−0.33, ∆ARI +0.004), while the structural addition contributes an order of magnitude
+more (border refinement: median ∆SSR −7.09, ∆ARI +0.063, p < 10−24 on both).
+KMeans++ initialization contributes nothing detectable (p = 0.68) while accounting
+for 43% of the runtime — a component the search had no reason to prune, because
+runtime was not part of the fitness signal (Appendix C). The spatial penalty is the
+clearest case of all: it contributes +0.039 ARI even though removing it lowers SSR
+(median ∆SSR +1.80, p = 3.9 × 10−19), trading fit for agreement with the true struc-
+ture. Because its value is negative in the algorithm’s own selection objective, no tuning
+of the seed’s parameters against that objective could have found it; it is a structural
+contribution of the discovery process rather than a setting a grid search would have
+reached.
+Variant
+SSR ↓
+ARI ↑
+Rel. time
+∆SSR
+∆ARI
+median
+p
+median
+p
+Evolved algorithm (reference)
+58.96 ± 9.46
+0.894 ± 0.096
+1.00
+(a) Seed under a matched budget
+Seed, single run
+80.52 ± 20.11
+0.801 ± 0.105
+0.10
+−17.87
+1.1 × 10−24
++0.084
+6.0 × 10−21
+Seed + matched-budget search
+60.60 ± 8.64
+0.854 ± 0.091
+1.11
+−1.90
+2.1 × 10−5
++0.043
+2.3 × 10−10
+(b) Evolved algorithm with one component removed
+w/o initial-k search
+62.35 ± 12.08
+0.873 ± 0.114
+0.56
+−0.33
+4.3 × 10−5
++0.004
+6.3 × 10−3
+w/o border refinement
+68.72 ± 13.68
+0.830 ± 0.094
+0.98
+−7.09
+2.1 × 10−25
++0.063
+2.4 × 10−26
+w/o spatial penalty
+56.54 ± 8.53
+0.852 ± 0.092
+0.99
++1.80
+3.9 × 10−19
++0.039
+1.1 × 10−24
+w/o KMeans++ initialization
+57.90 ± 7.09
+0.902 ± 0.092
+0.57
+0.00
+0.68
+0.000
+0.68
+Table D.6: Matched-budget comparison and one-component ablations on the 150 high-noise grids.
+ARI is the comparison of record: SSR is the quantity every selection rule in this study
+optimizes directly (Principle 4), so closeness on SSR does not indicate equivalence. SSR
+and ARI are mean ± SD over grids, computed externally by the harness.
+∆SSR and ∆ARI are
+per-grid medians of (evolved −variant), each with the p-value of a paired Wilcoxon signed-rank test;
+negative ∆SSR and positive ∆ARI favour the evolved algorithm. Paired medians are reported because
+the per-grid SSR distribution is right-skewed, so they need not match the difference of the means in
+the first column. Rel. time is each program’s mean per-grid runtime relative to the evolved algorithm
+(= 1.00), all measured in the same batch. The two identical p-values in the last row arise from the
+signed-rank statistic taking mirror-image values on the two metrics; they are a coincidence, not a
+transcription error.
+Appendix E. Worked Example of the Automatic Code Formatter on Two-
+stage K-Models
+This appendix traces what the automatic code formatter (Module 2 , Section 3.2.2)
+did when applied to the Two-stage K-Models seed. The formatter’s job is to turn the
+raw source into the standardized triple (Ainit, Eeval, Cconfig) introduced in Section 3.2.2,
+plus a small metadata file. Figure S1 summarizes the end-to-end run; Sections Ap-
+pendix E.1–Appendix E.3 below show the raw input, the three produced artifacts, and
+a short narrative of the case-study-specific elements.
+36
+
+
+--- Page 37 ---
+Raw algorithm (file/folder)
+LLM Chain #1
+1. Split code into EVOLVE-BLOCK.
+2. Generate run_algorithm().
+3. Check AST with max 2 attempts.
+LLM Chain #2
+1. Analyze fiteness signal.
+2. Generate evaluator.
+LLM Chain #3
+1. Generate configuration.
+2. Inject API KEY.
+3. Generate metadata.
+initial_program.py (
+)
+evaluator.py (
+)
+config.yaml (
+)
+_format_metadata.json
+Figure S1: Trace of the automatic code formatter on the Two-stage K-Models seed. Three LLM chains
+transform the raw .py input into the standardized triple plus a metadata file: initial_program.py
+(Ainit), evaluator.py (Eeval), config.yaml (Cconfig), and _format_metadata.json.
+Chain #1 is
+followed by a deterministic syntactic check that parses the generated program with Python’s ast
+module, locates the standardized run_algorithm entry function, and verifies that its body contains
+at least one return statement returning a non-None value; when the check fails, an LLM-driven repair
+step is invoked at most twice before the formatter falls back to the user. For this seed the check passed
+on the first attempt.
+Appendix E.1. Input: the raw Two-stage K-Models implementation
+The raw input Araw was a single .py file containing our implementation of the
+Two-stage K-Models algorithm of Guo et al. (2023).
+The core of the file is the
+two-stage entry point, reproduced in abbreviated form in Listing 1:
+a first-stage
+run_kmodels call that partitions the units into 20 sub-regions, followed by a second-
+stage merge_stage that enforces spatial contiguity, removes regions below min_size,
+and merges until exactly p regions remain. The file also contains the underlying helper
+functions (init_zones, fit_equations, closest_equation, merge_small_regions,
+greedy_merge_until_p, . . . )
+and the data-loading / metric-computation utilities.
+Crucially, the raw file does not declare which parts of the code should be considered
+mutable by an evolutionary loop and does not expose a uniform entry point for an
+external evaluator, those are the two responsibilities the formatter takes on.
+Listing 1: Excerpt from the raw Two-stage K-Models source Araw given to the formatter (helper
+functions and data-loading utilities elided).
+import numpy as np
+import libpysal
+def run_two_stage_kmeans(
+X, Y, p, w,
+min_size=None, max_iter=1000,
+init_stoc_step=True, verbose=False):
+"""A two-step kmeans-like regionalization algorithm."""
+if min_size is None:
+min_size = X.shape[1]
+# Stage 1: partition into 20 sub-regions
+labels_partition = run_kmodels(
+37
+
+
+--- Page 38 ---
+X, Y, n_regions=20, w=w,
+min_size=min_size, max_iter=max_iter,
+init_stoc_step=init_stoc_step, verbose=verbose)
+# Stage 2: merge into p connected regions
+labels_merged = merge_stage(
+X, Y, labels_partition, w,
+p=p, min_size=min_size, verbose=verbose)
+return labels_merged
+Appendix E.2. Output: the standardized triple
+Appendix E.2.1. Initial program Ainit
+The formatter wrapped the algorithmic core of Araw in a single # EVOLVE-BLOCK-START
+/ # EVOLVE-BLOCK-END pair and appended a standardized entry function named run_algorithm
+below the block. The function name is fixed by the formatter (it is the same name the
+formatter uses for every seed, and the same name the AST-based validation step checks
+for), so that the evaluator can always import the program and call run_algorithm()
+without seed-specific code. The block contains the entire two-stage algorithm together
+with all helper routines that depend on the regionalization logic; the entry function lives
+outside the block so that the inner loop cannot mutate the interface that the evaluator
+relies on. Listing 2 shows the boundaries of the resulting initial_program.py.
+Listing 2:
+Boundaries of the formatter-produced initial_program.py (Ainit).
+The evolvable
+block contains the partitioning loop, the merge stage, and all helper functions; the standardized
+run_algorithm() entry function below the block is what the evaluator calls.
+# EVOLVE-BLOCK-START
+import time
+import numpy as np
+import libpysal
+def run_two_stage_kmeans(X, Y, p, w, min_size=None,
+max_iter=1000, init_stoc_step=True,
+verbose=False):
+... # algorithmic core
+return labels_merged
+def run_kmodels(...): ... # Stage 1 (partition)
+def merge_stage(...): ... # Stage 2 (merge)
+def init_zones(...): ... # initialization
+def fit_equations(...): ... # per-region OLS
+# ... other helpers ...
+# EVOLVE-BLOCK-END
+# --- standardized entry function (not mutated by the inner loop) ---
+def run_algorithm():
+"""Run Two-stage K-Models on every simulated grid and return
+the mean of the five evaluator-facing metrics."""
+base_path = ’.../synthetic’
+data_ids = (5, 75, 149)
+ssr_list, randi_list, nmi_list, mae_list, time_list = [],[],[],[],[]
+for id_ in data_ids:
+data_path = f’{base_path}/grid_{id_}h.txt’
+ssr, randi, nmi, mae, used_time = run_georegime_once(data_path)
+ssr_list.append(ssr); randi_list.append(randi)
+nmi_list.append(nmi); mae_list.append(mae)
+38
+
+
+--- Page 39 ---
+time_list.append(used_time)
+return (np.mean(ssr_list), np.mean(randi_list),
+np.mean(nmi_list), np.mean(mae_list),
+np.mean(time_list))
+Appendix E.2.2. Evaluator module Eeval
+The formatter wrote a evaluator.py module whose evaluate(program_path) en-
+try point dynamically loads Ainit with importlib, calls program.run_algorithm()
+on the simulator under a 100-second wall-clock timeout, and returns a dictionary of
+five metrics together with a combined_score field that is the single scalar actually
+consumed by the inner loop. Listing 3 shows the body of evaluate(). The key design
+choice visible in the listing is that combined_score is set to randi: the Rand Index
+is what drives evolutionary selection, while SSR, NMI, MAE, and used_time are re-
+turned and logged but never fed back as fitness. This is the code-level enforcement of
+the fitness/evaluation separation prescribed by the training protocol of Section 3.2.3.
+Listing 3: Body of the formatter-produced evaluator.py (Eeval). The combined_score field (last line
+of the returned dict) is what the inner-loop engine uses for selection; all other metrics are logged but
+do not influence the search.
+def evaluate(program_path):
+spec = importlib.util.spec_from_file_location("program", program_path)
+program = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(program)
+if not hasattr(program, "run_algorithm"):
+print("Error: program lacks the expected entry function")
+ssr, randi, nmi, mae, used_time = run_with_timeout(
+program.run_algorithm,
+timeout_seconds=100)
+return {"ssr": ssr,
+"randi": randi, # fitness signal (RandI vs ground truth)
+"nmi": nmi,
+"mae": mae,
+"used_time": used_time,
+"combined_score": randi} # drives evolutionary selection
+Appendix E.2.3. Configuration file Cconfig
+The formatter emitted a YAML configuration file with five blocks: general evo-
+lution settings, LLM settings, prompt configuration, population/archive parameters
+for OpenEvolve’s MAP-Elites database, and evaluator settings. The most case-study-
+specific block is the prompt configuration, where the formatter inserted a domain-
+specific system message instructing the LLM that the task is to improve a spatial
+regime algorithm and that the optimization target is the Rand Index. Listing 4 shows
+the relevant blocks (full file: 100 lines). The LLM-generated YAML initially contains
+the literal placeholder "YOUR_API_KEY" for llm.api_key; the formatter then post-
+processes the file to replace the placeholder with whichever of OPENROUTER_API_KEY,
+OPENAI_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, or ANTHROPIC_API_KEY is present
+in the environment (resolved in that priority order), and to rewrite llm.api_base so it
+matches the backend implied by the model name (e.g. OpenRouter, Gemini’s OpenAI-
+compatible endpoint, or Groq). The injection happens at write time so that no secret
+ever lives in the source tree or in version control.
+39
+
+
+--- Page 40 ---
+Listing 4: Key blocks of the formatter-produced config.yaml (Cconfig). API keys are written to the
+file at run time from an environment variable so that no secret enters version control.
+# --- General evolution settings ---
+max_iterations: 10 # inner-loop iterations per outer cycle; GeoEvolve runs 10
+cycles for 100 total (Appendix B.1); for OpenEvolve-only variants this is
+overridden to 100 to run a single flat loop
+diff_based_evolution: true
+max_code_length: 25000
+# --- LLM configuration ---
+llm:
+primary_model: "openai/gpt-4o"
+primary_model_weight: 0.8
+secondary_model: "openai/gpt-4.1"
+secondary_model_weight: 0.2
+temperature: 0.7
+top_p: 0.95
+max_tokens: 8192
+# --- Prompt configuration (task-specific) ---
+prompt:
+system_message: "You are an expert in GIS and an experienced
+coder. Your task is to improve the Spatial Regime algorithm
+in Python ... The target is to maximize Rand index (RandI)."
+# --- Database (MAP-Elites + island model) ---
+database:
+population_size: 50
+archive_size: 20
+num_islands: 5
+elite_selection_ratio: 0.1
+exploration_ratio: 0.2
+exploitation_ratio: 0.7
+feature_dimensions: ["score", "complexity"]
+feature_bins: 10
+# --- Evaluator ---
+evaluator:
+timeout: 100
+max_retries: 3
+parallel_evaluations: 4
+Appendix E.2.4. Run metadata _format_metadata.json
+Alongside the standardized triple, the formatter writes a small JSON file with
+the information needed to audit and reverse the formatting run after the fact. For
+the Two-stage K-Models seed it contains six fields:
+original_path (the absolute
+path of the raw input), original_type ("file" or "directory"; "file" for this
+seed), original_files (a map from each input filename to the SHA-256 hash of
+its content), run_function_name (always "run_algorithm" in the current format-
+ter), description (the natural-language algorithm description the user supplied when
+invoking the formatter), and created_at (an ISO 8601 timestamp). This file is not con-
+sumed by the inner-loop engine; it is read by the companion function restore_from_geoevolve(),
+which uses original_path / original_type to decide whether to write a single file or
+40
+
+
+--- Page 41 ---
+a folder and uses original_files to verify, via hash comparison, that the raw source
+has not been modified since the formatter was run.
+Appendix E.3. Narrative
+Evolvable-block identification. The formatter identified a single evolvable region in Araw
+and placed one # EVOLVE-BLOCK-START / # EVOLVE-BLOCK-END pair around it. The
+region it chose corresponds to the partitioning loop, the merge stage, and all of their
+helper routines, exactly the algorithmic locus that subsequent evolved variants ended
+up modifying. The data-loading utility (input_data), the metric-computation class
+(RegionMetrics), and the per-dataset driver (run_georegime_once) were correctly
+kept outside the block, which is what made it safe for the evolved variants to mutate
+the algorithm without breaking the evaluator-facing interface.
+First-pass correctness of the evaluator. The evaluator generated by the second chain
+ran successfully on the first attempt: it imported Ainit, found the standardized run_algorithm
+entry function, called it under the 100-second timeout, and reported the five-metric dic-
+tionary together with combined_score set to randi. The deterministic AST-based val-
+idation step on run_algorithm (Figure S1) was therefore not triggered, and the LLM-
+driven repair step was not invoked. The reverse operation, restore_from_geoevolve(),
+was not used at this stage of the case study but is available for splicing an evolved
+initial_program.py back into the user’s original file structure using the hashes and
+paths recorded in _format_metadata.json.
+Configuration choices. The configuration file was produced in one pass and reflects
+the OpenEvolve defaults with one task-specific override: the system message embeds
+the domain ("Spatial Regime algorithm") and the optimization target ("Rand index").
+The MAP-Elites feature dimensions score and complexity were left at their defaults;
+the LLM choice (GPT-4o as primary with GPT-4.1 as a secondary fallback) and the
+temperature 0.7 were inherited from the formatter’s prompt template and not modified
+per task.
+Appendix F. Detailed K-Models Variant Comparison
+This appendix provides the detailed within-family breakdown of the six Two-stage
+K-Models variants on real-world data, complementing the main-text comparison of
+GeoEvolve against the four classical regionalization baselines (Section 5.3) and the per-
+pattern simulation breakdown already reported in Table 3. The real-world breakdown
+spans all 11 datasets in four application domains: climate, health, hydrology, and
+politics, and includes a fine-grained six-variant regime-map breakdown (Figure S4).
+Real-world cross-domain bar chart: full ten-algorithm comparison. Figure S2 expands
+the compact ten-algorithm SSR-Reduction summary in main-text Figure 6 and the
+six-algorithm Table 4 into a per-dataset, four-metric breakdown across all 11 datasets,
+additionally displaying the three OpenEvolve variants and GeoEvolve without Geo-
+KnowRAG (which are absent from Table 4) so that readers can see the full within-
+family detail of the K-Models seed and all its evolved variants alongside the four classi-
+cal baselines. The patterns visible in this fuller chart are consistent with the main-text
+summary: GeoEvolve is the most consistent winner on RMSE and SSR Reduction
+41
+
+
+--- Page 42 ---
+across both the K-Models family and the classical baselines; AZP is the most compet-
+itive classical baseline on R2; and the OpenEvolve variant with a general geographic-
+knowledge prompt attains a high Variance Ratio (mean 0.487, five first-place wins out
+of 11 datasets), although it does not match GeoEvolve on RMSE or SSR Reduction.
+ERA5
+Arthr.
+BPHigh
+Cancer
+Asthma
+Depr.
+Diab.
+Obesity
+Stroke
+CAMELS
+Voting
+0.6
+0.8
+1.0
+Avg R²
+Climate
+Health
+Hydro.
+Politics
+Avg R²
+ERA5
+Arthr.
+BPHigh
+Cancer
+Asthma
+Depr.
+Diab.
+Obesity
+Stroke
+CAMELS
+Voting
+10
+1
+100
+Avg RMSE (log)
+Climate
+Health
+Hydro.
+Politics
+Avg RMSE
+ERA5
+Arthr.
+BPHigh
+Cancer
+Asthma
+Depr.
+Diab.
+Obesity
+Stroke
+CAMELS
+Voting
+0.25
+0.50
+0.75
+SSR Reduction
+Climate
+Health
+Hydro.
+Politics
+SSR Reduction
+ERA5
+Arthr.
+BPHigh
+Cancer
+Asthma
+Depr.
+Diab.
+Obesity
+Stroke
+CAMELS
+Voting
+0.0
+0.5
+1.0
+Variance Ratio
+Climate
+Health
+Hydro.
+Politics
+Variance Ratio
+AZP
+Region-K-Models
+GWR-Skater
+Skater-reg
+2kmodels
+OE-NoGeo
+OE-SimpGeo
+OE-SpecGeo
+GE-NoRAG
+GeoEvolve
+Best
+Figure S2: Full ten-algorithm performance comparison across the 11 real-world datasets, grouped
+by domain. Algorithms are split into four classical regionalization baselines (cool palette) and six
+Two-stage K-Models variants (warm palette).
+The legend abbreviations for the K-Models family
+are: 2kmodels = unevolved Two-stage K-Models seed; OE-NoGeo = OpenEvolve without geographic
+knowledge; OE-SimpGeo = OpenEvolve with general (simple) geographic knowledge prompt; OE-
+SpecGeo = OpenEvolve with task-specific geographic knowledge prompt; GE-NoRAG = GeoEvolve
+without the GeoKnowRAG retrieval module; GeoEvolve = the full GeoEvolve pipeline with Geo-
+KnowRAG. Red stars indicate the best algorithm on each dataset and metric.
+Sensitivity to the number of spatial regimes. Figure S3 examines the sensitivity of
+algorithm performance to the prescribed number of spatial regimes (R), ranging from
+3 to 12. SSR reduction and the variance ratio increase monotonically across all three
+algorithms, while average RMSE decreases correspondingly, consistent with the greater
+flexibility of finer spatial partitions. Across the considered range of R, GeoEvolve tends
+to attain higher SSR reduction and variance ratio, and lower average RMSE. Notably,
+42
+
+
+--- Page 43 ---
+GeoEvolve at R = 6 already matches the SSR reduction achieved by the seed 2KModels
+at R = 8.
+3
+4
+5
+6
+7
+8
+10
+12
+Number of regions
+Number of regions
+Number of regions
+Number of regions
+0.3
+0.4
+0.5
+0.6
+0.7
+SSR Reduction
+3
+4
+5
+6
+7
+8
+10
+12
+0
+1
+2
+3
+Avg RMSE
+Seed
+OpenEvolve
+OpenEvolve
+GeoEvolve
+3
+4
+5
+6
+7
+8
+10
+12
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+Variance Ratio
+Figure S3: Sensitivity of algorithm performance to the number of spatial regimes. Each panel reports
+the mean value (solid line) ± one standard deviation (shaded band) across 11 datasets for SSR
+Reduction ↑(left), Variance Ratio ↑(center), and Average RMSE ↓(right).
+Spatial regime assignments across the six K-Models variants. Figure S4 reports the
+regime maps for all six Two-stage K-Models variants on four representative datasets
+(Climate / Health / Hydrology / Politics), complementing the classical-baseline maps
+in main-text Figure 7.
+The figure isolates the visual effect of each step along the
+knowledge-injection design axis (no prompt →general prompt →specific prompt →
+multi-agent dialogue without retrieval →full GeoKnowRAG). Several qualitative pat-
+terns stand out across the four domains. In the climate domain, all variants produce a
+similar macro-structure that separates the western arid/semi-arid zone from the more
+humid east, and GeoEvolve tends to draw sharper boundaries along the Rocky Moun-
+tain front. In the health domain (Cancer dataset as an example), the seed algorithm
+tends to produce a single dominant region spanning the eastern United States, whereas
+GeoEvolve yields a more balanced partition that distinguishes the Appalachian corri-
+dor from the southeastern coastal plain. The hydrology domain shows the greatest
+agreement across methods, reflecting the strong hydroclimatic zonation of the contigu-
+ous United States. For politics, GeoEvolve delineates a sharper urban-corridor versus
+rural-interior contrast, particularly along the Northeast–Mid-Atlantic megalopolis and
+the Pacific coast.
+43
+
+
+--- Page 44 ---
+(a) Climate (ERA5)  2kmodels (k=9)
+Climate
+2kmodels
+(b) Climate (ERA5)  OE-NoGeo (k=9)
+OE-NoGeo
+(c) Climate (ERA5)  OE-SimpGeo (k=21)
+OE-SimpGeo
+(d) Climate (ERA5)  OE-SpecGeo (k=9)
+OE-SpecGeo
+(e) Climate (ERA5)  GE-NoRAG (k=9)
+GE-NoRAG
+(f) Climate (ERA5)  GeoEvolve (k=9)
+GeoEvolve
+(g) Health (Cancer)  2kmodels (k=8)
+Health
+(h) Health (Cancer)  OE-NoGeo (k=8)
+(i) Health (Cancer)  OE-SimpGeo (k=13)
+(j) Health (Cancer)  OE-SpecGeo (k=8)
+(k) Health (Cancer)  GE-NoRAG (k=8)
+(l) Health (Cancer)  GeoEvolve (k=8)
+(m) Hydrology (CAMELS)  2kmodels (k=10)
+Hydrology
+(n) Hydrology (CAMELS)  OE-NoGeo (k=10)
+(o) Hydrology (CAMELS)  OE-SimpGeo (k=20)
+(p) Hydrology (CAMELS)  OE-SpecGeo (k=11)
+(q) Hydrology (CAMELS)  GE-NoRAG (k=10)
+(r) Hydrology (CAMELS)  GeoEvolve (k=10)
+(s) Politics (Voting)  2kmodels (k=8)
+Politics
+(t) Politics (Voting)  OE-NoGeo (k=8)
+(u) Politics (Voting)  OE-SimpGeo (k=16)
+(v) Politics (Voting)  OE-SpecGeo (k=8)
+(w) Politics (Voting)  GE-NoRAG (k=8)
+(x) Politics (Voting)  GeoEvolve (k=8)
+Figure S4: Regime-partitioning maps produced by the six Two-stage K-Models variants on the same
+four representative real-world datasets, all under the unified evaluation protocol of Section 4.3.1.
+Column-header abbreviations are as in Figure 6:
+2kmodels (unevolved seed), OE-NoGeo / OE-
+SimpGeo / OE-SpecGeo (OpenEvolve variants with no, general, and specific geographic-knowledge
+prompts), GE-NoRAG (GeoEvolve without GeoKnowRAG), and GeoEvolve (full GeoEvolve with
+GeoKnowRAG).
+Dominant covariate maps. Figure S5 maps the dominant covariate, defined as the pre-
+dictor with the largest absolute standardized coefficient (arg max |β|) excluding the
+intercept, for each observation. The seed algorithm produces relatively fragmented,
+locally heterogeneous patterns; OpenEvolve introduces more spatial continuity with
+partially consolidated regions; GeoEvolve produces more spatially coherent and re-
+gionally structured regimes, with clearer clustering and smoother transitions between
+dominant covariates. For health, hydrology, and politics, the leading drivers across the
+three algorithms are similar (no exercise, precipitation, and the percentage of Black
+residents, respectively); in the climate domain, the dominant covariate differs across
+algorithms, with thermal radiation most prominent for the GeoEvolve-evolved version.
+44
+
+
+--- Page 45 ---
+Clim at e
+(a) Climate (ERA5) Seed
+Seed
+(b) Climate (ERA5) OpenEvolve
+OpenEvolve
+(c) Climate (ERA5) GeoEvolve
+GeoEvolve
+Health
+(d) Health (Cancer) Seed
+(e) Health (Cancer) OpenEvolve
+(f) Health (Cancer) GeoEvolve
+Hydrology
+(g) Hydrology (CAMELS) Seed
+(h) Hydrology (CAMELS) OpenEvolve
+(i) Hydrology (CAMELS) GeoEvolve
+Politics
+(j) Politics (Voting) 
+Seed
+(k) Politics (Voting) 
+OpenEvolve
+(l) Politics (Voting) 
+GeoEvolve
+Checkup
+Dental
+Binge
+Smoking
+No Exercise
+No Emotional Support
+Precipitation
+Surface Pressure
+Thermal Radiation
+Solar Radiation
+Precipitation
+Aridity
+Forest Fraction
+Soil Depth
+Sand Fraction
+Porosity
+% Black
+% Hispanic
+% Bachelor
+ln(Pop. Density)
+Figure S5: Dominant covariates by spatial regime across datasets and algorithm variants.
+Spatially varying regression coefficients. Figure S6 illustrates the spatial variation of
+one scientifically relevant regression coefficient per domain: solar radiation (β7) for cli-
+mate, smoking rate (β5) for health, precipitation (β1) for hydrology, and the percentage
+of bachelor’s degrees (β4) for politics. In the climate domain, the solar radiation co-
+efficient is strongly positive in the western US, where solar insolation drives surface
+temperature, and decreases eastward under the influence of cloud cover and humidity.
+GeoEvolve produces sharper transitions near the 100th meridian, consistent with the
+well-documented aridity boundary. The precipitation coefficient in the hydrology do-
+main is strongly positive in high-runoff regimes (Pacific Northwest, Appalachian high-
+lands) and weakly positive in arid regimes; this pattern is preserved across algorithms
+but is more sharply drawn by GeoEvolve.
+45
+
+
+--- Page 46 ---
+Clim at e
+(a) Climate (ERA5) seed
+Seed
+(b) Climate (ERA5) OpenEvolve
+OpenEvolve
+(c) Climate (ERA5) GeoEvolve
+GeoEvolve
+Health
+(d) Health (Cancer) seed
+(e) Health (Cancer) OpenEvolve
+(f) Health (Cancer) GeoEvolve
+Hydrology
+(g) Hydrology (CAMELS) seed
+(h) Hydrology (CAMELS) OpenEvolve
+(i) Hydrology (CAMELS) GeoEvolve
+Politics
+(j) Politics (Voting) 
+Initial
+(k) Politics (Voting) 
+OpenEvolve
+(l) Politics (Voting) 
+GeoEvolve
+4
+2
+0
+2
+4
+: Solar Radiation (ssrd)
+0.5
+0.0
+0.5
+: Smoking Rate
+2
+0
+2
+: Precipitation (p_mean)
+10
+5
+0
+5
+10
+: % Bachelor Degree
+Figure S6: Spatial heterogeneity of one selected regression coefficient across regimes and algorithm
+variants.
+References
+Addor, N., Newman, A.J., Mizukami, N., Clark, M.P., 2017. The camels data set:
+catchment attributes and meteorology for large-sample studies. Hydrology and Earth
+System Sciences 21, 5293–5313.
+Akinboyewa, T., Li, Z., Ning, H., Lessani, M.N., 2025.
+GIS Copilot: towards an
+autonomous GIS agent for spatial analysis. International Journal of Digital Earth
+18, 2497489.
+Anselin, L., 1988. Spatial econometrics: methods and models. Springer Science &
+Business Media.
+Anselin, L., 1995. Local indicators of spatial association—LISA. Geographical Analysis
+27, 93–115.
+Anselin, L., Amaral, P., 2024. Endogenous spatial regimes. Journal of Geographical
+Systems 26, 209–234.
+Assunção, R.M., Neves, M.C., Câmara, G., da Costa Freitas, C., 2006. Efficient region-
+alization techniques for socio-economic geographical units using minimum spanning
+trees. International Journal of Geographical Information Science 20, 797–811.
+46
+
+
+--- Page 47 ---
+Brunsdon, C., Fotheringham, S., Charlton, M., 1998.
+Geographically weighted re-
+gression. Journal of the Royal Statistical Society: Series D (The Statistician) 47,
+431–443.
+Chen, C., Luo, P., Zhao, B., Wang, S., Feng, Y., Meng, L., 2026.
+Ethical spatial
+analysis: Addressing endogenous bias through visual analytics. Journal of Geovisu-
+alization and Spatial Analysis 10, 4. doi:10.1007/s41651-025-00243-2.
+Cressie, N., 1993. Statistics for spatial data. John Wiley & Sons.
+Deb, K., Agrawal, S., Pratap, A., Meyarivan, T., 2000. A fast elitist non-dominated
+sorting genetic algorithm for multi-objective optimization: NSGA-II, in: Interna-
+tional Conference on Parallel Problem Solving from Nature, Springer. pp. 849–858.
+Duque, J.C., Ramos, R., Suriñach, J., 2007. Supervised regionalization methods: A
+survey. International Regional Science Review 30, 195–220.
+Fotheringham, A.S., Brunsdon, C., Charlton, M., 2002. Geographically weighted re-
+gression: the analysis of spatially varying relationships. John Wiley & Sons.
+Fotheringham, A.S., Li, Z., 2023. Measuring the unmeasurable: models of geographical
+context. Annals of the American Association of Geographers 113, 2269–2286.
+Fotheringham, A.S., Yang, W., Kang, W., 2017. Multiscale geographically weighted
+regression (MGWR). Annals of the American Association of Geographers 107, 1247–
+1265.
+Gemini Team, Anil, R., Borgeaud, S., Alayrac, J.B., Yu, J., Soricut, R., Schalkwyk, J.,
+Dai, A.M., Hauth, A., Millican, K., et al., 2023. Gemini: A family of highly capable
+multimodal models. arXiv preprint arXiv:2312.11805 .
+Goodchild, M.F., 2004. The validity and usefulness of laws in geographic information
+science and geography. Annals of the Association of American Geographers 94, 300–
+303.
+Greenlund, K.J., Lu, H., Wang, Y., Matthews, K.A., LeClercq, J.M., Lee, B., Carlson,
+S.A., 2022. PLACES: local data for better health. Preventing Chronic Disease 19,
+E31.
+Guo, H., Python, A., Liu, Y., 2023. Extending regionalization algorithms to explore
+spatial process heterogeneity.
+International Journal of Geographical Information
+Science 37, 2319–2344.
+Helbich, M., Brunauer, W., Hagenauer, J., Leitner, M., 2013. Data-driven regionaliza-
+tion of housing markets. Annals of the Association of American Geographers 103,
+871–889.
+Janowicz, K., Gao, S., McKenzie, G., Hu, Y., Bhaduri, B., 2020. GeoAI: spatially
+explicit artificial intelligence techniques for geographic knowledge discovery and be-
+yond. International Journal of Geographical Information Science 34, 625–636.
+LeSage, J., Pace, R.K., 2009. Introduction to spatial econometrics. Chapman and
+Hall/CRC.
+Li, Z., Ning, H., 2023. Autonomous GIS: the next-generation AI-powered GIS. Inter-
+national Journal of Digital Earth 16, 4668–4686.
+Li, Z., Ning, H., Gao, S., Janowicz, K., Li, W., Shekhar, S., Hodgson, M.E., et al., 2025.
+GIScience in the era of artificial intelligence: a research agenda towards autonomous
+GIS. Annals of GIS 31, 501–536.
+47
+
+
+--- Page 48 ---
+Li, Z., Schultz, J., Hennes, D., Lanctot, M., 2026. Discovering multiagent learning
+algorithms with large language models. arXiv preprint arXiv:2602.16928 .
+Lin, Q., Hu, R., Li, H., Wu, S., Li, Y., Fang, K., Feng, H., Du, Z., Xu, L., 2025. Shape-
+fileGPT: A multi-agent large language model framework for automated shapefile
+processing. International Journal of Digital Earth 18, 2577884.
+Liu, A., Feng, B., Xue, B., Wang, B., Wu, B., Lu, C., Zhao, C., Deng, C.,
+Zhang, C., Ruan, C., et al., 2024. DeepSeek-V3 technical report. arXiv preprint
+arXiv:2412.19437 .
+Lou, X., Luo, P., Meng, L., 2025. GeoConformal prediction: a model-agnostic frame-
+work for measuring the uncertainty of spatial prediction. Annals of the American
+Association of Geographers 115, 1971–1998.
+Luo, P., Lou, X., Zheng, Y., Zheng, Z., Ermon, S., 2025. GeoEvolve: Automating
+geospatial model discovery via multi-agent large language models. arXiv preprint
+arXiv:2509.21593 .
+Ma, Y.J., Liang, W., Wang, G., Huang, D.A., Bastani, O., Jayaraman, D., Zhu, Y.,
+Fan, L., Anandkumar, A., 2023. Eureka: Human-level reward design via coding large
+language models. arXiv preprint arXiv:2310.12931 .
+Mai, G., Huang, W., Sun, J., Song, S., Mishra, D., Liu, N., Gao, S., Liu, T., Cong, G.,
+Hu, Y., et al., 2023. On the opportunities and challenges of foundation models for
+geospatial artificial intelligence. arXiv preprint arXiv:2304.06798 .
+Meyerson, E., Nelson, M.J., Bradley, H., Gaier, A., Moradi, A., Hoover, A.K., Lehman,
+J., 2024. Language model crossover: Variation through few-shot prompting. ACM
+Transactions on Evolutionary Learning 4, 1–40.
+Mouret, J.B., Clune, J., 2015. Illuminating search spaces by mapping elites. arXiv
+preprint arXiv:1504.04909 .
+Muñoz-Sabater, J., Dutra, E., Agustí-Panareda, A., Albergel, C., Arduini, G., Bal-
+samo, G., Boussetta, S., Choulga, M., Harrigan, S., Hersbach, H., et al., 2021.
+ERA5-Land: A state-of-the-art global reanalysis dataset for land applications. Earth
+System Science Data 13, 4349–4383.
+Ning, H., Li, Z., Akinboyewa, T., Lessani, M.N., 2025. An autonomous GIS agent
+framework for geospatial data retrieval. International Journal of Digital Earth 18,
+2458688.
+Novikov, A., V˜u, N., Eisenberger, M., Dupont, E., Huang, P.S., Wagner, A.Z., Shi-
+robokov, S., Kozlovskii, B., Ruiz, F.J., Mehrabian, A., et al., 2025. AlphaEvolve: A
+coding agent for scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131
+.
+Openshaw, S., 1977. A geographical solution to scale and aggregation problems in
+region-building, partitioning and spatial modelling. Transactions of the Institute of
+British Geographers 2, 459–472.
+Openshaw, S., Rao, L., 1995. Algorithms for reengineering 1991 Census geography.
+Environment and Planning A 27, 425–446.
+Park, J.S., O’Brien, J.C., Cai, C.J., Morris, M.R., Liang, P., Bernstein, M.S., 2023.
+Generative agents: Interactive simulacra of human behavior. Proceedings of the 36th
+Annual ACM Symposium on User Interface Software and Technology , 1–22.
+48
+
+
+--- Page 49 ---
+Romera-Paredes, B., Barekatain, M., Novikov, A., Balog, M., Kumar, M.P., Dupont,
+E., Ruiz, F.J., Ellenberg, J.S., Wang, P., Fawzi, O., et al., 2024.
+Mathematical
+discoveries from program search with large language models. Nature 625, 468–475.
+Sharma,
+A.,
+2025.
+OpenEvolve:
+an open-source evolutionary coding agent.
+GitHub repository. URL: https://github.com/algorithmicsuperintelligence/
+openevolve.
+Shojaee, P., Meidani, K., Gupta, S., Farimani, A.B., Reddy, C.K., 2024. LLM-SR:
+Scientific equation discovery via programming with large language models. arXiv
+preprint arXiv:2404.18400 .
+Singh, A., Fry, A., Perelman, A., Tart, A., Ganesh, A., El-Kishky, A., McLaughlin,
+A., Low, A., Ostrow, A., Ananthram, A., et al., 2025. OpenAI GPT-5 system card.
+arXiv preprint arXiv:2601.03267 .
+Tobler, W.R., 1970. A computer movie simulating urban growth in the Detroit region.
+Economic Geography 46, 234–240.
+Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang, C.,
+Lv, C., et al., 2025. Qwen3 technical report. arXiv preprint arXiv:2505.09388 .
+Zhang, Y., He, Z., Li, J., Lin, J., Guan, Q., Yu, W., 2024. MapGPT: an autonomous
+framework for mapping by integrating large language model and cartographic tools.
+Cartography and Geographic Information Science 51, 717–743.
+Zhang, Y., Wei, C., Wu, S., He, Z., Yu, W., 2023. GeoGPT: Understanding and process-
+ing geospatial tasks through an autonomous GPT. arXiv preprint arXiv:2307.07930
+.
+Zhou, B., Huang, X., Ning, H., Wu, Q., Li, D., Zhang, Z., 2026. NORA: A harness-
+engineered autonomous research agent for end-to-end spatial data science. arXiv
+preprint arXiv:2605.02092 .
+49

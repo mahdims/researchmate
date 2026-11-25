@@ -1,0 +1,2149 @@
+--- Page 1 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+Zeyu Guo
+Shanghai Jiao Tong University
+Shanghai, China
+zeyuguo77@sjtu.edu.cn
+Hao Lou
+Shanghai Jiao Tong University
+Shanghai, China
+louhao088@sjtu.edu.cn
+Yuhui Hao
+ICT, Chinese Academy of Sciences
+Beijing, China
+yuhuihao@tju.edu.cn
+Han Zhao∗
+Shanghai Jiao Tong University
+Shanghai, China
+zhao-han@cs.sjtu.edu.cn
+Zihan Liu
+Shanghai Jiao Tong University,
+Shanghai Qi Zhi Institute
+Shanghai, China
+altair.liu@sjtu.edu.cn
+Jingwen Leng
+Shanghai Jiao Tong University,
+Shanghai Qi Zhi Institute
+Shanghai, China
+leng-jw@sjtu.edu.cn
+Yiming Gan
+ICT, Chinese Academy of Sciences
+Beijing, China
+ganyiming@ict.ac.cn
+Yu Feng∗
+Shanghai Jiao Tong University,
+Shanghai Qi Zhi Institute
+Shanghai, China
+y-feng@sjtu.edu.cn
+Minyi Guo
+Shanghai Jiao Tong University,
+Shanghai Qi Zhi Institute
+Shanghai, China
+guo-my@cs.sjtu.edu.cn
+Abstract
+Recent advances in embodied artificial intelligence (EAI) have un-
+leashed new potential in many frontiers. Current EAI systems of-
+ten combine vision-language-action (VLA) inference with high-
+frequency model predictive control (MPC). On mobile GPUs, these
+workloads are typically serialized, causing control deadline misses.
+We present Dubot, a framework that automatically schedules
+VLA inference and MPC on a single mobile GPU. Specifically,
+Dubot identifies concurrent opportunities and proposes three co-
+location mechanisms: spatial partitioning, block-level co-location,
+and intra-block fusion. By leveraging different mechanisms, Dubot
+enables fine-grained co-location to improve the efficiency of various
+VLA-MPC operator pairs. Dubot further proposes a co-location op-
+timizer that can determine the optimal co-location schedule under
+workload dependency, QoS requirements, and hardware-resource
+constraints. Across representative VLA inference paradigms on
+NVIDIA Jetson Orin and Thor, Dubot achieves up to 1.4× end-to-
+end speedup and reduces QoS violations by up to 38%.
+Keywords
+VLA-MPC Control, Robotic Runtime Optimization.
+1
+Introduction
+Embodied artificial intelligence (EAI) has rapidly moved toward
+real-world deployment in humanoid robots [13, 22, 23], autonomous
+vehicles [29, 33, 63], and more [4, 11, 14]. Recent vision-language-
+action (VLA) models [7, 12, 17, 18, 36, 37, 40, 56] have substantially
+improved a robot’s ability to understand natural language and
+generate task-level actions under dynamic or unseen environments.
+However, an EAI system is more than a VLA model. In practice,
+an EAI system consists of a hierarchical control stack with two
+tightly coupled control loops [47] (Sec. 2.1). At the higher level,
+∗Corresponding Authors.
+ISCA ’27, Atlanta, Georgia, USA
+2027. ACM ISBN 978-x-xxxx-xxxx-x/YY/MM
+https://doi.org/XXXXXXX.XXXXXXX
+a VLA model periodically consumes an instruction and the latest
+sensory observation to predict an action horizon, i.e., a short se-
+quence of actions. At the lower level, a model predictive control
+(MPC) algorithm continuously converts these high-level actions
+into fine-grained actuator signals. Moreover, the lower-level con-
+troller needs to incorporate recent states, motion constraints, and
+obstacle information to maintain a safe and smooth trajectory.
+These two control levels operate at different frequencies. VLA in-
+ference is compute-intensive but is typically invoked at a relatively
+low frequency, e.g., 20–60 Hz [2, 36, 40]. In contrast, the low-level
+controller must respond rapidly to changes in the robot state and its
+environment. Depending on the platform and actuator, the control
+frequency can reach 500 Hz [16, 26, 49]. Meeting low-level control
+deadlines is often the primary runtime requirement, since deadline
+misses can introduce trajectory jitter or unsafe behaviors.
+Issue. Conceptually, these two loops can execute concurrently.
+After the VLA model predicts an action horizon, the controller can
+continuously optimize and execute the current trajectory while
+the VLA model processes a new observation. In practice, however,
+existing implementations have to execute the two workloads se-
+quentially due to resource constraints, since these mobile platforms,
+e.g., Nvidia Jetson Orin [50] and Thor [51], often have less compute
+capacity than workstation GPUs. Sec. 7.1 shows that sequential
+execution can lead to severe quality-of-service (QoS) violations.
+Opportunity. Although VLA and MPC operate at different
+frequencies, their dependencies do not require the two control loops
+to remain serialized. Once a VLA action becomes available, MPC
+can continuously generate control commands using the latest robot
+state while subsequent VLA inference can proceed. This naturally
+creates opportunities to overlap the two workloads.
+Moreover, VLA and MPC require different GPU resources. VLA
+inference is dominated by dense tensor operations that primarily
+utilize Tensor cores, whereas MPC consists mainly of small ma-
+trix and vector operations executed on CUDA cores (Sec. 3). Their
+complementary execution characteristics create opportunities for
+fine-grained co-location on the same GPU.
+1
+arXiv:2611.30177v1  [cs.AR]  23 Nov 2026
+
+
+--- Page 2 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+Challenge. However, efficiently co-locating VLA and MPC is
+a scheduling problem that must account for both control depen-
+dencies and GPU resource constraints. First, MPC jobs have strict
+deadlines and depend on the VLA-generated actions. Their exe-
+cution must be scheduled within the available overlap windows.
+Second, different VLA operators exhibit distinct resource demands.
+Thus, co-location performance depends heavily on the execution
+mechanism and GPU resource allocation. All these factors together
+determine the overall VLA-MPC execution performance.
+Framework. To address these challenges, we introduce Dubot,
+a framework for jointly orchestrating VLA inference and MPC com-
+putation on a single GPU (Sec. 4). Given a VLA model, an MPC
+algorithm, a target MPC frequency, and a target platform, Dubot
+first identifies the execution windows in which MPC jobs can over-
+lap with VLA stages based on their data dependencies. It then
+constructs hardware-feasible co-location strategies for different
+VLA operators. Lastly, Dubot jointly determines the co-location
+mechanism and MPC workload assignment for each VLA stage,
+minimizing VLA inference latency while satisfying MPC QoS.
+VLA-MPC Co-Location. Dubot exposes different co-location
+mechanisms to different VLA operators based on their resource
+demands. For linear operations, we observe that linear operations
+account for most of the VLA execution time and primarily use
+Tensor cores, while MPC kernels mainly use CUDA cores. Dubot
+considers three mechanisms where supported by the target GPU:
+spatial partitioning, stream-based block-level co-location, and warp-
+specialized intra-block fusion (Sec. 4.3). For a linear-MPC operation
+pair, the best co-location mechanism depends on both the GPU
+architecture and workload characteristics. For attention and non-
+linear operations, Dubot restricts co-location to spatial partitioning
+to reduce contention for SM-local resources. To let the optimizer
+vary the amount of MPC work paired with each VLA operation,
+Dubot groups consecutive QP iterations and partitions MPPI sam-
+ples into independent path groups.
+Co-Location Optimization. Given various co-location mech-
+anisms, Dubot proposes an optimizer in Sec. 5 that formulates
+the VLA-MPC co-location mapping as a constrained optimization
+problem. For each candidate mechanism, Dubot first uses offline-
+calibrated performance models to estimate the co-location latency
+of the VLA stage and its assigned MPC (Sec. 5.1). Using these esti-
+mates, Dubot selects the co-location mechanism and GPU resource
+allocation for each VLA stage and determines the number of QP
+iterations or MPPI paths to assign to it (Sec. 5.2). By solving the
+constrained optimization, Dubot automatically minimizes VLA
+inference latency subject to workload dependencies, GPU resource
+constraints, and MPC QoS requirements.
+Results. We evaluate Dubot on two robotic platforms, Nvidia
+Jetson Orin [50] and Thor [51], across three widely adopted VLA
+inference paradigms [36, 37, 40]. Compared with the sequential
+baseline, Dubot improves end-to-end EAI performance by up to
+1.4× and reduces QoS violations by up to 38%. Compared with prior
+co-location strategies [77, 86], Dubot achieves up to 1.3× speedup.
+In summary, this paper makes the following contributions:
+• We characterize end-to-end EAI execution on mobile GPUs
+and expose the potential co-location opportunities between
+VLA inference and high-frequency MPC computation.
+Instruction, I:
+“Pick up that banana”
+Observation, ot
+Robot
+State, st 
+Visual
+Encoder
+Action
+Prediction 
+Concat
+…
+Reference
+Trajectory, {at} 
+MPC
+Algorithm
+Robot
+Actuator
+High-level
+Planning Loop
+(20-60 Hz)
+Low-level
+Control Loop
+(200-500 Hz)
+…
+High-level Action
+Sequence, {at} 
+Fig. 1: The control loops in EAI systems. The high-level plan-
+ning loop processes the instruction I and current observation
+o𝑡to predict a sequence of actions, {a𝑡}, at 20-60 Hz. The
+low-level control loop combines the predicted actions with
+the current robot state, s𝑡, and executes MPC algorithms at
+200-500 Hz to generate smooth actuator commands.
+• We propose an operator-aware co-location framework that
+exploits complementary GPU resources through spatial par-
+titioning, block-level co-location, and intra-block fusion.
+• We formulate VLA–MPC orchestration as a constrained op-
+timization and develop an efficient scheduling solver.
+• Dubot achieves up to 1.4× end-to-end speedup and 38%
+fewer QoS violations over the GPU baselines.
+2
+Background
+This section provides the necessary background for EAI systems.
+We first introduce the control pipeline of an EAI system with two
+tightly coupled control loops (Sec. 2.1). We then explain representa-
+tive VLA inference paradigms in Sec. 2.2. Lastly, we introduce two
+widely used MPC solvers, QP- and MPPI-based MPC, in Sec. 2.3.
+2.1
+Embodied AI Systems
+As shown in Fig. 1, an EAI system typically consists of two tightly
+coupled control loops: a high-level planning loop and a low-level
+control loop. The high-level loop is responsible for understand-
+ing task instructions and predicting future actions in the current
+environment. It commonly executes a VLA model, which takes a
+natural language instruction, I, together with the latest sensory ob-
+servations, o𝑡, as input and predicts a short horizon, i.e., a sequence
+of high-level actions, {a𝑡}. Within each iteration, the VLA model
+includes new sensory observations to generate updated actions.
+The goal of the low-level control loop is to translate the action
+sequence {a𝑡} predicted by the VLA model into executable actuator
+commands. Unlike the high-level loop, which primarily focuses on
+short-horizon planning, the low-level loop must account for robot
+dynamics, actuator constraints, and nearby obstacles. Its objective
+is to ensure that the planned actions can be executed safely and
+smoothly without exceeding the motor limits or destabilizing the
+system, e.g., causing the robot to fall. Therefore, the low-level MPC
+algorithm continuously refines the high-level action sequence and
+generates control signals that can be directly issued to the actuators.
+Both control loops operate iteratively but at substantially differ-
+ent frequencies. E.g., the high-level loop typically runs at 20–60 Hz [2,
+40], whereas the low-level loop executes at a much higher frequency,
+200-500 Hz [16, 26]. This hierarchical organization allows the robot
+to combine the semantic reasoning of VLA models with the respon-
+siveness and safety guarantees of conventional MPC algorithms.
+2
+
+
+--- Page 3 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+(a) Autoregressive (AR)-based VLA inference.
+(b) Preﬁll-only (PO)-based VLA inference.
+Preﬁll-only Inference
+M
+M
+M M
+…
+Preﬁll-only Inference
+M …
+Preﬁll Decode
+Decode
+Decode
+M
+M
+…
+M
+M
+…
+Preﬁll
+(c) Diﬀusion-based VLA inference.
+…
+Diﬀusion
+Diﬀusion
+…
+Diﬀusion
+Diﬀusion
+M
+M
+M M
+…
+…
+N steps
+N steps
+M
+M
+M
+M
+M
+…
+…
+…
+Fig. 2: Timelines of representative VLA inference paradigms
+and their subsequent MPC executions, denoted by M. In ex-
+isting EAI systems, VLA and MPC are executed sequentially.
+2.2
+VLA Models
+VLA models serve as the high-level policies to predict short-horizon
+future actions in an EAI system. However, existing VLA models [45,
+90] have different action generation paradigms. Each offers trade-
+offs between efficiency and task accuracy. We classify their infer-
+ence processes into three representative paradigms: autoregressive-
+based [17, 36, 56], prefill-only-based [37], and diffusion-based [18,
+28, 40] inference. Despite these differences, existing baseline EAI
+systems generally execute VLA inference and MPC computation,
+denoted by M, sequentially on the GPU, as shown in Fig. 2.
+Autoregressive VLA. Fig. 2a shows the pipeline of autoregres-
+sive (AR)-based VLA inference. Each inference starts with a prefill
+stage that encodes the instruction and visual observations. The
+model then enters a decoding stage. In this stage, the VLA model
+generates action tokens one at a time. Because each decoding step
+depends on previously generated tokens, the decoding process must
+execute sequentially. One action is often represented by multiple to-
+kens, e.g., an arm action is encoded by seven tokens [36]. Different
+VLAs could have different action encoding schemes [82]. Once a
+complete action is generated, the sequential baseline pauses VLA de-
+coding and invokes MPC to refine the action into low-level controls.
+Decoding resumes after the scheduled MPC work completes.
+Prefill-Only VLA. Fig. 2b shows the pipeline of prefill-only (PO)-
+based VLA inference. A PO-based VLA model predicts a short action
+chunk in a single prefill stage without a subsequent autoregressive
+decoding stage. Consequently, PO-based inference is dominated
+by highly parallel tensor kernels, e.g., linear operations. Once an
+action chunk has been generated, the MPC controller processes it
+to produce low-level controls before the next VLA inference.
+Diffusion-Based VLA. Fig. 2c shows the pipeline of diffusion-
+based VLA inference. A diffusion-based VLA model starts from a
+noisy action sequence and iteratively refines it through 𝑁denoising
+steps. During each step, the model generates an updated action
+prediction conditioned on the instruction and visual observations.
+As shown in Fig. 2c, all actions within one denoising step can be
+processed in parallel. However, consecutive denoising steps must
+execute sequentially because each step depends on the output of
+the previous one. Once the denoising process completes, the result
+action chunk is then passed to the MPC controller. Similar to PO-
+based VLAs, existing systems execute MPC after VLA inference.
+Sequential VLA-MPC Execution. Across all three inference
+paradigms, existing EAI systems treat VLA and MPC as separate
+GPU workloads and execute them sequentially. This execution
+Reference
+Trajectory, {at   } 
+Goal
+MPC-Reﬁned 
+Trajectory, {at} 
+ref
+Current
+State, st
+Feedback to the 
+next control cycle
+Fig. 3: Role of MPC in refining a VLA-generated reference
+trajectory. Given the current robot state, s𝑡, MPC predicts
+a trajectory by considering the robotic and environmental
+constraints. Once the trajectory has been predicted, only the
+first optimized control input is executed, and the new state,
+s𝑡+1, is fed back at the next control cycle.
+model essentially serializes two control loops on a single resource-
+constrained mobile GPU. As we show in Sec. 4, this serialization
+can leave significant GPU resources underutilized, which motivates
+us to overlap VLA with MPC to reduce end-to-end EAI latency.
+2.3
+MPC Algorithms
+As discussed in Sec. 2.1, MPC serves as the low-level controller in an
+EAI system. As shown in Fig. 3, given the current robot state, s𝑡, and
+a reference action sequence, {a𝑡}, from a VLA model, MPC predicts
+the robot motion over a short horizon and searches for a sequence
+of control inputs that can best track the reference trajectory. Unlike
+the VLA model, which generates high-level actions, MPC must
+account for robot dynamics, motor limits, collision constraints, and
+more [3]. Once the MPC generates a sequence of control inputs,
+only the first control input of the optimized sequence is issued to
+the actuators. At the next control cycle, the MPC then incorporates
+the latest robot state and repeats the optimization. This enables the
+controller to respond rapidly to changes in the robot state and its
+environment until the target destination is reached.
+Existing MPC algorithms employ different optimization solvers.
+In general, these solvers can be broadly classified into two represen-
+tative paradigms: quadratic-programming (QP)-based MPC [10, 46]
+and model predictive path integral (MPPI)-based MPC [75, 76].
+QP-based MPC repeatedly solves a constrained optimization prob-
+lem, whereas MPPI-based MPC searches for a control sequence
+by sampling and evaluating candidate trajectories. The following
+paragraphs explain their basic workflows and characteristics.
+QP-Based MPC. This type of MPC solver reformulates low-
+level control as a constrained optimization over a finite prediction
+horizon. Given the initial robot state s0 and a reference trajectory
+{aref
+𝑡}, the controller solves,
+min
+{s}, {u}
+𝐻−1
+∑︁
+𝑡=0
+s𝑡−sref
+𝑡
+
+2
+𝑄+
+u𝑡−uref
+𝑡
+
+2
+𝑅
+
++
+s𝐻−sref
+𝐻
+
+2
+𝑄𝐻
+,
+s.t.
+s𝑡+1 = A𝑡s𝑡+ B𝑡u𝑡,
+s𝑡∈S,
+u𝑡∈U.
+(1)
+where 𝐻is the length of the prediction horizon; s𝑡and u𝑡are the
+predicted state and control input; sref
+𝑡
+and uref
+𝑡
+are the reference
+state and input derived from the reference actions {aref
+𝑡}. A𝑡and B𝑡
+describe the linearized robot dynamics at timestep 𝑡. 𝑄, 𝑅, and 𝑄𝐻
+are three matrices to weight the trajectory-tracking, control-effort,
+3
+
+
+--- Page 4 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+and terminal-state costs, respectively. Lastly, S and U describe
+robot and safety constraints.
+QP solvers refine the control sequence through iterative opti-
+mization, which is inherently sequential. Within each iteration,
+however, operations, e.g., robot-state propagation, residual com-
+putation, and variable updates, expose data-level parallelism. For
+instance, OSQP [65] accelerates convex QPs by exploiting SIMD
+vector instructions. Its GPU counterpart, cuOSQP [60], maps the
+dominant sparse matrix and vector operations onto CUDA cores to
+achieve higher parallelism.
+MPPI-Based MPC. This class of MPC algorithms does not di-
+rectly solve a constrained optimization problem. Instead, MPPI
+approximates the solution by sampling and evaluating a large num-
+ber of candidate control sequences. Given the current robot state,
+s0, and a reference control sequence, {uref
+𝑡}, derived from the VLA-
+generated actions, {aref
+𝑡}, MPPI samples 𝐾perturbed sequences,
+u(𝑘)
+𝑡
+= uref
+𝑡
++ 𝝐(𝑘)
+𝑡
+,
+𝑘= 1, . . . , 𝐾,
+(2)
+where 𝝐(𝑘)
+𝑡
+denotes the sampled noise. Each sampled sequence is
+then propagated via the robot dynamics model 𝑓(·),
+s(𝑘)
+𝑡+1 = 𝑓(s(𝑘)
+𝑡
+, u(𝑘)
+𝑡
+),
+(3)
+to predict a candidate trajectory over a horizon of length 𝐻. The
+cost of each candidate trajectory is evaluated as,
+𝐿(𝑘) =
+𝐻−1
+∑︁
+𝑡=0
+(∥s(𝑘)
+𝑡
+−sref
+𝑡∥2
+𝑄+ ∥u(𝑘)
+𝑡
+−uref
+𝑡∥2
+𝑅) + ∥s(𝑘)
+𝐻
+−sref
+𝐻∥2
+𝑄𝐻, (4)
+where s(𝑘)
+𝑡
+and u(𝑘)
+𝑡
+are the predicted state and control of the 𝑘th
+sampled trajectory. 𝐿(𝑘) is similar to the loss in Eqn. 1.
+After evaluating the candidate trajectories, MPPI assigns each
+trajectory a weight, 𝑤𝑘, based on 𝐿(𝑘). The final control sequence
+is obtained using the weighted sampled noises,
+u∗
+𝑡= uref
+𝑡
++
+𝐾
+∑︁
+𝑘=1
+𝑤𝑘𝝐(𝑘)
+𝑡
+.
+(5)
+Only the first control input, u∗
+0, is issued to the actuator, and the
+process repeats at the next control cycle.
+Although the computation within each trajectory is sequential
+across timesteps, different sampled trajectories are mutually inde-
+pendent and can be evaluated in parallel. Existing GPU implementa-
+tions [75, 76] therefore map trajectories to different CUDA threads
+or thread blocks and use parallel reductions to aggregate their costs
+and update the control sequence. Thus, MPPI-based MPC exposes
+path-level parallelism and is well suited to GPU execution.
+3
+Motivation
+In this section, we explain the need to jointly optimize VLA in-
+ference and MPC computation in an end-to-end EAI system. We
+first show that both workloads take non-trivial time in the overall
+execution. We then characterize their GPU execution behaviors
+and show the opportunity for concurrent execution.
+Execution Breakdown. Fig. 4 shows the execution breakdown
+of seven representative end-to-end EAI workloads across different
+VLA inference paradigms and MPC solvers. We measure their la-
+tency on a mobile SoC, Nvidia Orin [50], where VLA inference and
+low-level MPC computation are executed sequentially. Both VLA
+(a) VLA inference with QP-based MPC.
+(b) VLA inference with MPPI-based MPC.
+Fig. 4: The execution breakdown of seven mainstream VLA
+models [17, 18, 28, 36, 37, 40, 56] with two MPCs [10, 76] on
+Orin SoC [50]. (a) QP-based MPCs; (b) MPPI-based MPCs.
+(a) Nvidia Orin SoC.
+(b) Nvidia Thor SoC.
+Fig. 5: The operator-level breakdown of VLA models [17, 18,
+28, 36, 37, 40, 56] on two Nvidia mobile SoCs, Orin [50] and
+Thor [51]. Linear operations are the main bottlenecks.
+(a) Nvidia Orin SoC.
+(b) Nvidia Thor SoC.
+Fig. 6: The operator breakdown of two MPC algorithms [10,
+76] on two Nvidia mobile SoCs, Orin [50] and Thor [51].
+inference and MPC computations take non-trivial execution time.
+For instance, with the QP-based MPC, VLA inference and MPC
+account for 57% and 43% of the end-to-end latency, respectively.
+Although each MPC execution is relatively lightweight, its high
+frequency makes its cumulative execution non-trivial.
+The result shows that accelerating only VLAs leaves a substantial
+fraction of the end-to-end runtime untouched. Moreover, simply
+interleaving the two workloads can delay latency-critical MPC
+execution and lead to severe QoS violations. Thus, improving end-
+to-end performance requires optimizing both VLA and MPC.
+Workload Characteristics. Although VLA inference and MPC
+computation both execute on the GPU, they show different compu-
+tational characteristics. VLA is dominated by dense matrix multi-
+plications, which are typically mapped to Tensor cores rather than
+general-purpose CUDA cores. Fig. 5 shows the breakdown of differ-
+ent operators in VLA models. For instance, on Orin SoC [50], linear
+layers in VLA models account for 80% of the VLA execution time
+and primarily consist of compute-intensive matrix multiplications.
+In contrast, MPC algorithms are predominantly executed on
+CUDA cores. For instance, QP-based MPC mainly consists of sparse
+matrix-vector multiplications, residual computations, and iterative
+variable updates. MPPI-based MPC propagates robot states and
+evaluates costs across a large number of sampled trajectories. These
+operations often involve small tensor shapes and element-wise
+computation. Fig. 6 shows the execution time breakdown of MPC
+algorithms on two SoCs. On average, matrix-vector and element-
+wise operations take 96% of the total MPC execution time. Thus,
+MPC workloads are more suitable for CUDA cores.
+4
+
+
+--- Page 5 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Algorithm 
+Description
+VLA Model
+MPC 
+Algorithms
+Hardware
+Information
+SM 
+Resources
+Register
+Warp
+Block
+SMem.
+Workload 
+Construction
+Legend
+Outputs
+User Inputs
+Core Modules
+Co-Location
+Mechanisms
+VLA Graph Extraction
+Dependency Construction
+MPC Workload Partition
+Perf. Modeling
+Co-Location Optimizer
+Constraints
+Data
+Dependency
+Resource
+Constraints
+Completion 
+Time & QoS
+Co-Location
+Estimation
+VLA Stage Conﬁg.
+Co-location Mapping
+Latency Minimization
+Target
+Frequency
+Outputs
+VLA-MPC Mapping
+GPU Allocation
+Execution Schedule
+Expected Latency
+L
+A/N
+Spatial
+Partitioning
+Block-Level
+Co-Location
+Intra-Block
+Fusion
+✔
+✔
+✔
+✔
+VLA
+Latency
+MPC
+Latency
+Fig. 7: Overview of the Dubot framework. Dubot con-
+structs VLA stages and MPC work groups, then enumerates
+hardware-feasible co-location configurations by VLA opera-
+tor class. The performance model estimates VLA-stage and
+MPC-chunk completion times for each candidate. The opti-
+mizer uses these estimates to select stage configurations and
+map MPC work to VLA stages while respecting dependencies,
+GPU resource reservations, and MPC deadlines.
+Naturally, the execution characteristics of these two workloads
+create a co-location opportunity. While a VLA kernel occupies
+the Tensor cores, MPC computations can use otherwise idle CUDA
+cores. Overlapping the two workloads can potentially increase GPU
+utilization and reduce end-to-end latency without additional hard-
+ware resources. One caveat is that Tensor cores and CUDA cores
+are not fully independent: they still share streaming multiproces-
+sor (SM) resources, e.g., registers and shared memory. Effectively
+orchestrating their execution is key to the overall performance.
+Summary. End-to-end EAI systems exhibit two key character-
+istics. First, both the VLA loop and the high-frequency MPC loop
+contribute non-trivially to the overall execution latency. Second,
+the two workloads often rely on different GPU execution resources:
+VLAs primarily use Tensor cores, whereas MPCs mainly use CUDA
+cores. Together, these characteristics motivate fine-grained concur-
+rent execution to improve end-to-end EAI.
+4
+Dubot Framework
+The goal of Dubot is to improve the overall VLA performance
+while preserving the QoS of MPC controls. To achieve this goal,
+this section first describes the possible mechanisms that overlap
+these two workloads (Sec. 4.3). Then, we describe the eligible co-
+location mechanisms for different VLA operators (Sec. 4.4).
+4.1
+Overview
+Fig. 7 gives an overview of Dubot. Given a VLA and an MPC algo-
+rithm, a target control frequency, and a GPU platform, Dubot au-
+tomatically derives a VLA-MPC co-location schedule that improves
+VLA efficiency while satisfying the QoS of the MPC controller.
+Dubot consists of three major components. First, Dubot iden-
+tifies the execution windows in which high-frequency MPC can
+overlap with subsequent VLA inference, as described in Sec. 4.2.
+These opportunities depend on the inference paradigm of the VLA
+model and the dependencies between the two control loops.
+(a) Autoregressive (AR)-based VLA inference.
+(b) Preﬁll-only (PO)-based VLA inference.
+Preﬁll-only Inference
+M
+M
+M M
+…
+Preﬁll-only Inference
+Preﬁll-only Inference
+M
+M
+M M
+…
+…
+…
+Preﬁll Decode Decode
+Decode
+M
+M
+…
+M
+M
+…
+…
+…
+Decode Decode
+Decode
+M
+M
+…
+M
+M
+…
+…
+…
+Preﬁll
+…
+…
+(c) Diﬀusion-based VLA inference.
+…
+Diﬀusion
+Diﬀusion
+…
+Diﬀusion
+Diﬀusion
+…
+Diﬀusion
+Diﬀusion
+M
+M
+M M
+…
+M
+M
+M M
+…
+…
+…
+N steps
+N steps
+N steps
+M
+M
+M
+M
+M
+M
+…
+…
+Fig. 8: Co-location opportunities between VLA inference
+and MPC computation across three representative VLA
+paradigms. Once the required VLA action becomes avail-
+able, MPC computation, denoted by M, can overlap with sub-
+sequent VLA execution. Red arrows indicate dependencies
+between the two control levels.
+Second, Dubot constructs candidate co-location configurations
+based on the resource characteristics of each VLA operator. As
+shown in Sec. 4.3 and Sec. 4.4, Dubot considers three co-location
+mechanisms: spatial partitioning, block-level co-location, and intra-
+block fusion. Linear operations can use all three mechanisms, while
+attention and non-linear operations use spatial partitioning to avoid
+contention with latency-critical MPC computation. Meanwhile, QP
+and MPPI workloads are partitioned into schedulable chunks, i.e.,
+iteration groups and sampled-path groups, respectively.
+Finally, Dubot proposes the co-location optimizer in Sec. 5 to
+determine the execution configuration of each VLA stage and the
+co-location placement of MPC computation across the VLA timeline.
+The optimizer then uses offline performance models to estimate
+candidate execution latencies and minimizes the end-to-end VLA
+inference latency while enforcing constraints, e.g., MPC deadlines,
+workload dependencies, and GPU resources. The final output speci-
+fies the co-location mechanism, resource configuration, and kernel
+mapping between MPC and VLA.
+4.2
+VLA-MPC Co-Location Opportunities
+Opportunities. Although existing EAI systems execute VLA and
+MPC sequentially, their dependencies do not require these two
+control loops to remain serialized throughout execution. Once a
+VLA model produces the action required by the low-level controller,
+the corresponding MPC computation can proceed while subsequent
+VLA inference can continue. Each VLA invocation uses the latest
+available observation, while MPC continuously generates control
+commands using the current robot state and the latest available
+reference trajectory. Once a new VLA action becomes available, the
+reference is updated for subsequent MPC invocations. This creates
+an opportunity to overlap the two control loops, as shown in Fig. 8.
+Fig. 8 shows these overlap opportunities for the three representa-
+tive VLA inference paradigms introduced in Sec. 2.2. For AR-based
+VLA models, once a complete action becomes available during de-
+coding, its MPC computation can overlap with subsequent decoding
+steps. For PO-based VLA models, MPC computation associated with
+the current action chunk can overlap with the next VLA inference.
+5
+
+
+--- Page 6 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+SM0
+VLA
+Block
+VLA
+Block
+Shared
+Memory
+MPC
+MPC
+MPC
+MPC
+Shared
+Memory
+Shared
+Memory
+Shared
+Memory
+VLA
+Block
+VLA
+Block
+Shared
+Memory
+MPC
+MPC
+Shared
+Memory
+MPC
+MPC
+SM1
+SM0
+SM1
+SM0
+SM1
+(a) Spatial Partitioning.
+(c) Intra-Block Fusion.
+(b) Block-Level Co-Location.
+Tensor/CUDA cores are 
+not used in the same SM.
+Fine-grained Tensor/CUDA 
+core coordination.
+Requires kernel rewrites and 
+increase resource pressure.
+Use Tensor/CUDA cores 
+at the same time.
+✔
+✔
+Fused
+Block
+Fused
+Block
+Disjoint SMs isolate local 
+resources.
+✔
+Co-location depends on 
+block resources.
+Fig. 9: GPU resource-sharing trade-offs for three VLA–MPC
+co-location mechanisms.
+Similarly, for diffusion-based VLA models, once the denoising pro-
+cess produces an action chunk, its MPC computation can overlap
+with subsequent diffusion inference. Although the available over-
+lap windows differ across inference paradigms, all three expose
+opportunities to execute VLA and MPC concurrently.
+These overlap windows determine when MPC can execute con-
+currently with VLA. However, the optimal way to achieve this
+execution overlap depends on the resource characteristics of both
+the VLA operator and the MPC within each window. We next in-
+troduce the mechanisms exploited by Dubot in Sec. 4.3.
+4.3
+Co-Location Mechanisms
+Given an overlap window between VLA inference and MPC com-
+putation, the next question is how these two workloads should
+be co-located. Here, Dubot considers three co-location mecha-
+nisms with different granularities: spatial partitioning, block-level
+co-location, and intra-block fusion. Fig. 9 shows their examples.
+Spatial Partitioning. One approach to co-executing two work-
+loads is to use existing GPU spatial partitioning tools, e.g., MPS [52],
+to divide SMs between VLA and MPC. As shown in Fig. 9a, one SM
+group executes VLA kernels while another executes MPC kernels.
+Because the two workloads are isolated at the SM level, spatial
+partitioning avoids direct contention for SM-local resources and
+requires minimal kernel modification. However, it cannot exploit
+complementary compute resources within the same SM. E.g., SMs
+assigned to VLA may leave part of their CUDA cores underutilized,
+while SMs assigned to MPC may leave Tensor cores idle.
+Block-Level Co-Location. This mechanism keeps VLA and MPC
+as separate GPU kernels while allowing thread blocks from the two
+kernels to co-locate on the same SM. As shown in Fig. 9b, each
+block preserves its original thread organization, register allocation,
+shared-memory allocation, and synchronization domain. Separate
+CUDA streams allow the GPU to launch blocks from another kernel
+once all blocks of the first kernel have been issued; whenever an SM
+has sufficient resources, blocks from the second kernel can be co-
+located on that SM. If these two kernels’ blocks leverage different
+compute units, this co-location can achieve the Tensor-CUDA core
+overlap between VLA and MPC. Nevertheless, co-located blocks
+still compete for shared SM resources. The achievable concurrency
+depends on their block-level resource footprints.
+Intra-Block Fusion. To exploit the parallelism between Tensor
+cores and CUDA cores, another approach is to fuse VLA and MPC
+computations into a single thread block, a.k.a. warp specialization
+(WASP) [9]. Different warps within the thread block are assigned
+to different workloads, allowing their execution to be coordinated
+at a finer granularity. Prior studies, e.g., Tacker [86], partition the
+threads of a fused block into two groups: one performs Tensor core
+computation, while the other performs general-purpose CUDA-
+core computation. This mechanism provides fine-grained control
+over synchronization, resource sharing, and execution order within
+a block. However, intra-block fusion must accommodate the exe-
+cution state and on-chip resource requirements of both workloads,
+which can increase register and shared-memory pressure. It also re-
+quires additional synchronization and kernel restructuring. Recent
+GPU architectures [54] provide mechanisms, e.g., register reallo-
+cation via setmaxnreg and asynchronous execution support, that
+can reduce some of the overheads for warp-specialized pipelines.
+4.4
+VLA-MPC Co-Location Strategy
+In Sec. 3, we show that different VLA operators exhibit differ-
+ent GPU resource characteristics. Therefore, applying a single co-
+location mechanism throughout VLA execution can either leave
+GPU resources underutilized or introduce contention that causes
+MPC to miss its QoS deadline. Here, Dubot adopts different co-
+location mechanisms for VLA operators.
+Linear Operations. Fig. 5 shows that linear operations take
+roughly 80% of VLA execution time and are dominated by dense
+matrix multiplications using Tensor cores. In contrast, MPC compu-
+tation executes on general-purpose CUDA cores. This makes linear
+operations suitable for fine-grained VLA-MPC co-location. There-
+fore, when MPC overlaps with a linear operation, Dubot considers
+all three mechanisms from Sec. 4.3. The final mechanism and its
+resource configuration are determined by the co-location optimizer
+in Sec. 5 based on the workload characteristics and target GPU.
+Other Operations. In contrast, attention and non-linear opera-
+tions are less suitable for fine-grained co-location with MPC on the
+same SM. Although attention leverages Tensor-core computation,
+it also places high pressure on memory bandwidth and shared mem-
+ory. On the other hand, non-linear operations primarily execute on
+general-purpose CUDA cores and thus compete directly with MPC
+for the same execution resources. In both cases, sharing an SM with
+MPC can introduce resource contention. Dubot therefore only uses
+spatial partitioning when MPC overlaps with these operators.
+In summary, Dubot considers all three mechanisms for linear
+operations. For attention and non-linear operations, Dubot restricts
+co-location to spatial partitioning to reduce SM resource contention.
+Next, we describe how different MPC algorithms are divided into
+small execution chunks and co-located with VLA operations.
+QP-Based MPC Partitioning. As described in Sec. 2.3, QP-
+based MPC refines a control sequence through an iterative solver.
+Because each iteration depends on the output of the previous one,
+the iterations must preserve their original execution order. To make
+the QP workload predictable for co-location, Dubot executes each
+MPC invocation with a fixed iteration budget. This budget is suf-
+ficient for the QP problems to converge at the scales in our EAI
+workloads. Dubot then groups consecutive QP iterations into small
+chunks and co-locates one chunk of iterations with a VLA opera-
+tion. The optimizer in Sec. 5 determines the number of QP iterations
+assigned to each operation and its co-location mechanism.
+MPPI-Based MPC Partitioning. Unlike QP-based MPC, MPPI-
+based MPC evaluates a fixed number of sampled control paths.
+6
+
+
+--- Page 7 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+128
+256
+384
+512
+640
+768
+896 1024
+Matrix Size
+0
+1
+2
+3
+4
+5
+6
+7
+8
+Latency (ms)
+K, N=4096, 4096
+K, N=8192, 4096
+K, N=8192, 8192
+K, N=10240, 8192
+Fig. 10: The measured linear
+layer latency with respect to
+the input size.
+10
+20
+30
+40
+50
+60
+70
+80
+90 100
+QP Iteration
+10
+7
+10
+6
+10
+5
+10
+4
+10
+3
+10
+2
+10
+1
+10
+0
+Residual
+Horizon=30
+Horizon=40
+Horizon=50
+Horizon=60
+Fig. 11: QP loss versus itera-
+tion count. QP instances con-
+verge in 80 iterations.
+Because different paths are mutually independent, they can be eval-
+uated in parallel. Dubot then partitions the sampled paths into
+groups and co-locates each path group with a VLA operator. The
+paths within a group are distributed across GPU threads, allowing
+their evaluation to overlap with VLA operations. The co-location op-
+timizer in Sec. 5 determines how many sampled paths are scheduled
+within each VLA operator and selects the corresponding co-location
+mechanism based on the VLA operator and GPU resources.
+5
+Co-Location Optimization
+Our co-location strategy in Sec. 4 exposes opportunities to overlap
+VLA with high-frequency MPC kernels. However, the optimal co-
+location schedule depends on multiple factors, e.g., the VLA model,
+MPC algorithm, target control frequency, and GPU platform. To
+address this trade-off, Dubot formulates VLA-MPC co-location as
+a constrained optimization problem. The optimizer minimizes VLA
+inference latency while enforcing the control deadline of every
+MPC invocation as a hard QoS constraint. Sec. 5.1 first introduces
+our analytical performance models. Sec. 5.2 then uses these models
+to determine the co-location configuration of each VLA stage and
+the mapping of MPC computation across the VLA timeline.
+5.1
+Performance Modeling
+To optimize VLA-MPC co-location, Dubot requires latency esti-
+mates for its standalone and co-located GPU executions. We there-
+fore calibrate analytical models offline for each target GPU.
+Standalone Linear Layer Kernels. We first describe the stan-
+dalone latency model for VLA linear layers, which take the majority
+of VLA execution time and are the primary target for fine-grained
+co-location. Other VLA operators, e.g., attention and non-linear
+operations, can be modeled using the same methodology. The stan-
+dalone latency of the 𝑖th linear layer kernel, 𝑡𝑉
+linear,𝑖, is,
+𝑡𝑉
+linear,𝑖= F 𝑉(d𝑖, c𝑖, g),
+(6)
+where d𝑖is the matrix dimensions, c𝑖defines the kernel configura-
+tion, e.g., the number of PTB workers, and g denotes the target GPU
+platform. As shown in Fig. 10, the kernel latency varies predictably
+with the matrix dimensions. Based on these offline profiling results,
+we can estimate the standalone latency of linear kernels.
+Standalone QP Kernels. QP-based MPC refines its solution
+through an iterative solver. To make its workload size predictable,
+Dubot sets a fixed iteration budget for each MPC invocation. We
+use a budget of 80 iterations, which was sufficient for convergence
+on the evaluated QP instances (Fig. 11). For performance modeling,
+we use the number of consecutive QP iterations as the input size of
+a standalone QP batch (Fig. 12a). We then model the latency of a
+(a) Standalone QP latency.
+(b) Standalone MPPI latency.
+Fig. 12: The standalone latency of QP and MPPI with respect
+to iteration counts, sample paths, and predictive horizon.
+(a) QP fusion latency prediction model. (b) MPPI fusion latency prediction model.
+Fig. 13: The normalized co-location latency of QP and MPPI
+with respect to the load ratio.
+QP batch with 𝑛𝑄
+𝑏iterations as,
+𝑡𝑄
+MPC,b = F 𝑄(p𝑄
+𝑏, g) · 𝑛𝑄
+𝑏,
+(7)
+where 𝑛𝑄
+𝑏denotes the number of consecutive iterations in the 𝑏th
+batch, and p𝑄
+𝑏describes the QP problem and kernel configuration.
+Standalone MPPI Kernels. For MPPI-based MPC, the dominant
+computation is evaluating sampled control paths over a prediction
+horizon. Fig. 12(b) shows that the standalone MPPI latency increases
+with the number of sampled paths. Since sampled paths are mutually
+independent, they can be evaluated concurrently on GPU. The
+standalone latency, 𝑡𝑃
+mpc,b, of a batch of 𝑛𝑃
+𝑏MPPI paths is,
+𝑡𝑃
+mpc,b = F 𝑃(p𝑃
+𝑏, g) · ⌈𝑛𝑃
+𝑏/𝑛𝑔⌉,
+(8)
+where 𝑛𝑃
+𝑏denotes the number of sampled paths within a batch, 𝑛𝑔is
+the number of sampled paths that can execute concurrently on GPU
+g, and p𝑃
+𝑏describes the algorithmic setup and kernel configuration.
+Co-Location Latency. Given the standalone estimates above,
+we model concurrent VLA-MPC execution using the load-ratio
+formulation from Tacker [86]. For VLA stage 𝑉𝑖and MPC batch 𝑏
+of algorithm type 𝑀∈{𝑄, 𝑃}, we define the ratio,
+𝜌𝑀
+𝑖,𝑏= 𝑡𝑀
+MPC,𝑏/𝑡𝑉
+𝑖.
+(9)
+Here, 𝑡𝑉
+𝑖
+is the standalone latency of the VLA stage, including
+attention and non-linear stages eligible for spatial partitioning. Both
+standalone latencies are estimated with each workload running
+alone on the full target GPU. We normalize completion latencies
+by 𝑡𝑉
+𝑖and fit a piecewise-linear function of 𝜌:
+ˆ𝜂𝑀,𝑚(𝜌) =
+(
+𝛼𝑀,𝑚
+1
+,
+𝜌≤𝜌𝑀,𝑚
+th
+,
+𝛼𝑀,𝑚
+2
+𝜌+ 𝛽𝑀,𝑚
+2
+,
+𝜌> 𝜌𝑀,𝑚
+th
+.
+(10)
+Here, 𝑚denotes the co-location mechanism. We calibrate the coeffi-
+cients and threshold offline for each resource configuration. Fig. 13
+shows the fit for different co-location mechanisms on linear layers.
+For intra-block fusion, the VLA and MPC workloads complete
+together. The estimated latency can be expressed as,
+ˆ𝑡𝑀,𝑚
+𝑖,𝑏
+= 𝑡𝑉
+𝑖ˆ𝜂𝑀,𝑚
+𝜌𝑀
+𝑖,𝑏
+
+.
+(11)
+7
+
+
+--- Page 8 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+For spatial partitioning and block-level co-location, we measure
+VLA-stage and MPC-chunk completion separately from the com-
+mon launch time and fit one curve for each. Multiplying each fitted
+value by 𝑡𝑉
+𝑖gives the corresponding candidate latency, ˆ𝑇𝑉
+𝑘,𝑜or ˆ𝑇𝑀
+𝑘,𝑜,
+for configuration𝑜of stage𝑉𝑘. For intra-block fusion, both latencies
+equal Eqn. 11. Note that the MPC-chunk latency excludes the final
+MPPI reduction, which Sec. 5.2 schedules separately.
+5.2
+Optimization Formulation
+With the performance models in Sec. 5.1, we formulate VLA-MPC
+co-location as a constrained optimization problem. For clarity, the
+window covers one VLA inference and its associated MPC jobs. The
+formulation can naturally extend to multiple VLA inference steps.
+Execution Model. We first represent VLA inference as a se-
+quence of schedulable stages,
+V = {𝑉0,𝑉1, . . . ,𝑉𝐾−1},
+(12)
+where a stage can correspond to a complete operator, e.g., an atten-
+tion or non-linear kernel, or a partition of a large linear operation.
+For each stage 𝑉𝑘, 𝑠𝑉
+𝑘and 𝑒𝑉
+𝑘denote its start and completion times,
+respectively. Let 𝑟𝑉denote the fixed time at which the VLA input
+is available, and require 𝑠𝑉
+0 ≥𝑟𝑉. The total VLA latency is,
+𝑇VLA = 𝑒𝑉
+𝐾−1 −𝑟𝑉.
+(13)
+Meanwhile, MPC executes periodically according to the target
+control frequency. Let J denote the MPC jobs within the scheduling
+window. Let JQP and JMPPI denote the sets of QP and MPPI jobs,
+respectively. We measure all times relative to the release of MPC
+job 𝐽0. For each job 𝐽𝑗, its release time 𝑟𝑗and deadline 𝑑𝑗are,
+𝑟𝑗= 𝑗𝑡𝑃,
+𝑑𝑗= 𝑟𝑗+ 𝑡𝑃,
+(14)
+where 𝑡𝑃= 1/𝑓MPC is the target control period. Let 𝐴𝑗denote the
+time when the VLA action required by 𝐽𝑗becomes available. If stage
+𝑉𝑎(𝑗) produces the action within the window, 𝐴𝑗= 𝑒𝑉
+𝑎(𝑗). Otherwise,
+𝐴𝑗is known before the window. Each job requires a fixed amount
+of computation, 𝑊𝑗> 0, e.g., a fixed number of QP iterations or
+MPPI sampled paths. Let 𝐶𝑗denote the time when the complete
+result of 𝐽𝑗becomes available to the robot controller.
+Variables. For each VLA stage 𝑉𝑘, Dubot constructs offline a
+set of legal execution configurations, O𝑘. Each configuration𝑜∈O𝑘
+specifies a co-location mechanism, GPU resource allocation, the
+amount of MPC work 𝑤𝑘,𝑜executed with the stage, the predicted
+VLA latency ˆ𝑇𝑉
+𝑘,𝑜, and the predicted MPC completion latency ˆ𝑇𝑀
+𝑘,𝑜.
+Here, ˆ𝑇𝑀
+𝑘,𝑜measures the time from the start of 𝑉𝑘until the assigned
+MPC chunk completes, excluding the final MPPI reduction. A stan-
+dalone VLA configuration has 𝑤𝑘,𝑜= 0 and ˆ𝑇𝑀
+𝑘,𝑜= 0.
+Let 𝑦𝑘,𝑜and 𝑧𝑗,𝑘be binary variables indicating configuration
+selection and job assignment, respectively. Let 𝑥𝑗,𝑘∈Z≥0 count the
+QP iterations or MPPI paths from 𝐽𝑗assigned to 𝑉𝑘. Let 𝑒𝑀
+𝑗,𝑘denote
+the completion time of this MPC work. Let 𝑢𝑗denote the reduction
+start time for an MPPI job.
+The complete set of optimization variables is,
+Θ =
+
+𝑦𝑘,𝑜, 𝑥𝑗,𝑘, 𝑧𝑗,𝑘, 𝑠𝑉
+𝑘, 𝑒𝑉
+𝑘, 𝑒𝑀
+𝑗,𝑘, 𝑏𝑘, 𝑢𝑗, 𝐶𝑗
+	
+,
+where 𝑏𝑘is the end of the GPU reservation for stage 𝑉𝑘, 𝐶𝑗is the
+completion time of job 𝐽𝑗, and 𝑢𝑗is defined only for MPPI jobs. The
+constraints below define the completion and reservation times.
+Objective. The primary QoS requirement is that every MPC
+invocation completes before its control deadline. Subject to this
+requirement, Dubot minimizes VLA inference latency:
+min
+𝑇VLA = 𝑒𝑉
+𝐾−1 −𝑟𝑉.
+(15)
+Next, we describe four categories of constraints: configuration
+and workload constraints, data-dependency constraints, execution
+and resource constraints, and MPC QoS constraints.
+Configuration and Workload Constraints. Each VLA stage
+selects exactly one execution configuration:
+∑︁
+𝑜∈O𝑘
+𝑦𝑘,𝑜= 1,
+∀𝑘.
+(16)
+Its execution latency can be computed as,
+𝑇𝑉
+𝑘=
+∑︁
+𝑜∈O𝑘
+𝑦𝑘,𝑜ˆ𝑇𝑉
+𝑘,𝑜,
+𝑒𝑉
+𝑘= 𝑠𝑉
+𝑘+𝑇𝑉
+𝑘.
+(17)
+Each MPC job must complete its entire workload:
+∑︁
+𝑘
+𝑥𝑗,𝑘=𝑊𝑗,
+∀𝑗.
+(18)
+Meanwhile, the total MPC workload assigned to stage 𝑉𝑘must
+match the workload associated with its selected configuration:
+∑︁
+𝑗
+𝑥𝑗,𝑘=
+∑︁
+𝑜∈O𝑘
+𝑤𝑘,𝑜𝑦𝑘,𝑜,
+∀𝑘.
+(19)
+We couple workload and assignment with,
+𝑧𝑗,𝑘≤𝑥𝑗,𝑘≤𝑊𝑗𝑧𝑗,𝑘,
+∀𝑗,𝑘.
+(20)
+Each stage pairs with at most one MPC job:
+∑︁
+𝑗
+𝑧𝑗,𝑘≤1,
+∀𝑘.
+(21)
+Data-Dependency Constraints. Next, the optimized schedule
+must preserve the dependencies. An MPC job may start only after
+its periodic release and the availability of its required VLA action:
+𝑧𝑗,𝑘= 1 ⇒ 𝑠𝑉
+𝑘≥𝑟𝑗∧𝑠𝑉
+𝑘≥𝐴𝑗
+,
+∀𝑗,𝑘.
+(22)
+For QP, consecutive iteration groups consume the preceding group’s
+solver state in order. In contrast, MPPI path groups evaluate inde-
+pendent sets of sampled paths.
+Execution and Resource Constraints. When MPC work from
+job 𝐽𝑗is assigned to stage 𝑉𝑘, its completion time is determined by
+the selected co-location configuration. Each candidate configuration
+represents a co-launch of the VLA stage and its assigned MPC work
+at 𝑠𝑉
+𝑘. For every 𝑗,𝑘and 𝑜∈O𝑘,
+𝑧𝑗,𝑘= 1, 𝑦𝑘,𝑜= 1 ⇒𝑒𝑀
+𝑗,𝑘= 𝑠𝑉
+𝑘+ ˆ𝑇𝑀
+𝑘,𝑜.
+(23)
+Here, the two workloads can complete separately under spatial
+partitioning and block-level co-location. For intra-block fusion, it
+equals the fused-stage latency.
+The GPU is reserved for each selected VLA-MPC pair until both
+workloads complete. Let 𝑏𝑘be the end of this reservation. Then,
+𝑏𝑘= 𝑠𝑉
+𝑘+
+∑︁
+𝑜∈O𝑘
+𝑦𝑘,𝑜max
+n
+ˆ𝑇𝑉
+𝑘,𝑜, ˆ𝑇𝑀
+𝑘,𝑜
+o
+,
+∀𝑘.
+(24)
+The maximum is computed offline for each candidate. The next
+stage launches only after the reservation ends:
+𝑠𝑉
+𝑘+1 ≥𝑏𝑘,
+𝑘= 0, . . . , 𝐾−2.
+(25)
+8
+
+
+--- Page 9 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Table 1: Evaluation benchmarks.
+Algorithm
+Dataset
+Inference Paradigm
+Venue
+OpenVLA [36]
+LIBERO [41]
+Autoregressive
+CoRL 2024
+OpenVLA-OFT [37]
+LIBERO [41]
+Prefill-Only
+RSS 2026
+UVA [40]
+PushT [19]
+Diffusion
+RSS 2025
+The VLA output remains available at 𝑒𝑉
+𝑘, even when its paired MPC
+finishes later. Before optimization, candidate construction checks
+operator eligibility, resource limits, and runtime support.
+MPC QoS Constraints. We assume that the final QP iteration
+group makes the control result available. The QP job completion
+time is the latest completion time among its iteration groups:
+𝐶𝑗= max
+𝑘:𝑧𝑗,𝑘=1𝑒𝑀
+𝑗,𝑘,
+∀𝑗∈JQP.
+(26)
+For MPPI-based MPC, all sampled-path groups must complete
+before the final reduction. Let 𝑇𝑅
+𝑗denote the profiled latency of the
+reduction when it runs alone on the GPU. For each 𝑗∈JMPPI,
+𝑧𝑗,𝑘= 1 ⇒𝑢𝑗≥𝑒𝑀
+𝑗,𝑘,
+∀𝑘,
+𝐶𝑗= 𝑢𝑗+𝑇𝑅
+𝑗.
+(27)
+Each reduction reserves the GPU over [𝑢𝑗,𝐶𝑗). It must execute
+before or after each stage reservation [𝑠𝑉
+𝑘,𝑏𝑘):
+𝐶𝑗≤𝑠𝑉
+𝑘
+∨
+𝑏𝑘≤𝑢𝑗,
+∀𝑗∈JMPPI, ∀𝑘.
+(28)
+Reductions also execute in disjoint intervals:
+𝐶𝑗≤𝑢𝑙
+∨
+𝐶𝑙≤𝑢𝑗,
+∀𝑗,𝑙∈JMPPI, 𝑗< 𝑙.
+(29)
+Finally, every MPC invocation must satisfy its control deadline:
+𝐶𝑗≤𝑑𝑗,
+∀𝑗.
+(30)
+This constraint enforces the control deadlines under the modeled
+execution times. If the admitted jobs cannot be placed within their
+deadlines using the available stages, the formulation reports the
+window as infeasible. A runtime deadline guarantee requires con-
+servative latency bounds covering execution variability.
+6
+Experimental Setup
+Evaluation Platforms. We evaluate Dubot on two Nvidia mobile
+GPU platforms: Jetson AGX Orin [50] and Jetson AGX Thor [51].
+Jetson AGX Orin has an Ampere mobile GPU with 275 TOPS of peak
+performance. Jetson AGX Thor integrates a Blackwell mobile GPU
+and delivers 2070 TOPS peak performance. Both platforms integrate
+Tensor cores and CUDA cores, while Thor provides additional hard-
+ware features for warp specialization. During the measurement,
+Nvidia Orin and Thor SoCs run at 1.30 and 1.53 GHz, respectively.
+Their power modes are 60 W and 120 W, respectively. VLA models
+run at BF16 precision, while MPC algorithms run at FP32 precision.
+Algorithms. We evaluate Dubot with three representative VLA
+models covering three inference paradigms described in Sec. 2.2:
+OpenVLA [36], OpenVLA-OFT [37], and UVA [40]. OpenVLA uses
+an autoregressive inference paradigm, OpenVLA-OFT performs
+PO-based inference, and UVA adopts a diffusion-based inference
+paradigm. As shown in Tbl. 1, these models represent different VLA
+execution patterns and provide a comprehensive evaluation.
+Algorithm Implementation. To support the three co-location
+mechanisms in Sec. 4.3, we customized our CUDA kernels. Although
+(a) VLA latency on an Nvidia Orin SoC. (b) VLA latency on an Nvidia Thor SoC.
+Fig. 14: The absolute latency of different VLA models in
+cuBLAS, CUTLASS, and our implementation.
+cuBLAS and CUTLASS provide off-the-shelf GEMM implementa-
+tions, they cannot directly support all the co-location mechanisms
+required by Dubot. Fig. 14 compares the inference latency of our im-
+plementation against cuBLAS and CUTLASS on Orin and Thor SoCs.
+Our implementation achieves comparable performance across VLA
+models and GPU platforms. For MPC algorithms, we implement
+the QP-based and MPPI-based solvers based on the open-source
+cuOSQP [60] and MPPI-Generic [70] implementations, respectively.
+Optimizer Implementation. We implement our co-location
+optimization from Sec. 5 in Python with about 1k lines of code.
+Then, we leverage the Google optimization library OR-Tools [15] to
+solve the constrained optimization problem.
+Software Setup. We evaluate the VLA models on two robotic
+datasets: LIBERO [41] and PushT [19]. For closed-loop execution,
+we integrate MPC with the MuJoCo simulator [69], where the opti-
+mized control commands are applied to the simulated robot and the
+updated states are fed back to MPC. VLA and MPC execute asyn-
+chronously, with MPC using the latest available VLA-generated
+reference. We report three metrics: (1) end-to-end latency of each
+VLA-MPC control cycle, (2) energy consumption during execution,
+and (3) MPC QoS hit rate, defined as the fraction of MPC jobs
+whose control results are available by their deadlines. Unless oth-
+erwise specified, MPC runs at a target frequency of 500 Hz [49],
+and each MPC job is due 2 ms after its periodic release. Here, we
+report speedup relative to the sequential execution baseline. The
+co-location latency includes waiting for the completion of the out-
+standing MPC jobs and the final reduction time in MPPI. We also
+compute GPU energy by integrating readings from the built-in GPU
+power sensor over the test interval.
+Baselines. Since there is no prior work targeting VLA-MPC
+co-location directly, we implement several baselines based on prior
+work. We compare Dubot with two sequential baselines and four
+single-mechanism co-location baselines. For a fair comparison, all
+four co-location baselines use the optimizer in Sec. 5 to determine
+their execution configurations and MPC-to-VLA mappings, but are
+restricted to a single co-location mechanism. In contrast, Dubot
+considers all available mechanisms and selects the most suitable
+configuration for each VLA stage.
+• CPU: This baseline executes VLA inference on the GPU and
+MPC computation on the CPU of the same SoC. Here, VLA
+and MPC are executed sequentially.
+• Base: This baseline executes VLA inference and MPC com-
+putation sequentially on the GPU with no co-location.
+• Spatial: This baseline implements a spatial partitioning ap-
+proach similar to prior work [77] by partitioning the GPU
+at the SM level and assigning different SM groups to VLA
+inference and MPC computation.
+9
+
+
+--- Page 10 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+QP
+MPPI
+Fig. 15: Comparison of performance and normalized energy
+among different baselines on an Orin SoC. Numbers are nor-
+malized to Base. ‘S’: speedup; ‘E’: normalized energy.
+QP
+MPPI
+Fig. 16: Comparison of performance and normalized energy
+among different baselines on a Thor SoC. Numbers are nor-
+malized to Base. ‘S’: speedup; ‘E’: normalized energy.
+• Stream: This baseline adopts block-level co-location by exe-
+cuting VLA and MPC as separate kernels in different CUDA
+streams. Their thread blocks can share an SM when sufficient
+resources are available.
+• WASP-Limited: This baseline performs intra-block fusion
+by partitioning threads within a block into different groups,
+similar to prior work, Tacker [86]. We only report its perfor-
+mance on Orin in our evaluation.
+• WASP: This approach uses warp specialization [9] to as-
+sign different warps within a block to dedicated tasks. It
+also supports register reallocation (setmaxnreg) [53] and
+asynchronous Tensor core execution [54]. Note that these
+features are only supported by the Nvidia Thor SoC; we only
+report its performance on Thor in our evaluation.
+• Dubot: Our proposed framework considers all three co-
+location mechanisms. It automatically selects the most suit-
+able mechanism for each VLA stage using our optimizer.
+7
+Evaluation
+7.1
+Performance
+Performance on Orin. Fig. 15 compares the performance and
+energy savings of Dubot against different baselines on an Nvidia
+Orin SoC. All results are normalized to Base, i.e., the GPU sequential
+execution baseline. Compared with Base, Spatial provides limited
+speedup (1.21×) because it maps VLA and MPC computations onto
+different SM groups and cannot simultaneously utilize Tensor cores
+and CUDA cores within the same SM.
+Intra-block fusion approaches, e.g., WASP-Limited, can better
+overlap the computation between the Tensor cores and CUDA
+cores. On average, WASP-Limited achieves 1.27× speedup. How-
+ever, WASP-Limited on Orin still suffers from the extra overhead
+due to limited hardware support for warp specialization.
+Dubot achieves the highest speedup across different EAI pipelines,
+with up to 1.41× speedup. This is because Dubot can choose dif-
+ferent co-location mechanisms for different operators. Moreover,
+Dubot achieves the highest energy efficiency among the others.
+Dubot reduces energy consumption by 16.1% compared with Base.
+Performance on Thor. Fig. 16 compares the performance and
+energy efficiency of Dubot with various baselines on the Thor SoC.
+QP
+MPPI
+(a) QoS comparison on an Nvidia Orin SoC.
+(b) QoS comparison on an Nvidia Thor SoC.
+QP
+MPPI
+Fig. 17: The QoS Comparison among different baselines on
+two mobile SoCs. The default MPC frequency is 500 Hz.
+QP
+MPPI
+QP
+MPPI
+(a) Nvidia Orin SoC.
+(b) Nvidia Thor SoC.
+Fig. 18: The breakdown of co-location mechanisms selected
+by Dubot on two mobile SoCs.
+(a) Nvidia Orin SoC.
+(b) Nvidia Thor SoC.
+Fig. 19: Ablation study on our co-location optimizer.
+All performance results are normalized to Base. Here, we include
+an additional baseline, WASP, which exploits newer architectural
+support for warp-specialized execution. Overall, WASP achieves the
+second-highest performance, 1.27× speedup over Base. Neverthe-
+less, Dubot still outperforms other baselines with 1.35× speedup.
+For energy savings, Dubot reduces GPU energy by 12.4% on Thor.
+QoS. Fig. 17 compares the MPC QoS achieved by different base-
+lines on two Nvidia SoCs, Orin and Thor, at a target control fre-
+quency of 500 Hz. Because Base sequentially executes the VLA
+inference and MPC computations, Base frequently delays MPC
+execution behind VLA inference, achieving only 61.7% of QoS on
+Orin and 63.7% on Thor, on average. In contrast, all co-location
+baselines largely improve QoS by overlapping the two workloads.
+On both Orin and Thor SoCs, Dubot achieves the best QoS, with
+over 99% of QoS across all VLA models and MPC algorithms.
+Mechanism Breakdown. Fig. 18 shows the breakdown of co-
+location mechanisms selected by Dubot across different VLAs and
+MPCs. On Orin, Stream and WASP-Limited account for 45.8% and
+35.3% of the selections on average, respectively. On Thor, both
+Stream and WASP are frequently selected, with WASP benefiting
+from additional hardware support for warp specialization. Thus,
+different VLA operators favor different co-location mechanisms.
+7.2
+Ablation Study
+In this subsection, we evaluate the contribution of our optimizer by
+replacing it with three heuristics. Uniform distributes QP iterations
+as evenly as possible across VLA operators. Latency Proportional
+(LP) assigns iterations in proportion to each operator’s standalone
+latency. Gimbal is a greedy co-location algorithm [79]. Each base-
+line can select the best-performing co-location mechanism for its
+10
+
+
+--- Page 11 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+(a) VLA with QP-based MPC.
+(b) VLA with MPPI-based MPC.
+Fig. 20: The sensitivity of performance to predictive horizon
+with two MPC solvers, QP and MPPI, on an Orin SoC. The
+default MPC frequency is 500 Hz.
+(a) VLA with QP-based MPC.
+(b) VLA with MPPI-based MPC.
+Fig. 21: The sensitivity of performance to MPC frequency
+with two types of MPC solvers, QP-based and MPPI-based,
+on Orin SoC. The default predictive horizon length is 50. The
+speedup is normalized to the corresponding GPU baseline.
+fixed QP assignment. Here, we only evaluate the QP-based MPC
+algorithm over three VLA models.
+In Fig. 19, LP consistently outperforms Uniform. This shows
+that standalone VLA latency is a useful signal for workload place-
+ment. Nevertheless, Dubot achieves the highest speedup for all
+three VLA models on both Jetson Orin and Thor, even compared
+with Gimbal. Dubot speedup ranges from 1.33× to 1.46×. Overall,
+Dubot outperforms all heuristic methods across configurations.
+7.3
+Sensitivity Study
+Predictive Horizon. Fig. 20 shows the sensitivity of speedup to the
+MPC predictive horizon on the Orin SoC with a target frequency of
+500 Hz. The length of the MPC predictive horizon is proportional
+to the MPC workload. Here, we choose OpenVLA-OFT as a case
+study. For both QP-based and MPPI-based MPC, as the predictive
+horizon increases, the performance of all co-location strategies ini-
+tially improves. This is because a larger MPC workload exposes
+more opportunities to overlap with VLA inference. However, the
+speedup eventually saturates and slightly decreases at larger hori-
+zon windows as the MPC workload begins to exceed the overlap
+window and dominates the execution latency. Both Spatial and
+WASP-Limited show moderate speedup. Overall, Dubot achieves
+1.3× average speedup when the horizon is between 30 and 70.
+MPC Target Frequency. Fig. 21a and Fig. 21b show the sensitiv-
+ity of speedup to the MPC target frequency on an Orin SoC, using
+two MPC solvers: QP-based and MPPI-based. The default predic-
+tive horizon length is 50. All numbers are normalized to the GPU
+baseline. Here, we also use OpenVLA-OFT. For the QP-based solver
+(Fig. 21a), all co-location approaches maintain a stable increase
+in speedup in the frequency range from 100 to 500 Hz. Overall,
+Dubot achieves roughly 1.3× speedup on average. For MPPI, as
+the frequency increases, the trend is similar.
+QP
+MPPI
+Fig. 22: Scalability study of Dubot with two different MPC
+solvers, QP-based and MPPI-based, on an Orin SoC. Here, we
+show four different robot types: a single-arm manipulator, a
+quadruped robot, a dual-arm manipulator, and a humanoid.
+Speedup is normalized to the corresponding GPU baseline.
+7.4
+Case Study
+To evaluate the generality of Dubot, we measure its performance
+across four representative robot platforms: a single-arm manipula-
+tor, a quadruped robot, a dual-arm robot, and a humanoid. To mimic
+the workloads of different robot platforms, we fix the workload of
+the VLA model and use OpenVLA-OFT as a case study. We then em-
+ulate MPC workloads derived from four robot configurations. These
+robot configurations are derived from the reported specifications
+and degrees of freedom of the platforms [24, 25, 30, 35].
+Fig. 22a and Fig. 22b show the speedup and normalized energy of
+different co-location variants on the Orin SoC with two MPC solvers,
+QP-based and MPPI-based. The performance numbers are normal-
+ized to the corresponding GPU baselines. Across all four robot types,
+Dubot consistently achieves the highest speedup, roughly 1.4×.
+The speedup of Dubot remains stable because Dubot’s co-location
+optimizer automatically adapts the mapping of the available GPU
+resources between VLA kernels and MPC computations.
+For energy savings, Dubot also achieves the best energy effi-
+ciency across all robot platforms. It reduces energy consumption
+by roughly 20% compared to Base. On the other hand, Spatial
+provides only modest energy improvement, as statically splitting
+SMs between the two workloads can lead to idle compute units on
+both partitions. Overall, the results show that Dubot generalizes
+effectively across diverse robot types without manual tuning.
+8
+Related Work
+MPC Acceleration. MPC is a key component in robotic systems
+and has received extensive attention from the architecture commu-
+nity [1, 21, 48, 49, 59, 68, 73, 80]. For instance, RoboX [59] targets the
+conventional robotic MPC pipeline, while RSQP [73] accelerates its
+underlying quadratic programs. Others [21, 68] target optimization-
+based robotic workloads. Robomorphic [49], RoboShape [48], and
+Dadu-RBD [80] accelerate rigid-body dynamics, whereas Tartan [1]
+designs a programmable processor for robotic control.
+However, existing techniques primarily treat MPC as an iso-
+lated workload and optimize its efficiency. Dubot explores the
+computational characteristics between MPC and VLA, and designs
+a co-location framework on off-the-shelf GPUs.
+VLA Acceleration. Recent VLA acceleration methods mainly
+focus on algorithmic optimization. Some [42, 74, 83, 89] reduce
+inference cost through compression and quantization techniques.
+Others [81, 84] dynamically skip unnecessary layers or decoding
+steps for similar inputs. Token-pruning approaches [67, 72, 78] re-
+move redundant visual tokens while preserving task-level precision.
+Recently, there have been some algorithm-hardware co-designs for
+11
+
+
+--- Page 12 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+VLA [44, 57, 64]. Different from these approaches that reduce the
+cost of VLA inference alone, Dubot focuses on system-level opti-
+mization to improve end-to-end EAI performance on mobile GPUs.
+Kernel Fusion and Co-Location. Recent kernel fusion tech-
+niques reduce execution overhead by combining operators, mini-
+mizing intermediate memory traffic and kernel launches [79, 85–87].
+Some [6, 88, 91] enable compiler-driven fusion via tensor sched-
+uling. Others propose various techniques to manage interference
+between GPU workloads [20, 66]. Further, studies [27, 34, 55, 58] ex-
+plore domain-specific optimization and communication. In contrast,
+Dubot performs robotics-specific optimization via co-location.
+Autonomous System Acceleration. Recent architectural re-
+search has explored a broad range of techniques to accelerate
+robotic systems [5, 8, 31, 32, 38, 39, 43, 61, 62, 71]. Some mainly focus
+on optimizing individual components in robotics, such as localiza-
+tion [31, 39, 43] and collision detection [61, 62]. Recent architectural
+efforts have begun targeting embodied AI and autonomous driv-
+ing [5, 8, 32, 71]. Dubot also speeds up the VLA-MPC loops via
+co-optimizing its algorithms holistically.
+9
+Conclusion
+Future EAI will not be defined solely by larger foundation mod-
+els, but by how effectively the high-level planning loop and the
+low-level control loop are integrated and executed together. This
+integration also calls for a new generation of EAI architectures that
+jointly optimize model design, runtime system, and architecture.
+References
+[1] Mohammad Bakhshalipour and Phillip B. Gibbons. 2024. Tartan: Microarchitect-
+ing a Robotic Processor. In Proceedings of the 51st Annual International Sympo-
+sium on Computer Architecture (Buenos Aires, Argentina) (ISCA ’24). IEEE Press,
+548–565. doi:10.1109/ISCA59077.2024.00047
+[2] Kevin Black, Noah Brown, Danny Driess, Adnan Esmail, Michael Equi, Chelsea
+Finn, Niccolo Fusai, Lachy Groom, Karol Hausman, Brian Ichter, Szymon
+Jakubczak, Tim Jones, Liyiming Ke, Sergey Levine, Adrian Li-Bell, Mohith
+Mothukuri, Suraj Nair, Karl Pertsch, Lucy Xiaoyang Shi, James Tanner, Quan
+Vuong, Anna Walling, Haohuan Wang, and Ury Zhilinsky. 2026. 𝜋0: A Vision-
+Language-Action Flow Model for General Robot Control. arXiv (2026).
+[3] Bruno Brito, Boaz Floor, Laura Ferranti, and Javier Alonso-Mora. 2019. Model
+predictive contouring control for collision avoidance in unstructured dynamic
+environments. IEEE Robotics and Automation Letters 4, 4 (2019), 4459–4466.
+[4] Anthony Brohan, Noah Brown, Justice Carbajal, Yevgen Chebotar, Xi Chen,
+Krzysztof Choromanski, Tianli Ding, Danny Driess, Avinava Dubey, Chelsea Finn,
+Pete Florence, Chuyuan Fu, Montse Gonzalez Arenas, Keerthana Gopalakrishnan,
+Kehang Han, Karol Hausman, Alex Herzog, Jasmine Hsu, Brian Ichter, Alex Irpan,
+Nikhil Joshi, Ryan Julian, Dmitry Kalashnikov, Yuheng Kuang, Isabel Leal, Lisa
+Lee, Tsang-Wei Edward Lee, Sergey Levine, Yao Lu, Henryk Michalewski, Igor
+Mordatch, Karl Pertsch, Kanishka Rao, Krista Reymann, Michael Ryoo, Grecia
+Salazar, Pannag Sanketi, Pierre Sermanet, Jaspiar Singh, Anikait Singh, Radu
+Soricut, Huong Tran, Vincent Vanhoucke, Quan Vuong, Ayzaan Wahid, Stefan
+Welker, Paul Wohlhart, Jialin Wu, Fei Xia, Ted Xiao, Peng Xu, Sichun Xu, Tianhe
+Yu, and Brianna Zitkovich. 2023. RT-2: Vision-Language-Action Models Transfer
+Web Knowledge to Robotic Control. In arXiv preprint arXiv:2307.15818.
+[5] Peiqing Chen, Minghao Li, Zishen Wan, Yu-Shun Hsiao, Minlan Yu, Vijay Janapa
+Reddi, and Zaoxing Liu. 2025. OctoCache: Caching Voxels for Accelerating 3D
+Occupancy Mapping in Autonomous Systems. In Proceedings of the 30th ACM
+International Conference on Architectural Support for Programming Languages and
+Operating Systems, Volume 2. Association for Computing Machinery, New York,
+NY, USA, 704–718. https://doi.org/10.1145/3676641.3716263
+[6] Tianqi Chen, Thierry Moreau, Ziheng Jiang, Lianmin Zheng, Eddie Yan, Meghan
+Cowan, Haichen Shen, Leyuan Wang, Yuwei Hu, Luis Ceze, Carlos Guestrin,
+and Arvind Krishnamurthy. 2018. TVM: an automated end-to-end optimizing
+compiler for deep learning. In Proceedings of the 13th USENIX Conference on
+Operating Systems Design and Implementation (Carlsbad, CA, USA) (OSDI’18).
+USENIX Association, USA, 579–594.
+[7] Cheng Chi, Siyuan Feng, Yilun Du, Zhenjia Xu, Eric Cousineau, Benjamin Burch-
+fiel, and Shuran Song. 2023. Diffusion Policy: Visuomotor Policy Learning via
+Action Diffusion. In Proceedings of Robotics: Science and Systems (RSS).
+[8] Wonkyo Choe, Rongxiang Wang, and Felix Xiaozhu Lin. 2025. AnA: An Attentive
+Autonomous Driving System. In Proceedings of the 30th ACM International Confer-
+ence on Architectural Support for Programming Languages and Operating Systems,
+Volume 1 (Rotterdam, Netherlands) (ASPLOS ’25). Association for Computing
+Machinery, New York, NY, USA, 33–46. doi:10.1145/3669940.3707261
+[9] Neal C Crago, Sana Damani, Karthikeyan Sankaralingam, and Stephen W Keckler.
+2024. Wasp: Exploiting gpu pipeline parallelism with hardware-accelerated
+automatic warp specialization. In 2024 IEEE International Symposium on High-
+Performance Computer Architecture (HPCA). IEEE, 1–16.
+[10] Yanran Ding, Abhishek Pandala, and Hae-Won Park. 2019. Real-time Model
+Predictive Control for Versatile Dynamic Motions in Quadrupedal Robots. In
+2019 International Conference on Robotics and Automation (ICRA). 8484–8490.
+doi:10.1109/ICRA.2019.8793669
+[11] Danny Driess, Fei Xia, Mehdi S. M. Sajjadi, Corey Lynch, Aakanksha Chowdh-
+ery, Brian Ichter, Ayzaan Wahid, Jonathan Tompson, Quan Vuong, Tianhe Yu,
+Wenlong Huang, Yevgen Chebotar, Pierre Sermanet, Daniel Duckworth, Sergey
+Levine, Vincent Vanhoucke, Karol Hausman, Marc Toussaint, Klaus Greff, Andy
+Zeng, Igor Mordatch, and Pete Florence. 2023. PaLM-E: An Embodied Multimodal
+Language Model. In arXiv preprint arXiv:2303.03378.
+[12] Yilun Du, Mengjiao Yang, Bo Dai, Hanjun Dai, Ofir Nachum, Joshua B Tenenbaum,
+Dale Schuurmans, and Pieter Abbeel. 2023. Learning Universal Policies via Text-
+Guided Video Generation. In 2023 Conference on Neural Information Processing
+Systems.
+[13] Zipeng Fu, Qingqing Zhao, Qi Wu, Gordon Wetzstein, and Chelsea Finn. 2024.
+HumanPlus: Humanoid Shadowing and Imitation from Humans. In Conference
+on Robot Learning (CoRL).
+[14] Zipeng Fu, Tony Z. Zhao, and Chelsea Finn. 2024. Mobile ALOHA: Learning
+Bimanual Mobile Manipulation with Low-Cost Whole-Body Teleoperation. In
+Conference on Robot Learning (CoRL).
+[15] Google. 2023. Google OR-Tools. https://developers.google.com/optimization
+[16] Davide Gorbani, Giuseppe L’Erario, Hosameldin Awadalla Omer Mohamed, and
+Daniele Pucci. 2025. Unified Multi-Rate Model Predictive Control for a Jet-
+Powered Humanoid Robot. In 2025 IEEE-RAS 24th International Conference on
+Humanoid Robots (Humanoids). 744–751. doi:10.1109/Humanoids65713.2025.
+11203062
+[17] Ankit Goyal, Hugo Hadfield, Xuning Yang, Valts Blukis, and Fabio Ramos. 2025.
+VLA-0: Building State-of-the-Art VLAs with Zero Modification. arXiv preprint
+arXiv:2510.13054 (2025).
+[18] Yanjiang Guo, Yucheng Hu, Jianke Zhang, Yen-Jen Wang, Xiaoyu Chen, Chaochao
+Lu, and Jianyu Chen. 2024. Prediction with Action: Visual Policy Learning via
+Joint Denoising Process. In 2024 Conference on Neural Information Processing
+Systems.
+[19] gym pusht. 2023. A gymnasium environment PushT dataset. https://github.com/
+huggingface/gym-pusht/.
+[20] Mingcong Han, Hanze Zhang, Rong Chen, and Haibo Chen. 2022. Microsecond-
+scale Preemption for Concurrent GPU-accelerated DNN Inferences. In 16th
+USENIX Symposium on Operating Systems Design and Implementation (OSDI
+22). USENIX Association, Carlsbad, CA, 539–558.
+https://www.usenix.org/
+conference/osdi22/presentation/han
+[21] Yuhui Hao, Yiming Gan, Bo Yu, Qiang Liu, Yinhe Han, Zishen Wan, and Shaoshan
+Liu. 2024. ORIANNA: An Accelerator Generation Framework for Optimization-
+based Robotic Applications. In Proceedings of the 29th ACM International Confer-
+ence on Architectural Support for Programming Languages and Operating Systems,
+Volume 2 (La Jolla, CA, USA) (ASPLOS ’24). Association for Computing Machinery,
+New York, NY, USA, 813–829. doi:10.1145/3620665.3640379
+[22] Tairan He, Zhengyi Luo, Xialin He, Wenli Xiao, Chong Zhang, Weinan Zhang,
+Kris Kitani, Changliu Liu, and Guanya Shi. 2024. OmniH2O: Universal and
+Dexterous Human-to-Humanoid Whole-Body Teleoperation and Learning. arXiv
+preprint arXiv:2406.08858.
+[23] Tairan He, Zhengyi Luo, Wenli Xiao, Chong Zhang, Kris Kitani, Changliu Liu,
+and Guanya Shi. 2024. Learning human-to-humanoid real-time whole-body
+teleoperation. arXiv preprint arXiv:2403.04436.
+[24] Tairan He, Chong Zhang, Wenli Xiao, Guanqi He, Changliu Liu, and Guanya
+Shi. 2024. Agile but safe: Learning collision-free high-speed legged locomotion.
+arXiv preprint arXiv:2401.17583 (2024).
+[25] Xialin He, Runpei Dong, Zixuan Chen, and Saurabh Gupta. 2025.
+Learn-
+ing Getting-Up Policies for Real-World Humanoid Robots.
+arXiv preprint
+arXiv:2502.12152 (2025).
+[26] Connor W Herron, Christian Runyon, Isaac Pressgrove, Benjamin C Beiter,
+Bhaben Kalita, and Alexander Leonessa. 2024. Joint-space control of a structurally
+elastic humanoid robot. arXiv preprint arXiv:2411.11734 (2024).
+[27] Muyan Hu, Ashwin Venkatram, Shreyashri Biswas, Balamurugan Marimuthu,
+Bohan Hou, Gabriele Oliaro, Haojie Wang, Liyan Zheng, Xupeng Miao, and
+Jidong Zhai. 2024. Optimal Kernel Orchestration for Tensor Programs with
+Korch. In Proceedings of the 29th ACM International Conference on Architectural
+Support for Programming Languages and Operating Systems, Volume 3. 755–769.
+12
+
+
+--- Page 13 ---
+Resource-Aware VLA–MPC Co-Location for Efficient Embodied AI
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+[28] Yucheng Hu, Yanjiang Guo, Pengchao Wang, Xiaoyu Chen, Yen-Jen Wang, Jianke
+Zhang, Koushil Sreenath, Chaochao Lu, and Jianyu Chen. 2024. Video Prediction
+Policy: A Generalist Robot Policy with Predictive Visual Representations. In
+Forty-Second International Conference on Machine Learning (ICML 2025).
+[29] Yihan Hu, Jiazhi Yang, Li Chen, Keyu Li, Chonghao Sima, Xizhou Zhu, Siqi
+Chai, Senyao Du, Tianwei Lin, Wenhai Wang, Lewei Lu, Xiaosong Jia, Qiang Liu,
+Jifeng Dai, Yu Qiao, and Hongyang Li. 2023. Planning-oriented Autonomous
+Driving. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+Recognition.
+[30] Chih H Huang, Pranav Jadhav, Brian Plancher, and Zachary Kingston. 2025.
+pRRTC: GPU-Parallel RRT-Connect for Fast, Consistent, and Low-Cost Motion
+Planning. arXiv preprint arXiv:2503.06757 (2025).
+[31] Xiaotong Huang, He Zhu, Tianrui Ma, Yuxiang Xiong, Fangxin Liu, Zhezhi He,
+Yiming Gan, Zihan Liu, Jingwen Leng, Yu Feng, and Minyi Guo. 2026. Splatonic:
+Architectural Support for 3D Gaussian Splatting SLAM via Sparse Processing.
+In Proceedings of the 32nd IEEE International Symposium on High Performance
+Computer Architecture.
+[32] Yiyang Huang, Yuhui Hao, Bo Yu, Feng Yan, Yuxin Yang, Feng Min, Yinhe Han,
+Lin Ma, Shaoshan Liu, Qiang Liu, and Yiming Gan. 2025. Dadu-Corki: Algorithm-
+Architecture Co-Design for Embodied AI-powered Robotic Manipulation. In
+Proceedings of the 52nd Annual International Symposium on Computer Architecture
+(ISCA ’25). Association for Computing Machinery, New York, NY, USA, 327–343.
+doi:10.1145/3695053.3731099
+[33] Bo Jiang, Shaoyu Chen, Qing Xu, Bencheng Liao, Jiajie Chen, Helong Zhou, Qian
+Zhang, Wenyu Liu, Chang Huang, and Xinggang Wang. 2023. VAD: Vectorized
+Scene Representation for Efficient Autonomous Driving. ICCV (2023).
+[34] Sheng-Chun Kao, Suvinay Subramanian, Gaurav Agrawal, Amir Yazdanbakhsh,
+and Tushar Krishna. 2023. FLAT: An Optimized Dataflow for Mitigating At-
+tention Bottlenecks. In Proceedings of the 28th ACM International Conference on
+Architectural Support for Programming Languages and Operating Systems, Volume
+2 (Vancouver, BC, Canada) (ASPLOS 2023). Association for Computing Machinery,
+New York, NY, USA, 295–310. doi:10.1145/3575693.3575747
+[35] Alexander Khazatsky, Karl Pertsch, Suraj Nair, Ashwin Balakrishna, Sudeep
+Dasari, Siddharth Karamcheti, Soroush Nasiriany, Mohan Kumar Srirama,
+Lawrence Yunliang Chen, Kirsty Ellis, Peter David Fagan, Joey Hejna, Masha
+Itkina, Marion Lepert, Yecheng Jason Ma, Patrick Tree Miller, Jimmy Wu, Suneel
+Belkhale, Shivin Dass, Huy Ha, Arhan Jain, Abraham Lee, Youngwoon Lee, Mar-
+ius Memmel, Sungjae Park, Ilija Radosavovic, Kaiyuan Wang, Albert Zhan, Kevin
+Black, Cheng Chi, Kyle Beltran Hatch, Shan Lin, Jingpei Lu, Jean Mercat, Ab-
+dul Rehman, Pannag R. Sanketi, Archit Sharma, Cody Simpson, Quan Vuong,
+Homer Rich Walke, Blake Wulfe, Ted Xiao, Jonathan Heewon Yang, Arefeh
+Yavary, Tony Z. Zhao, Christopher Agia, Rohan Baijal, Mateo Guaman Castro,
+Daphne Chen, Qiuyu Chen, Trinity Chung, Jaimyn Drake, Ethan Paul Foster,
+Jensen Gao, Vitor Guizilini, David Antonio Herrera, Minho Heo, Kyle Hsu, Jia-
+heng Hu, Muhammad Zubair Irshad, Donovon Jackson, Charlotte Le, Yunshuang
+Li, Kevin Lin, Roy Lin, Zehan Ma, Abhiram Maddukuri, Suvir Mirchandani, Daniel
+Morton, Tony Nguyen, Abigail O’Neill, Rosario Scalise, Derick Seale, Victor Son,
+Stephen Tian, Emi Tran, Andrew E. Wang, Yilin Wu, Annie Xie, Jingyun Yang,
+Patrick Yin, Yunchu Zhang, Osbert Bastani, Glen Berseth, Jeannette Bohg, Ken
+Goldberg, Abhinav Gupta, Abhishek Gupta, Dinesh Jayaraman, Joseph J. Lim, Ji-
+tendra Malik, Roberto Martín-Martín, Subramanian Ramamoorthy, Dorsa Sadigh,
+Shuran Song, Jiajun Wu, Michael C. Yip, Yuke Zhu, Thomas Kollar, Sergey Levine,
+and Chelsea Finn. 2024. DROID: A Large-Scale In-The-Wild Robot Manipulation
+Dataset. arXiv preprint arXiv:2403.12945 (2024).
+[36] Moo Jin Kim, Karl Pertsch, Siddharth Karamcheti, Ted Xiao, Ashwin Balakrishna,
+Suraj Nair, Rafael Rafailov, Ethan Foster, Grace Lam, Pannag Sanketi, Quan
+Vuong, Thomas Kollar, Benjamin Burchfiel, Russ Tedrake, Dorsa Sadigh, Sergey
+Levine, Percy Liang, and Chelsea Finn. 2024. OpenVLA: An Open-Source Vision-
+Language-Action Model. arXiv preprint arXiv:2406.09246 (2024).
+[37] Moo Jin Kim, Chelsea Finn, and Percy Liang. 2025. Fine-tuning vision-language-
+action models: Optimizing speed and success. arXiv preprint arXiv:2502.19645
+(2025).
+[38] Srivatsan Krishnan, Zishen Wan, Kshitij Bhardwaj, Paul Whatmough, Aleksandra
+Faust, Sabrina Neuman, Gu-Yeon Wei, David Brooks, and Vijay Janapa Reddi.
+2023. Automatic Domain-Specific SoC Design for Autonomous Unmanned Aerial
+Vehicles. In Proceedings of the 55th Annual IEEE/ACM International Symposium
+on Microarchitecture (Chicago, Illinois, USA) (MICRO ’22). IEEE Press, 300–317.
+doi:10.1109/MICRO56248.2022.00033
+[39] Leshu Li, Jiayin Qin, Jie Peng, Zishen Wan, Huaizhi Qu, Ye Han, Pingqing Zheng,
+Hongsen Zhang, Yu Cao, Tianlong Chen, and Yang (Katie) Zhao. 2025. RTGS:
+Real-Time 3D Gaussian Splatting SLAM via Multi-Level Redundancy Reduction.
+In Proceedings of the 58th IEEE/ACM International Symposium on Microarchitec-
+ture (MICRO ’25). Association for Computing Machinery, New York, NY, USA,
+1838–1851. doi:10.1145/3725843.3756099
+[40] Shuang Li, Yihuai Gao, Dorsa Sadigh, and Shuran Song. 2025. Unified Video
+Action Model. In Proceedings of Robotics: Science and Systems (RSS).
+[41] Bo Liu, Yifeng Zhu, Chongkai Gao, Yihao Feng, Qiang Liu, Yuke Zhu, and Peter
+Stone. 2023. LIBERO: Benchmarking Knowledge Transfer for Lifelong Robot
+Learning. arXiv preprint arXiv:2306.03310 (2023).
+[42] Jiaming Liu, Mengzhen Liu, Zhenyu Wang, Pengju An, Xiaoqi Li, Kaichen Zhou,
+Senqiao Yang, Renrui Zhang, Yandong Guo, and Shanghang Zhang. [n. d.]. Robo-
+Mamba: Efficient Vision-Language-Action Model for Robotic Reasoning and
+Manipulation. In The Thirty-eighth Annual Conference on Neural Information
+Processing Systems.
+[43] Weizhuang Liu, Bo Yu, Yiming Gan, Qiang Liu, Jie Tang, Shaoshan Liu, and
+Yuhao Zhu. 2021. Archytas: A Framework for Synthesizing and Dynamically
+Optimizing Accelerators for Robotic Localization. In MICRO-54: 54th Annual
+IEEE/ACM International Symposium on Microarchitecture (Virtual Event, Greece)
+(MICRO ’21). Association for Computing Machinery, New York, NY, USA, 479–493.
+doi:10.1145/3466752.3480077
+[44] Zheng Liu, Zeyu Guo, Zihan Liu, Anbang Wu, Han Zhao, Fangxin Liu, Zhezhi
+He, Yinhe Han, Jingwen Leng, Minyi Guo, Yiming Gan, and Yu Feng. 2026.
+Deltoris: Enabling Real-time VLA Inference in Embodied AI via Bit-level Sparsity
+and Speculative Inference. In Proceedings of the 59th IEEE/ACM International
+Symposium on Microarchitecture.
+[45] Yueen Ma, Zixing Song, Yuzheng Zhuang, Jianye Hao, and Irwin King. 2026. A
+survey on vision–language–action models for embodied ai. IEEE Transactions on
+Neural Networks and Learning Systems (2026).
+[46] David Q Mayne, James B Rawlings, Christopher V Rao, and Pierre OM Scokaert.
+2000. Constrained model predictive control: Stability and optimality. Automatica
+36, 6 (2000), 789–814.
+[47] Josh Merel, Arun Ahuja, Vu Pham, Saran Tunyasuvunakool, Siqi Liu, Dhruva
+Tirumala, Nicolas Heess, and Greg Wayne. 2018. Hierarchical visuomotor control
+of humanoids. arXiv preprint arXiv:1811.09656 (2018).
+[48] Sabrina M. Neuman, Radhika Ghosal, Thomas Bourgeat, Brian Plancher, and
+Vijay Janapa Reddi. 2023. RoboShape: Using Topology Patterns to Scalably and
+Flexibly Deploy Accelerators Across Robots. In Proceedings of the 50th Annual
+International Symposium on Computer Architecture (Orlando, FL, USA) (ISCA ’23).
+Association for Computing Machinery, New York, NY, USA, Article 69, 13 pages.
+doi:10.1145/3579371.3589104
+[49] Sabrina M. Neuman, Brian Plancher, Thomas Bourgeat, Thierry Tambe, Srini-
+vas Devadas, and Vijay Janapa Reddi. 2021. Robomorphic computing: a design
+methodology for domain-specific accelerators parameterized by robot morphol-
+ogy. In Proceedings of the 26th ACM International Conference on Architectural
+Support for Programming Languages and Operating Systems (Virtual, USA) (ASP-
+LOS ’21). Association for Computing Machinery, New York, NY, USA, 674–686.
+doi:10.1145/3445814.3446746
+[50] Nvidia. 2023. Jetson Orin for Next-Gen Robotics. https://www.nvidia.com/en-
+us/autonomous-machines/embedded-systems/jetson-orin/
+[51] Nvidia. 2025. NVIDIA Jetson Thor: The ultimate platform for physical AI and
+robotics.
+https://www.nvidia.com/en-us/autonomous-machines/embedded-
+systems/jetson-thor/
+[52] Nvidia. 2026. Multi-Process Service. https://docs.nvidia.com/deploy/mps/latest/
+index.html
+[53] Nvidia. 2026.
+Parallel Thread Execution ISA Version 9.3.
+https:
+//docs.nvidia.com/cuda/parallel-thread-execution/index.html#miscellaneous-
+instructions-setmaxnreg
+[54] Nvidia. 2026.
+TensorCore 5th Generation Family Instructions.
+https:
+//docs.nvidia.com/cuda/parallel-thread-execution/index.html#tensorcore-5th-
+generation-instructions
+[55] Jaehyeong Park, Youngchan Kim, Haechan An, Gieun Jeong, Jeehoon Kang, and
+Dongsu Han. 2026. Trinity: Three-Dimensional Tensor Program Optimization
+via Tile-level Equality Saturation. In Proceedings of the 31st ACM International
+Conference on Architectural Support for Programming Languages and Operating
+Systems, Volume 2 (USA) (ASPLOS ’26). Association for Computing Machinery,
+New York, NY, USA, 2079–2107. doi:10.1145/3779212.3790240
+[56] Karl Pertsch, Kyle Stachowicz, Brian Ichter, Danny Driess, Suraj Nair, Quan
+Vuong, Oier Mees, Chelsea Finn, and Sergey Levine. 2025. Fast: Efficient action
+tokenization for vision-language-action models. arXiv preprint arXiv:2501.09747
+(2025).
+[57] Chunyu Qi, Zhuoran Song, Jian Weng, Haozhe Jiang, Xueyuan Liu, Naifeng Jing,
+Guanghui He, Xiaoyao Liang, and Haibing Guan. 2026. SpecVLA: Algorithm-
+Architecture Co-Design for Efficient VLA Inference via Speculative Inference
+and Verification. In Proceedings of the 59th IEEE/ACM International Symposium
+on Microarchitecture.
+[58] Le Qin, Junwei Cui, Weilin Cai, and Jiayi Huang. 2025. Chimera: Communi-
+cation Fusion for Hybrid Parallelism in Large Language Models. In Proceed-
+ings of the 52nd Annual International Symposium on Computer Architecture
+(ISCA ’25). Association for Computing Machinery, New York, NY, USA, 498–513.
+doi:10.1145/3695053.3731025
+[59] Jacob Sacks, Divya Mahajan, Richard C. Lawson, Behnam Khaleghi, and Hadi
+Esmaeilzadeh. 2018. Robox: an end-to-end solution to accelerate autonomous
+control in robotics. In Proceedings of the 45th Annual International Symposium on
+Computer Architecture (Los Angeles, California) (ISCA ’18). IEEE Press, 479–490.
+doi:10.1109/ISCA.2018.00047
+13
+
+
+--- Page 14 ---
+ISCA ’27, June 5–9, 2027, Atlanta, Georgia, USA
+Zeyu Guo et al.
+[60] Michel Schubiger, Goran Banjac, and John Lygeros. 2020. GPU acceleration of
+ADMM for large-scale quadratic programming. J. Parallel and Distrib. Comput.
+144 (2020), 55–67.
+[61] Deval Shah and Tor M. Aamodt. 2024. Collision Prediction for Robotics Ac-
+celerators. In Proceedings of the 51st Annual International Symposium on Com-
+puter Architecture (Buenos Aires, Argentina) (ISCA ’24). IEEE Press, 566–581.
+doi:10.1109/ISCA59077.2024.00048
+[62] Deval Shah, Ningfeng Yang, and Tor M. Aamodt. 2023. Energy-Efficient Realtime
+Motion Planning. In Proceedings of the 50th Annual International Symposium on
+Computer Architecture (Orlando, FL, USA) (ISCA ’23). Association for Computing
+Machinery, New York, NY, USA, Article 57, 17 pages. doi:10.1145/3579371.3589092
+[63] Chonghao Sima, Katrin Renz, Kashyap Chitta, Li Chen, Hanxue Zhang, Chengen
+Xie, Ping Luo, Andreas Geiger, and Hongyang Li. 2023. DriveLM: Driving with
+Graph Visual Question Answering. arXiv preprint arXiv:2312.14150 (2023).
+[64] Zhuoran Song, Haozhe Jiang, Chunyu Qi, Minnan Pei, Gang Li, Xiaoyao Liang,
+and Haibing Guan. 2026. VQVLA: Motion-Aware Vector Quantization with
+Computation Fusion for VLA Acceleration. In Proceedings of the 59th IEEE/ACM
+International Symposium on Microarchitecture.
+[65] Bartolomeo Stellato, Goran Banjac, Paul Goulart, Alberto Bemporad, and Stephen
+Boyd. 2018. OSQP: An operator splitting solver for quadratic programs. In 2018
+UKACC 12th international conference on control (CONTROL). IEEE, 339–339.
+[66] Foteini Strati, Xianzhe Ma, and Ana Klimovic. 2024. Orion: Interference-aware,
+Fine-grained GPU Sharing for ML Applications. In Proceedings of the Nine-
+teenth European Conference on Computer Systems (Athens, Greece) (EuroSys
+’24). Association for Computing Machinery, New York, NY, USA, 1075–1092.
+doi:10.1145/3627703.3629578
+[67] Xudong Tan, Yaoxin Yang, Peng Ye, Jialin Zheng, Bizhe Bai, Xinyi Wang, Jia Hao,
+and Tao Chen. 2025. Think Twice, Act Once: Token-Aware Compression and
+Action Reuse for Efficient Inference in Vision-Language-Action Models. arXiv
+e-prints (2025). arXiv:2505.21200 https://arxiv.org/abs/2505.21200
+[68] Justin Ting, Minsik Kim, Junkang Zhu, Haotian Sheng, and Zhengya Zhang. 2025.
+HiPER: Hierarchically-Composed Processing for Efficient Robot Learning-Based
+Control. In Proceedings of the 52nd Annual International Symposium on Computer
+Architecture (ISCA ’25). Association for Computing Machinery, New York, NY,
+USA, 313–326. doi:10.1145/3695053.3731097
+[69] Emanuel Todorov, Tom Erez, and Yuval Tassa. 2012. MuJoCo: A physics engine
+for model-based control. In 2012 IEEE/RSJ International Conference on Intelligent
+Robots and Systems. 5026–5033. doi:10.1109/IROS.2012.6386109
+[70] Bogdan Vlahov, Jason Gibson, Manan Gandhi, and Evangelos A. Theodorou. 2026.
+MPPI-Generic: A CUDA Library for Stochastic Trajectory Optimization. arXiv
+e-prints (2026). arXiv:2409.07563 https://arxiv.org/abs/2409.07563
+[71] Zishen Wan, Yuhang Du, Mohamed Ibrahim, Jiayi Qian, Jason Jabbour,
+Yang (Katie) Zhao, Tushar Krishna, Arijit Raychowdhury, and Vijay Janapa Reddi.
+2025. ReCA: Integrated Acceleration for Real-Time and Efficient Cooperative
+Embodied Autonomous Agents. In Proceedings of the 30th ACM International
+Conference on Architectural Support for Programming Languages and Operating
+Systems, Volume 2. Association for Computing Machinery, New York, NY, USA,
+982–997. https://doi.org/10.1145/3676641.3716016
+[72] Hanzhen Wang, Jiaming Xu, Yushun Xiang, Jiayi Pan, Yongkang Zhou, Yong-
+Lu Li, and Guohao Dai. 2026. SpecPrune-VLA: Accelerating Vision-Language-
+Action Models via Action-Aware Self-Speculative Pruning. arXiv e-prints (2026).
+arXiv:2509.05614 https://arxiv.org/abs/2509.05614
+[73] Maolin Wang, Ian McInerney, Bartolomeo Stellato, Stephen Boyd, and Hayden
+Kwok-Hay So. 2023. RSQP: Problem-specific Architectural Customization for
+Accelerated Convex Quadratic Optimization. In Proceedings of the 50th Annual
+International Symposium on Computer Architecture (Orlando, FL, USA) (ISCA ’23).
+Association for Computing Machinery, New York, NY, USA, Article 73, 12 pages.
+doi:10.1145/3579371.3589108
+[74] Junjie Wen, Yichen Zhu, Jinming Li, Minjie Zhu, Kun Wu, Zhiyuan Xu, Ran Cheng,
+Chaomin Shen, Yaxin Peng, Feifei Feng, and Jian Tang. 2024. TinyVLA: Towards
+Fast, Data-Efficient Vision-Language-Action Models for Robotic Manipulation.
+arXiv preprint arXiv:2409.12514 (2024).
+[75] Grady Williams, Andrew Aldrich, and Evangelos Theodorou. 2015. Model predic-
+tive path integral control using covariance variable importance sampling. arXiv
+preprint arXiv:1509.01149 (2015).
+[76] Grady Williams, Andrew Aldrich, and Evangelos A Theodorou. 2017. Model
+predictive path integral control: From theory to parallel computation. Journal of
+Guidance, Control, and Dynamics 40, 2 (2017), 344–357.
+[77] Bo Wu, Guoyang Chen, Dong Li, Xipeng Shen, and Jeffrey Vetter. 2015. Enabling
+and exploiting flexible task assignment on GPU through SM-centric program
+transformations. In Proceedings of the 29th ACM on International Conference on
+Supercomputing. 119–130.
+[78] Siyu Xu, Yunke Wang, Chenghao Xia, Dihao Zhu, Tao Huang, and Chang Xu.
+2025. Vla-cache: Towards efficient vision-language-action model via adaptive
+token caching in robotic manipulation. arXiv e-prints (2025), arXiv–2502.
+[79] Pengyu Yang, Weihao Cui, Chunyu Xue, Han Zhao, Chen Chen, Quan Chen,
+Jing Yang, and Minyi Guo. 2025. Taming Flexible Job Packing in Deep Learning
+Training Clusters. ACM Trans. Archit. Code Optim. 22, 1, Article 37 (March 2025),
+24 pages. doi:10.1145/3711927
+[80] Yuxin Yang, Xiaoming Chen, and Yinhe Han. 2023. Dadu-RBD: Robot Rigid Body
+Dynamics Accelerator with Multifunctional Pipelines. In Proceedings of the 56th
+Annual IEEE/ACM International Symposium on Microarchitecture (Toronto, ON,
+Canada) (MICRO ’23). Association for Computing Machinery, New York, NY,
+USA, 297–309. doi:10.1145/3613424.3614298
+[81] Zebin Yang, Yijiahao Qi, Tong Xie, Bo Yu, Shaoshan Liu, and Meng Li. 2026. DySL-
+VLA: Efficient Vision-Language-Action Model Inference via Dynamic-Static
+Layer-Skipping for Robot Manipulation. arXiv e-prints (2026). arXiv:2602.22896
+https://arxiv.org/abs/2602.22896
+[82] Zhaoshu Yu, Bo Wang, Pengpeng Zeng, Haonan Zhang, Ji Zhang, Zheng Wang,
+Lianli Gao, Jingkuan Song, Nicu Sebe, and Heng Tao Shen. 2025. A survey on
+efficient vision-language-action models. arXiv preprint arXiv:2510.24795 (2025).
+[83] Jingxuan Zhang, Yunta Hsieh, Zhongwei Wan, Haokun Lin, Xin Wang, Ziqi
+Wang, Yingtie Lei, and Mi Zhang. 2026.
+QuantVLA: Scale-Calibrated Post-
+Training Quantization for Vision-Language-Action Models. arXiv e-prints (2026).
+arXiv:2602.20309 https://arxiv.org/abs/2602.20309
+[84] Rongyu Zhang, Menghang Dong, Yuan Zhang, Liang Heng, Xiaowei Chi, Gaole
+Dai, Li Du, Dan Wang, Yuan Du, and Shanghang Zhang. 2025. MoLe-VLA:
+Dynamic Layer-skipping Vision Language Action Model via Mixture-of-Layers
+for Efficient Robot Manipulation. arXiv preprint arXiv:2503.20384 (2025).
+[85] Han Zhao, Weihao Cui, Quan Chen, and Minyi Guo. 2023. ISPA: Exploiting
+Intra-SM Parallelism in GPUs via Fine-Grained Resource Management. IEEE
+Trans. Comput. 72, 5 (May 2023), 1473–1487. doi:10.1109/TC.2022.3214088
+[86] Han Zhao, Weihao Cui, Quan Chen, Youtao Zhang, Yanchao Lu, Chao Li, Jingwen
+Leng, and Minyi Guo. 2022. Tacker: Tensor-cuda core kernel fusion for improving
+the gpu utilization while ensuring qos. In 2022 IEEE International Symposium on
+High-Performance Computer Architecture (HPCA). IEEE, 800–813.
+[87] Han Zhao, Junxiao Deng, Weihao Cui, Quan Chen, Youtao Zhang, Deze Zeng,
+and Minyi Guo. 2025. Adaptive Kernel Fusion for Improving the GPU Utilization
+While Ensuring QoS. IEEE Trans. Comput. 74, 2 (Feb. 2025), 386–400. doi:10.1109/
+TC.2024.3477995
+[88] Lianmin Zheng, Chengfan Jia, Minmin Sun, Zhao Wu, Cody Hao Yu, Ameer
+Haj-Ali, Yida Wang, Jun Yang, Danyang Zhuo, Koushik Sen, Joseph E. Gonzalez,
+and Ion Stoica. 2020. Ansor: generating high-performance tensor programs
+for deep learning. In Proceedings of the 14th USENIX Conference on Operating
+Systems Design and Implementation (OSDI’20). USENIX Association, USA, Article
+49, 17 pages.
+[89] Zihao Zheng, Hangyu Cao, Sicheng Tian, Jiayu Chen, Maoliang Li, Xinhao Sun,
+Hailong Zou, Zhaobo Zhang, Xuanzhe Liu, Donggang Cao, Hong Mei, and Xiang
+Chen. 2026. DyQ-VLA: Temporal-Dynamic-Aware Quantization for Embodied
+Vision-Language-Action Models. arXiv e-prints (2026). arXiv:2603.07904 https:
+//arxiv.org/abs/2603.07904
+[90] Yifan Zhong, Fengshuo Bai, Shaofei Cai, Xuchuan Huang, Zhang Chen, Xiaowei
+Zhang, Yuanfei Wang, Shaoyang Guo, Tianrui Guan, Ka Nam Lui, Zhiquan
+Qi, Yitao Liang, Yuanpei Chen, and Yaodong Yang. 2025. A Survey on Vision-
+Language-Action Models: An Action Tokenization Perspective. arXiv preprint
+arXiv:2507.01925 (2025).
+[91] Hongyu Zhu, Ruofan Wu, Yijia Diao, Shanbin Ke, Haoyu Li, Chen Zhang, Jilong
+Xue, Lingxiao Ma, Yuqing Xia, Wei Cui, Fan Yang, Mao Yang, Lidong Zhou, Asaf
+Cidon, and Gennady Pekhimenko. 2022. ROLLER: Fast and Efficient Tensor
+Compilation for Deep Learning. In 16th USENIX Symposium on Operating Systems
+Design and Implementation (OSDI 22). USENIX Association, Carlsbad, CA, 233–
+248. https://www.usenix.org/conference/osdi22/presentation/zhu
+14

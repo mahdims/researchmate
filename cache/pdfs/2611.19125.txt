@@ -1,0 +1,796 @@
+--- Page 1 ---
+AI Inference-Aware Optimal Power Flow:
+Converting Token Requirements into Grid Flexibility
+Qianyi Ma, Dawei Qiu
+School of Electrical and Electronic Engineering
+Nanyang Technological University
+Singapore 639798, Singapore
+qianyi.ma@ntu.edu.sg, dawei.qiu@ntu.edu.sg
+Xiao Liu
+College of Engineering
+Cornell University
+Ithaca, NY 14853, USA
+xl2372@cornell.edu
+Abstract—The rapid growth, temporal variability, and ge-
+ographic concentration of electricity demand from artificial
+intelligence (AI) inference can aggravate transmission congestion
+near data centers (DCs). The spatial and temporal flexibility
+of inference workloads offers an opportunity to alleviate this
+congestion: requests can be routed across DCs or deferred
+within users’ quality-of-service (QoS) requirements. However,
+inference routing primarily considers graphics processing unit
+(GPU) availability, leaving this flexibility underused in grid
+operation. Using GPU measurements, this paper models inference
+latency and DC power consumption to quantify the flexibility
+available under users’ time-to-first-token (TTFT) and inter-token
+latency (ITL) requirements. These models are then incorporated
+into an AI inference-aware optimal power flow (OPF) that
+coordinates inference routing and power system operation among
+DC operators, the transmission system operator, and inference
+users. By linking user requests, token generation at DCs, and
+electricity delivery through the transmission network, the formu-
+lation schedules inference workloads subject to both users’ QoS
+requirements and transmission constraints. Simulations on the
+PJM system show that, compared with computing-based routing
+and with electricity price-based routing, coordinating inference
+routing with network operation enables growing DC electricity
+demand deliverable to be met at lower cost.
+Index Terms—AI inference, data centers, demand flexibility,
+optimal power flow, quality of service, tokens.
+I. INTRODUCTION
+Artificial intelligence (AI) inference accounts for an esti-
+mated 80–90% of AI computing demand [1], and its continued
+growth is expected to increase electricity consumption in data
+centers (DCs) [2]. Inference load may be concentrated at a
+small number of transmission buses and fluctuate with user
+requests [3]. This concentration and variability can worsen
+local transmission congestion and limit the additional DC load
+that the network can supply.
+At the same time, inference offers spatial and temporal flex-
+ibility that could help relieve this congestion. Each inference
+request generates a sequence of tokens, the basic units of
+model output. Users’ quality-of-service (QoS) requirements
+include limits on time-to-first-token (TTFT), the delay from
+request submission to the first output token, and inter-token
+latency (ITL), the interval between successive output tokens.
+Requests can be routed among geographically distributed DCs
+while respecting these latency limits. Users may also permit
+requests to be completed within a specified deferral window
+[4]. A field trial has demonstrated that DC electricity use can
+be reduced during system peaks while maintaining workload-
+level QoS [5].
+In current practice, inference routing primarily considers
+computing resources and communication latency. Cloud plat-
+forms direct requests to DCs with available graphics process-
+ing units (GPUs) and low communication latency [6], [7],
+while deferrable requests are scheduled to use otherwise idle
+GPUs [8]. These mechanisms do not explicitly account for
+transmission constraints, leaving inference flexibility under-
+used in power system operation.
+Related research has approached inference flexibility from
+two perspectives. From the computing perspective, studies
+have explored serving requests across regions to reduce GPU
+rental costs [9], adapting inference operation to electricity
+prices [10], [11], and pricing inference services according to
+latency requirements [12]. From the power system perspective,
+DCs have been modeled as responsive electricity loads [13] or
+spatially shiftable demand for emissions reduction [14], [15],
+or participants in demand response programs [16], [17].
+Each perspective captures only part of the interaction among
+user requests, DC computing, and the power grid. Inference
+serving decisions determine the location, timing, and magni-
+tude of DC electricity demand. However, computing-oriented
+studies often overlook how these decisions affect transmission
+congestion, leaving available flexibility underused in grid
+operation. Grid-oriented studies, in turn, may overestimate
+this flexibility by neglecting user QoS requirements or DC
+computing constraints. Two questions therefore remain: how
+much DC flexibility the grid can actually use while satisfying
+these requirements and constraints, and how inference serving
+can be coordinated with network operation.
+To answer these questions, the main contributions of this
+paper are as follows:
+1) An inference flexibility model is developed using GPU
+measurements. It links token generation to DC power con-
+sumption and quantifies the flexibility available to the grid
+under users’ TTFT limits, ITL limits, and request deferral
+windows.
+2) An AI inference-aware OPF is proposed to coordinate
+inference routing and power system operation among the
+transmission system operator, DC operators, and inference
+users. It links user requests and token generation at DCs
+with electricity delivery through the transmission network
+under QoS, computing, and transmission constraints.
+arXiv:2611.19125v1  [eess.SY]  14 Nov 2026
+
+
+--- Page 2 ---
+Transmission network
+~
+~
+DC 1
+DC 2
+DC 3
+w1 replicas
+replica: one
+model copy
+on GPUs
+Inter-token latency
+limit →
+R, εQoS
+Interactive
+Flexible
+User region A
+Interactive
+Flexible
+User region B
+Time-to-first-token
+limit →
+reachable DCs
+request
+output tokens
+other reachable DC
+AI inference-aware OPF
+Generation offers
+DC replicas
+Token demand and
+quality of service
+Dispatch g
+DC load p
+Routing y
+Scheduling z
+Request timeline (ms)
+TTFT
+ITL
+Flexible request (h)
+deferral window
+Fig. 1. Overview of the AI inference-aware OPF.
+3) Case studies on the PJM system show that the proposed
+OPF accommodates growing inference demand at lower
+operating cost than computing-based and electricity price-
+based routing while respecting existing transmission limits.
+II. AI INFERENCE-AWARE OPF FRAMEWORK
+Fig. 1 illustrates the coordinated operation among infer-
+ence platforms, DC operators, and the transmission system
+operator. DC operators provide information on their installed
+model replicas and the measured relationship among replica
+throughput, latency, and GPU power consumption. Here, a
+replica denotes one copy of an AI model deployed on a
+specified group of GPUs. Inference platforms aggregate user
+requests by geographic region and QoS class, and provide
+the corresponding token demand, TTFT and ITL limits, and
+permissible deferral windows. The proposed AI inference-
+aware OPF uses these data as inputs together with generation
+offers and transmission network constraints.
+These inputs constrain where and when inference requests
+can be served and how many tokens each active replica can
+produce. Specifically, the TTFT limit restricts which DCs can
+serve requests from each user region. The ITL requirement
+limits how many tokens an active replica can produce per
+hour. The deferral window specifies when demand may be
+served. Subject to these limits and transmission constraints,
+the inference-aware OPF selects where and when tokens are
+produced, how many replicas are activated, and how generators
+are dispatched.
+These latency and deferral requirements vary across infer-
+ence applications. The model therefore considers two request
+classes. Interactive requests, such as conversational inference,
+cannot be deferred and require a relatively fast token stream.
+Flexible requests, such as batch inference jobs, allow a slower
+token stream and may be deferred within a specified window.
+The OPF uses hourly intervals to represent deferral across
+hours. Inference platforms implement the resulting token allo-
+cations by routing and scheduling individual requests within
+each hour.
+III. AI INFERENCE-AWARE OPF MODEL
+The system operator maximizes social welfare, i.e., the
+utility of the served inference demand minus the generation
+cost. Since all demand must be served, this utility is fixed, and
+the problem reduces to minimizing the total generation cost
+over the hours t ∈T , subject to the request constraints (2)–
+(4), the DC constraints (5)–(8), and the network constraints
+(9)–(12):
+min
+z,y,r,x,g
+P
+t
+P
+k Ck(gk,t)
+s.t. (2)–(12),
+(1)
+where gk,t is the output of generator k and Ck its cost function.
+A. Inference Requests Model
+Users in region u ∈U experience approximately the same
+communication round-trip time (RTT) LRTT
+u,i
+to DC i ∈I.
+A QoS class s ∈S specifies a TTFT limit ¯LTTFT
+s
+, an ITL
+limit ¯LITL
+s
+, and a deferral window ¯δs in hours. Each region–
+class pair defines a request group j = (u, s) ∈J with token
+demand Dj,τ arriving in hour τ.
+TTFT is approximated by RTT plus a fixed prefill time τ pre
+i
+for processing the input prompt. The TTFT limit therefore
+determines where a request can be served, namely at the
+reachable DCs of group j:
+Ij = {i ∈I : LRTT
+u(j),i + τ pre
+i
+≤¯LTTFT
+s(j)
+}.
+(2)
+The deferral window, in turn, determines when a request can
+be served. Let zj,τ,t be the demand of group j arriving in hour
+τ and served in hour t. The demand arriving in hour τ must
+be fully served within its deferral window [τ, τ + ¯δs(j)]:
+Dj,τ −Pτ+¯δs(j)
+t=τ
+zj,τ,t = 0.
+(3)
+For flexible requests, the deferral window applies to the delay
+before service begins, whereas the modeled TTFT and ITL
+limits apply once serving starts. Let yji,t be the tokens of
+group j served at DC i in hour t. Whatever their arrival hour,
+the tokens served in hour t are allocated among the reachable
+DCs:
+P
+τ: t∈[τ,τ+¯δs(j)] zj,τ,t −P
+i∈Ij yji,t = 0.
+(4)
+Interactive requests set ¯δs = 0 and are served on arrival.
+B. Data Center Model
+Each DC i hosts a fixed number wi replicas. In hour t, xi,s,t
+of replicas are activated for QoS class s, and the others remain
+idle. The variable xi,s,t is continuous, which allows replicas
+to be shared within an hour. A replica raises its throughput
+v, i.e., its token generation rate, by serving more requests
+concurrently, at the expense of a longer ITL. Fig. 2 captures
+this trade-off with an increasing ITL curve Li(v) and an affine
+GPU power fit ai+βiv. The ITL limit of class s therefore caps
+the throughput of a replica at ¯vi,s, defined by Li(¯vi,s) = ¯LITL
+s
+,
+so that a replica produces at most ¯Ri,s = κ¯vi,s class-s tokens
+in an hourly interval of κ seconds. The class-s token output
+
+
+--- Page 3 ---
+0
+1000
+2000
+Throughput v (tok/s)
+30
+40
+50
+60
+70
+Median ITL (ms)̄
+L
+ITL
+Ī
+vĪ
+L
+ITL
+F̄
+vF
+(a)
+0
+1000
+2000
+Throughput v (tok/s)
+0
+2
+4
+GPU power (kW)
+idle
+(b)
+Affine fit
+Measured
+Fig. 2.
+Measured GPU serving curves versus throughput: (a) inter-token
+latency; (b) GPU power.
+ri,s,t of DC i must equal the tokens routed to it. Since a
+request is completed within seconds, routing and production
+take place in the same hour:
+P
+j: s(j)=s, i∈Ij yji,t −ri,s,t = 0.
+(5)
+Since each active replica produces at most ¯Ri,s tokens per
+hour, enough replicas must be activated to cover this output:
+ri,s,t −¯Ri,sxi,s,t ≤0,
+(6)
+so that each class-s token occupies a fraction 1/ ¯Ri,s of a
+replica.
+Finally, the replicas activated for all classes cannot exceed
+those hosted by the DC:
+P
+s xi,s,t −wi ≤0.
+(7)
+With fixed base load pbase
+i
+, idle replica power pidle
+i
+, and power
+usage effectiveness χi, DC power is
+pi,t = pbase
+i
++ χiwipidle
+i
++ hi
+P
+s xi,s,t + ei
+P
+s ri,s,t,
+(8)
+where hi = χi(ai −pidle
+i
+) is the additional power of activating
+a replica and ei = χiβi/κ is the marginal energy consumption
+per token. Thus, (8) splits DC power consumption into a con-
+stant component comprising base load and idle consumption,
+an activation component proportional to the number of active
+replicas, and a token-production component proportional to
+token output. A tighter ITL limit can reduce the token capacity
+of each replica. Serving the same token demand may therefore
+require more active replicas, increasing the activation overhead
+and hence the average energy consumption per token.
+C. Transmission Network Constraints
+DC i draws pi,t at bus n(i) of a network with buses n ∈N,
+lines ℓ∈L, and generators k ∈K. Under the direct-current
+power-flow approximation, with other load Loth
+n,t and power
+transfer distribution factors Ψℓn,
+P
+i pi,t + P
+n Loth
+n,t −P
+k gk,t = 0,
+(9)
+−¯fℓ≤P
+n Ψℓninjn,t ≤¯fℓ,
+(10)
+injn,t = P
+k:n(k)=n gk,t −Loth
+n,t −P
+i:n(i)=n pi,t,
+(11)
+Gk ≤gk,t ≤¯Gk,
+(12)
+where ¯fℓis the line-flow limit, Gk and ¯Gk are generation
+limits, and z, y, r, x ≥0. Constraint (9) balances total gen-
+eration with the DC load and the other load. Constraint (10)
+keeps the line flows, obtained from the net bus injections (11)
+through the power transfer distribution factors, within their
+limits. Finally, constraint (12) bounds the generator outputs.
+In summary, the decision variables are the generator outputs
+g, the deferral schedule z, the token routing y, and the DC
+token outputs r and active replicas x. And the proposed OPF
+is a convex program.
+IV. CASE STUDIES
+Case studies use the 7,830-bus PJM network [18]. Solar pro-
+files are derived from the National Solar Radiation Database
+[19], wind profiles from bias-corrected High-Resolution Rapid
+Refresh data [20], and load profiles from EIA-930 [21]. A total
+of 333 DCs are identified from public inventories, including
+the IM3 atlas [22], and mapped to 138 buses. Fig. 3 shows the
+resulting test system. The main DC clusters are in Northern
+Virginia (DOM), Ohio (AEP), and the Chicago area (ComEd).
+At each DC, 10% of capacity is allocated to infer-
+ence. Each replica serves Llama-3.1-405B on eight H100
+GPUs, with serving curves fitted to measurements from the
+ML.ENERGY Benchmark [23]. Requests originate from three
+regions: Chicago, Northern Virginia, and New Jersey. RTTs are
+obtained from RIPE Atlas [24], and request demand profiles
+from BurstGPT [3]. The median ITL limits are 36.3 ms for
+interactive requests and 48.0 ms for flexible requests. Both
+classes have an 80-ms TTFT limit, with a 40-ms prefill time.
+Weekly simulations cover July 10–16, 2023, with cyclic
+hour indexing so that deferral windows wrap around the end
+of the week. Single-hour analyses use the snapshot at 16:00
+on July 15, 2023. All optimization models are solved using
+Gurobi 12.0.3.
+A. Superiority of the Inference-Aware OPF
+To evaluate the benefit of coordinating inference routing
+with network operation, the proposed OPF is compared with
+two routing benchmarks: 1) Computing-based routing (pre-
+vailing industry practice) assigns each request to the nearest
+reachable DC, i.e., the one with the lowest RTT, among
+those with spare GPU capacity [6], [7]; 2) Ex-ante LMP-
+based routing assigns each request to the reachable DC with
+the lowest electricity cost per token, evaluated using LMPs
+computed without inference load, and routes excess demand
+to the next cheapest reachable DC [17]. GPU capacity and
+token demand are scaled at the existing DC buses to obtain
+inference energy shares of 2–8%.
+Table I reports the number of network-infeasible hours and
+the weekly system cost added by inference. Relative cost
+increases are calculated using the inference-aware OPF with
+a 12-h deferral window as the reference. At low inference
+shares, when both benchmarks remain feasible, computing-
+based routing yields the highest cost, followed by LMP-based
+routing. Computing-based routing minimizes latency without
+considering electricity prices. LMP-based routing uses prices
+and respects GPU capacity limits, but does not jointly consider
+the alternative DCs available to different user regions. It may
+therefore assign scarce low-cost capacity to requests with
+other affordable options, leaving requests with fewer options
+to be served at expensive DCs. The proposed OPF instead
+
+
+--- Page 4 ---
+DOM
+AEP
+ComEd
+Chicago
+N. Virginia
+New Jersey
+DC inference capacity
+1 MW
+10 MW
+50 MW
+User region
+Transmission line
+Fig. 3. PJM test system with DCs and user regions.
+TABLE I
+COMPARISON OF DIFFERENT INFERENCE ROUTING SCHEMES
+Inference
+Infeasible hours
+Inference-induced system cost
+energy
+Computing Ex-ante LMP Proposed Computing Ex-ante LMP
+Proposed
+share
+w/o def. 12-h def.
+(∆%)
+(∆%)
+(∆%)
+(M$)
+0.3% (base)
+0
+0
+0
++9.0
++8.4
++7.5
+0.91
+2%
+0
+0
+0
++8.1
++7.5
++6.6
+6.65
+4%
+0
+0
+0
++7.1
++6.6
++5.7
+13.93
+6%
+20
+10
+0
+–
+–
++4.7
+21.90
+8%
+83
+16
+0
+–
+–
++3.9
+30.59
+jointly optimizes routing and GPU allocation, reserving low-
+cost capacity to requests with fewer affordable alternatives and
+directing requests with more options elsewhere. This reduces
+reliance on expensive DCs and lowers the overall system cost.
+At inference shares of 6% and 8%, both benchmark
+schemes become network-infeasible during weekday after-
+noons, whereas the proposed OPF remains feasible in every
+hour. Under computing-based routing, requests from Northern
+Virginia concentrate at nearby DCs in the DOM zone, where
+the additional load exceeds the zone’s available import ca-
+pability. LMP-based routing produces fewer infeasible hours
+but also concentrates demand at low-price DCs, since its
+routing prices do not reflect the additional congestion caused
+by inference load. The proposed OPF avoids these violations
+by routing part of the demand to DCs in Ohio and western
+Pennsylvania that remain reachable within the users’ TTFT
+limits. Allowing deferral further reduces the system cost,
+although the percentage savings decline as the inference share
+increases. This is because the additional demand shifted to
+night-time hours raises LMPs in those hours, reducing the
+savings from off-peak operation.
+Fig. 4 compares nodal LMPs under LMP-based routing
+and the proposed OPF for the single-hour snapshot at an 8%
+inference energy share. The proposed OPF routes part of the
+inference demand to northern areas where exports of local
+generation are constrained, allowing more generation to be
+consumed locally. LMPs there rise from negative levels, while
+those in the high-price eastern areas decline. This reallocation
+narrows the spatial spread of LMPs, and congestion rent also
+falls without network reinforcement.
+(a)
+(b)
+-6.7
+0.5
+7.5
+9
+10.8
+12.5
+15.1
+15.4
+15.6
+15.9
+Nodal LMP ($/MWh)
+Fig. 4. Nodal LMPs at an 8% inference share: (a) LMP-based routing; (b)
+proposed AI inference-aware OPF.
+50
+55
+60
+65
+70
+75
+80
+TTFT limit, both classes (ms)
+1658.80
+1658.85
+1658.90
+1658.95
+System cost (k$)
+Cost plateaus at 58.5 ms
+(a)
+50
+65
+80
+TTFT (ms)
+0
+333
+Reachable DCs / region
+Chicago
+N. Virginia
+New Jersey
+35
+40
+45
+50
+55
+60
+65
+Interactive ITL limit (ms)
+1658
+1659
+1660
+System cost (k$)
+(b)
+System cost
+Active interactive replicas
+0
+20
+40
+60
+80
+Active replicas (×10
+3)
+Fig. 5. System cost under varying (a) TTFT and (b) interactive ITL limits.
+B. Sensitivity Analysis of Inference Requirements
+Fig. 5 shows how system cost changes when the TTFT and
+ITL limits are relaxed separately, with all other parameters
+held fixed. In Fig. 5(a), relaxing the TTFT limit makes
+additional DCs reachable, reducing system cost in steps. Once
+the low-cost DCs are reachable from every user region, further
+relaxation no longer reduces cost. In Fig. 5(b), relaxing the
+ITL limit reduces both system cost and the number of active
+replicas serving interactive requests. A looser ITL limit allows
+each replica to serve more requests at once. The same demand
+can therefore be served with fewer active replicas, reducing
+activation power.
+In summary, the two limits affect system cost through
+different mechanisms: relaxing TTFT expands the choice of
+serving locations, whereas relaxing ITL increases the token
+capacity of each replica and reduces the associated activation
+overhead. Over the tested ranges, system cost is more sensitive
+to the ITL limit than to the TTFT limit. The comparison
+highlights the value of inference-serving efficiency as a source
+of grid flexibility.
+C. Temporal Flexibility of Inference
+Fig. 6(a) the arrivals and service of flexible tokens under a
+12-h deferral window. Deferral shifts afternoon arrivals into
+the night, when LMPs are low and GPUs are idle, which
+lowers both the generation cost and the DC load at the daily
+PJM peak. As the PJM night load rises on Thursday and
+Friday, fewer cheap hours remain, and the deferred demand
+concentrates into sharp night peaks.
+
+
+--- Page 5 ---
+0
+50
+100
+150
+PJM load (GW)
+0
+25
+50
+75
+100
+Saving (k$/week)
+Mon
+Tue
+Wed
+Thu
+Fri
+Sat
+Sun
+0
+200
+400
+Flexible tokens (Gtok)
+(a)
+Arrivals
+Served, 12-h window
+PJM load
+0
+2
+4
+6
+8
+10
+12
+14
+16
+18
+20
+22
+24
+Length of deferral window (h)
+200
+300
+400
+500
+DC load (MW)
+(b)
+Peak DC load
+DC load at system peak
+Cost saving
+Fig. 6. Temporal flexibility of inference: (a) flexible-token service and PJM
+load under the 12-h deferral window; (b) DC load and cost saving versus
+deferral window.
+Fig. 6(b) shows how the length of the deferral window
+affects the weekly saving and the DC load. Short windows
+already shift the afternoon arrivals away from the system
+peak, so the DC load at that peak stops declining once
+the window reaches 6 h. Weekly savings continue to grow,
+however, as longer windows allow demand to be served during
+the cheapest night hours. With long windows, deferred demand
+concentrates into sufficiently few hours that peak DC load
+exceeds its level without deferral. Longer windows therefore
+provide additional cost savings but can increase night DC
+peaks, which remain subject to the transmission constraints
+enforced by the OPF.
+V. CONCLUSION
+This paper proposed an AI inference-aware OPF that jointly
+determines inference routing, replica activation, and generator
+dispatch under users’ QoS requirements and transmission
+constraints. Case studies on the PJM system show that this
+coordination enables growing DC electricity demand to be met
+at lower operating cost on the existing transmission network.
+Users’ latency tolerance provides flexibility by expanding
+routing options and increasing the token capacity of each
+replica, thereby reducing activation overhead. Longer deferral
+windows yield further savings but can concentrate demand into
+higher night-time peaks at DC buses. By incorporating users’
+latency and deferral limits as explicit optimization constraints,
+the framework provides a basis for inference platforms to offer
+grid-responsive services.
+REFERENCES
+[1] J.-W. Chung, Z. Liang, Y. Mao et al., “OpenG2G: A simulation
+platform for AI datacenter-grid runtime coordination,” arXiv preprint
+arXiv:2605.05519, 2026.
+[2] Electric Power Research Institute, “Powering intelligence: Analyzing
+artificial intelligence and data center energy consumption,” EPRI, Palo
+Alto, CA, White Paper 3002028905, May 2024.
+[3] Y. Wang, Y. Chen, Z. Li et al., “BurstGPT: A real-world workload
+dataset to optimize llm serving systems,” in Proceedings of the 31st
+ACM SIGKDD Conference on Knowledge Discovery and Data Mining.
+ACM, 2025.
+[4] OpenAI, “Batch API,” OpenAI API documentation, accessed Oct. 2026.
+[Online]. Available: https://developers.openai.com/api/docs/guides/batch
+[5] P. Colangelo, A. K. Coskun, J. Megrue et al., “AI data centres as grid-
+interactive assets,” Nature Energy, vol. 11, pp. 254–261, 2026.
+[6] Microsoft,
+“Azure
+OpenAI
+deployment
+types,”
+Microsoft
+Learn,
+accessed Oct. 2026. [Online]. Available: https://learn.microsoft.com/
+en-us/azure/ai-services/openai/how-to/deployment-types
+[7] Amazon
+Web
+Services,
+“Increase
+throughput
+with
+cross-
+region
+inference,”
+Amazon
+Bedrock
+User
+Guide,
+accessed
+Oct.
+2026. [Online]. Available: https://docs.aws.amazon.com/bedrock/latest/
+userguide/cross-region-inference.html
+[8] T. Sun, P. Wang, and F. Lai, “HyGen: Efficient LLM serving via
+elastic online-offline request co-location,” in Proc. Advances in Neural
+Information Processing Systems (NeurIPS), 2025.
+[9] Z. Mao, T. Xia, Z. Wu et al., “SkyServe: Serving AI models across
+regions and clouds with spot instances,” in Proc. 20th European Conf.
+Computer Systems (EuroSys), 2025, pp. 159–175.
+[10] J. Stojkovic, C. Zhang, ´I. Goiri et al., “DynamoLLM: Designing LLM
+inference clusters for performance and energy efficiency,” in Proc. IEEE
+Int. Symp. High Performance Computer Architecture (HPCA), 2025, pp.
+1348–1362.
+[11] Y. Cheng, Z. Shao, N. Yu et al., “Learning to compress: Energy-aware
+large language model serving via adaptive KV caching,” in Proc. IEEE
+Power & Energy Society General Meeting (PESGM), Montr´eal, QC,
+Canada, 2026.
+[12] Y. Sun, X. Guan, and Z. Ding, “Energy-aware computing pricing for
+cloud data centers,” in Proc. IEEE Power & Energy Society General
+Meeting (PESGM), Austin, TX, USA, 2025.
+[13] B. Du, X. Fan, E. Du et al., “From tokens to energy flexibility:
+Quantization-enabled demand response for data centers with LLM
+inference workloads,” arXiv preprint arXiv:2606.18851, 2026.
+[14] J. Han, E. Du, B. Du et al., “Evaluating the dispatchable capacity
+of cross-regional data center clusters toward power system operation,”
+IEEE Transactions on Smart Grid, vol. 17, no. 2, pp. 1180–1193, Mar.
+2026.
+[15] H. Wan, L. Fang, and X. Li, “Grid operational benefit analysis of data
+center spatial flexibility: Congestion relief, renewable energy curtailment
+reduction, and cost saving,” in Proc. IEEE Power & Energy Society
+General Meeting (PESGM), Montr´eal, QC, Canada, 2026.
+[16] B. Chen, Y. Che, M. T. Takci et al., “Spatial flexibility provision from
+geographically dispersed data centers enabling coordinated operation
+of multi-local flexibility markets,” IEEE Transactions on Smart Grid,
+vol. 17, no. 2, pp. 1371–1381, 2026.
+[17] J.-K. Wu, Z.-W. Liu, Y. Zhao et al., “Game-based optimization method
+for geo-distributed data centers under customer directrix load demand
+response mechanism,” IEEE Transactions on Smart Grid, vol. 17, no. 1,
+pp. 283–296, 2026.
+[18] A. Britto, T. Spina, W. Yang et al., “Building power grid models from
+open data: A complete pipeline from openstreetmap to optimal power
+flow,” arXiv preprint arXiv:2605.04289, 2026.
+[19] M. Sengupta, Y. Xie, A. Lopez et al., “The national solar radiation data
+base (NSRDB),” Renewable and Sustainable Energy Reviews, vol. 89,
+pp. 51–60, 2018.
+[20] G. Buster, P. Pinchuk, L. Lavin et al., “Bias corrected noaa hrrr wind
+resource data for grid integration applications,” Open Energy Data
+Initiative, National Renewable Energy Laboratory, 2024.
+[21] U.S. Energy Information Administration, “Form eia-930: Hourly
+and daily balancing authority operations report,” Hourly Electric
+Grid
+Monitor.
+[Online].
+Available:
+https://www.eia.gov/electricity/
+gridmonitor/
+[22] K. Mongird, T. Thurber, C. Vernon et al., “Im3 open source data center
+atlas,” 2026, version 2026.02.09, MSD-LIVE Data Repository.
+[23] J.-W. Chung, J. J. Ma, R. Wu et al., “The ML.ENERGY Benchmark:
+Toward automated inference energy measurement and optimization,” in
+NeurIPS Datasets and Benchmarks, 2025.
+[24] RIPE NCC Staff, “RIPE Atlas: A global internet measurement network,”
+The Internet Protocol Journal, vol. 18, no. 3, pp. 2–26, 2015.

@@ -1,0 +1,3074 @@
+--- Page 1 ---
+PEAK-MEMORY SCHEDULES YOU CAN TRUST: EXACT REALIZATION,
+CERTIFIED OPTIMALITY, AND THE LIMITS OF RECOMPUTATION FOR
+INFERENCE
+Ivan Fomin 1 Ivan Koryabkin 1 Boris Sheludko 1
+ABSTRACT
+Real-time inference on small devices needs low activation memory without extra latency, which makes operator
+order the most valuable memory lever: it is free in time. We show that the usual way of deploying a better order,
+handing it back to the compiler and regenerating code, is unreliable. In PyTorch Inductor the regenerated program
+misses its predicted peak in 22 of 54 CPU configurations. It is worse than the stock program in 9 of them and in
+19 of 50 on a GPU, and on the GPU it also changes numerical results. We instead profile the generated program,
+build an exact model of its memory behaviour from its own statements and their read/write effects, and permute
+those statements. We prove that this realizes the modeled peak whenever allocation does not depend on history. It
+does so to the byte, with bitwise-identical results, in every one of our CPU runs. On the GPU we characterize
+why the caching allocator breaks the condition. To know when to stop, we give forward and reverse “trap” lower
+bounds, each computable with O(n2) minimum cuts. They certify the found order optimal for 94% of held-out
+wrapper graphs and for all 16 microcontroller-class models we study, in under a second. The certificates show that
+most inference graphs are already scheduled optimally. Branching networks are the exception, where reordering
+is free and pays, e.g. 10.0% on DeepLabV3. In compiled training we save up to 7.6%. Beyond the certified
+optimum we study selective recomputation with per-operator caps. It is strongly NP-hard for every fixed cap even
+at treewidth two, it encodes knapsack exactly on series–parallel graphs, and it is solvable exactly on bounded
+treewidth. It is useless on public tiny models whose peak is a single layer, but on architectures that hold a cheap
+value for a late reuse it pays: on the public ReDimNet speaker networks, whose order is already optimal, it lowers
+the peak by 5.2–6.1% at under 0.4% extra MACs, with bitwise-identical outputs.
+1
+INTRODUCTION
+A neural network that runs in real time on a phone, a hear-
+ing aid or a microcontroller has to fit its activations into a
+fixed, small memory budget, and it has to do so without
+slowing down. Most of the familiar levers for reducing
+activation memory trade it for time. Rematerialization re-
+computes values instead of storing them (Chen et al., 2016;
+Jain et al., 2020). Offloading moves them to slower memory.
+Patch-based execution recomputes overlapping receptive
+fields (Lin et al., 2021). For training these trades are usu-
+ally acceptable, because a few percent of throughput buys
+a larger batch. For real-time inference they often are not:
+a keyword spotter or a streaming speech model has a hard
+deadline per frame. The interesting levers there are the ones
+that are free in time, such as the order in which operators
+1Yandex, Moscow, Russia.
+Correspondence to:
+Ivan
+Fomin
+<ash-ivanfomin@yandex-team.ru>,
+Ivan
+Ko-
+ryabkin
+<koryabkin@yandex-team.ru>,
+Boris
+Sheludko
+<bsheludko@yandex-team.ru>.
+Preprint.
+run, and the recomputations that cost very little time but
+remove a large buffer.
+Operator order is already exploited.
+PyTorch Inductor
+ships a peak-memory reordering pass that is enabled by
+default (Ansel et al., 2024). TensorFlow Lite Micro plans
+a static arena for the order it is given (David et al., 2021).
+A line of work schedules irregular graphs exactly or hierar-
+chically (Ahn et al., 2020; Wang et al., 2022; Steiner et al.,
+2023; Jin et al., 2023). These systems share an implicit as-
+sumption: if a better order is found on the compiler’s graph,
+the deployed program will be better by the predicted amount.
+They also leave a practical question unanswered, namely
+when to stop. A deployment engineer who has run a sched-
+uler cannot tell whether the result is optimal or whether a
+better order exists that the heuristic missed.
+This paper makes peak-memory scheduling trustworthy in
+both senses. We show that the assumption above is false in
+a mainstream compiler, give a realization method for which
+it is true by construction, and give certificates that settle
+the question of when to stop. We then ask what selective
+arXiv:2610.23328v1  [cs.LG]  16 Oct 2026
+
+
+--- Page 2 ---
+Peak-Memory Schedules You Can Trust
+recomputation can add once the order is exhausted. The
+answer is a mix of good and bad news that we think is useful
+to state precisely.
+Regeneration is unreliable.
+The usual way to deploy a
+better order is to hand it back to the compiler and regen-
+erate code. Code generation, however, runs after schedul-
+ing. It decides how kernels are grouped into calls, which
+dead buffers are reused in place, and when references are
+dropped, and a new order changes those decisions. Across
+54 compiled CPU configurations of 16 architectures, the
+regenerated program misses its own predicted peak in 22
+cases and is worse than the stock program in 9. On a GPU
+it is worse than stock in 19 of 50 configurations and, in
+addition, changes numerical results (Section 5.1).
+Fixed-wrapper realization is exact.
+We instead take the
+generated program as it is, profile one execution, and build
+an exact model of its memory behaviour at the granularity
+of its statements. We then permute the program’s own state-
+ments. Kernels, arguments and buffer reuse stay untouched;
+only the order and the placement of allocations and releases
+change. Under an explicit contract the realized peak equals
+the modeled peak (Theorem 1). On CPU this holds to the
+byte in all 78 training runs and all 22 inference runs, and
+outputs and gradients are bitwise identical to the stock pro-
+gram. On a GPU the CUDA caching allocator violates one
+condition of the contract, and we characterize exactly how
+(Section 5.6).
+Certificates tell us when to stop.
+We give two lower
+bounds on the optimal peak, a forward and a reverse “trap”
+bound. Each is computable with O(n2) minimum cuts, and
+each dominates the classical event-cut bound. Together
+they prove the found order optimal for 115 of 122 held-
+out wrapper graphs, in well under a second, and for all
+16 microcontroller-class models we study. This changes
+the practical conversation. For most inference graphs the
+certificate shows that the stock order is already optimal, so
+no scheduler can help. The exception is branching networks,
+where reordering is free and the saving can be large: 10.0%
+on DeepLabV3 inference.
+The limits of recomputation.
+When the certified opti-
+mum is still above the budget, recomputation is the next
+lever, and for inference it is attractive only if it is selec-
+tive, recomputing a few cheap values rather than whole
+subgraphs. We model this with per-operator recomputation
+caps kv, as in Moccasin (Bartan et al., 2023), and prove
+three things.
+• Peak feasibility is strongly NP-hard for every fixed uni-
+form cap, already at treewidth two.
+• Minimizing extra work under cap two is exactly a knap-
+sack problem on series–parallel graphs.
+• An exact algorithm exists on bounded treewidth, but with
+a necessary dependence on the numeric budget.
+Empirically, recomputation at tensor granularity cannot help
+the public tiny models we study. In every one of them the
+peak is set by a single operator’s inputs and output, a bound
+no schedule of whole tensors can beat (Section 5.2). Recom-
+putation pays off where a large value is held across the net-
+work only for a late reuse and can be recreated cheaply from
+a small ancestor. The public ReDimNet speaker-embedding
+networks have exactly this structure. In all seven sizes their
+order is already optimal, yet recomputing the stem once
+lowers the peak by 5.2–6.1% at no more than 0.34% extra
+MACs (Section 5.3). For such values our model of caps
+and our certificates apply directly; for tiny models whose
+peak is a single layer, savings require splitting tensors, as
+patch-based inference does (Lin et al., 2021).
+We do not propose a new search heuristic; the search in
+our pipeline is an existing exact capacity search. Our con-
+tributions are the realization method, the certificates, the
+measurements that show where scheduling can and can-
+not help, and the complexity results that delimit selective
+recomputation.
+2
+BACKGROUND AND MODEL
+The one-shot root model.
+A schedule executes each oper-
+ation of a directed acyclic graph once. Operation v allocates
+new buffers (“roots”) of total size a(v) and may use tran-
+sient memory, and both are allocated before any of its inputs
+can be released. A root is live after a set S of executed
+operations if it has been produced and is either pinned (it
+outlives the program, like a returned output) or still has an
+unexecuted consumer. Writing L(S) for the live bytes and
+s(v) ≥0 for the transient envelope of v, executing v after S
+costs L(S)+a(v)+s(v). The peak of an order is its largest
+event cost, and OPT is the smallest peak over topological
+orders. Multi-output calls, views and external inputs are ex-
+pressed by roots with several consumers. L is submodular
+on the lattice of ideals, which is what makes minimum-cut
+arguments work below.
+Compiled programs.
+PyTorch Inductor lowers a model
+to a flat Python wrapper that allocates buffers, calls gen-
+erated C++ or Triton kernels and library kernels (matrix
+multiplication, convolution, attention), aliases dead buffers
+for reuse, and drops references with del. For training,
+AOTAutograd produces one wrapper for the forward and
+one for the backward pass. The point that matters for this
+paper is that storage is born and freed by the wrapper, not
+by the graph the scheduler sees. Deployment runtimes for
+microcontrollers, such as TFLite Micro, instead execute op-
+erators in model order and place every tensor in a statically
+
+
+--- Page 3 ---
+Peak-Memory Schedules You Can Trust
+planned arena (David et al., 2021). On GPUs, PyTorch uses
+a caching allocator that rounds requests and reuses cached
+blocks. Section 5.6 shows that this difference between static,
+exact allocation and history-dependent caching is decisive
+for whether a modeled peak is realized.
+3
+REALIZING A SCHEDULE EXACTLY
+Figure 1 summarizes the method. We compile the model
+once with the stock compiler and capture every generated
+wrapper. We then run one warm step in which each wrapper
+statement executes inside a profiler scope. After each state-
+ment we record the storage address and size bound to every
+name it assigns. Every allocation and free event is thereby
+attributed to a statement. Storages are identified by allo-
+cation epoch rather than by address, because the allocator
+reuses addresses.
+From statements to a root model.
+Each statement that
+calls a kernel or a library function becomes a unit. A state-
+ment that only allocates a buffer joins the first unit that
+touches that buffer, so allocation happens as late as possible.
+Aliases (views, tuple projections and the reuse assignments
+Inductor emits) and del statements are not units; they are
+placed during emission. A storage that is allocated and freed
+inside a single statement is a transient and contributes to
+that unit’s envelope s(v). Every other storage born in the
+program becomes a root produced by its unit. Its consumers
+are the units that touch any name bound to it, and it is pinned
+if it outlives the call. Because a profiled storage is identified
+with all the names that ever referred to it, ownership through
+views and tuples is accounted for exactly.
+Dependencies from read/write effects.
+Ordering con-
+straints come from data flow at storage level. For generated
+C++ kernels we read the const-ness of every pointer parame-
+ter from the emitted signature. For Triton kernels we use the
+role encoded in the parameter name (in ptr, out ptr,
+in out ptr). For library calls, the out= argument and
+the first argument of a mutating operator are writes. Calls
+we do not recognize are serialized with every other unit. Per
+storage we then add read-after-write, write-after-read and
+write-after-write edges, which leaves readers of the same
+buffer generation free to reorder. This distinction turns out
+to matter more than the search itself (Section 5.4).
+Emission.
+Given a unit order, we emit the original state-
+ments, each exactly once. Allocations go immediately be-
+fore their unit, and aliases, assertions and dels go as early
+as their dependencies allow. No statement is synthesized
+and no release is invented. The one exception is renaming:
+a few generated wrappers rebind an input name, and we re-
+name it so that every name is assigned once, deleting the old
+binding where the original rebinding would have dropped it.
+The reordered function is compiled into the same module,
+so it calls the very kernel objects that were profiled.
+Theorem 1 (Exact realization). Assume the generated pro-
+gram satisfies a contract with six conditions: (C1) region-
+level effects are complete; (C2) ownership and completion
+are as recorded; (C3) each unit computes a deterministic
+function of its inputs; (C4) each unit’s sequence of alloca-
+tion events is as recorded; (C5) that sequence is indepen-
+dent of the surrounding live memory (the frame condition);
+(C6) emission introduces no other events. Then every unit or-
+der that respects the dependencies preserves the program’s
+results, bitwise if the kernels are deterministic, and realizes
+exactly the peak predicted by the root model.
+The proof (Section C) is an event-by-event simulation that
+maintains a correspondence between modeled and concrete
+live storage, owners and buffer generations. Its ingredients
+are standard. Staged effects exist in MLIR (LLVM Project,
+2026), and heap simulation over an instruction sequence
+exists in XLA (OpenXLA, 2026). What is specific is that
+the composition survives direct permutation of a generated
+program that calls opaque library kernels. The contract is
+not proven for library kernels, so our harness never trusts it.
+Every emitted program is re-profiled, and the measured peak
+of every wrapper is compared with the prediction. During
+development this check caught two bugs of our own. An
+alias used only by the final return was emitted too late, and it
+kept a tuple, and with it a 16 KB gradient, alive. Stochastic-
+depth layers in some vision models made even the stock
+program non-reproducible. Both were fixed before the runs
+reported here.
+Search.
+The root models have up to 259 units. We search
+with an exact capacity search: depth-first search over ideals
+with forced non-increasing steps and minimum-cut packet
+closure. It bisects the capacity between the lower bound
+of Section 4 and the peak of the stock order. In almost all
+graphs it reaches the certified bound within milliseconds, so
+the search is not where the difficulty lies.
+
+
+--- Page 4 ---
+Peak-Memory Schedules You Can Trust
+model + inputs
+stock compile
+(Inductor wrapper)
+profile one step
+per statement
+root model
+units, R/W effects
+exact search
++ certificates
+fixed wrapper
+permute
+statements
+regenerate code
+with forced order
+re-profile: mea-
+sured peak = model?
+(guard: keep stock if worse)
+usual pipeline
+changes kernels, reuse, numerics
+Figure 1. Fixed-wrapper realization (blue) versus the usual regeneration pipeline (orange). The order is optimized on a model built from
+the generated program itself, and then applied to that program by permuting its statements, so the kernels, their arguments and buffer
+reuse are those that were profiled.
+4
+CERTIFYING THAT NO BETTER ORDER
+EXISTS
+A scheduler that returns a peak U is only half an answer;
+the other half is a lower bound LB with LB = U, which
+proves that no order is better. For an operation v let A(v)
+be its strict ancestors and D(v) its descendants including v.
+The classical event-cut bound asks, for every v, how small
+the live memory can possibly be just before v runs:
+G = max
+v
+h
+a(v) + s(v) +
+min
+X ideal: A(v)⊆X, v /∈X L(X)
+i
+.
+Each inner minimum is a minimum-weight closure, i.e. one
+minimum cut. The bound can be loose because the cheap-
+est prefix for one operation may be incompatible with the
+cheapest prefix for another.
+Definition 2 (Trap bounds). Let c(v) = a(v) + s(v). For
+a proper ideal R with ready frontier F(R), let fv(R) =
+c(v) + min{L(X) : A(v) ⊆X
+⊆R} and F
+=
+maxR minv∈F (R) fv(R). For a nonempty ideal T and max-
+imal v ∈T, let qv(T) = c(v) + min{L(X) : T \ {v} ⊆
+X ⊆V \ D(v)} and R = maxT minv qv(T).
+The forward bound F rests on a simple observation. Every
+order leaves any proper ideal R through some first opera-
+tion, and at that moment its actual prefix lies between that
+operation’s ancestors and R. The reverse bound R uses the
+last operation of any nonempty ideal T instead. Neither
+argument assumes that the minimizing prefix is reachable,
+which is why both are sound but can be loose.
+Theorem 3. (a) G ≤F ≤OPT and G ≤R ≤OPT.
+(b) Each of F and R can be computed with O(n2) minimum-
+cut calls, independently of the magnitude of the weights.
+(c) The two bounds are incomparable. (d) OPT/F is un-
+bounded even on binary in-trees and on a family of pairwise
+merges, while R = OPT on both families.
+Domination holds because the ideal V \ D(v) has v as its
+only ready operation, which reproduces the event-cut term
+for v. Computation uses monotone optimistic saturation.
+For F, we repeatedly admit a frontier operation of smallest
+fv(R) and record the running maximum; the reverse bound
+removes maximal operations symmetrically. Proofs, both
+strict separations and the two families appear in Section D.
+A certificate consists of the stuck ideal and one flow/cut
+pair per frontier operation. Our verifier recomputes liveness
+from the graph, checks every cut value against its flow and
+replays the upper order, without importing the solver or
+running max-flow.
+Whether OPT/ max(F, R) is bounded is open. Figure 2a
+shows how tight the bounds are in practice. On 800 random
+DAGs of up to 14 vertices (series–parallel, pumpkin, tree,
+random and training-shaped), compared against the exact
+optimum, max(F, R) is exact in 773 cases. The event-cut
+bound G is exact in only 671. The reverse bound is the
+stronger of the two: it beats F in 98 instances and loses in
+11. The worst ratio we found is 1.23 on random graphs and
+1.50 with an adversarial hill-climb over 13-vertex graphs.
+
+
+--- Page 5 ---
+Peak-Memory Schedules You Can Trust
+G
+
+
+max(, )
+70
+80
+90
+100
+110
+instances closed (%)
+84
+85
+81
+96
+92
+97
+94
+(a) how often the lower bound equals the optimum
+random DAGs vs exact OPT (n=800)
+held-out wrapper graphs (n=122)
+10−3
+10−2
+10−1
+100
+certificate time (s)
+10−2
+10−1
+100
+101
+102
+CP-SAT time at OPT−1 (s)
+(b) proving that no better order exists
+CP-SAT: proved
+CP-SAT: timeout
+Figure 2. (a) Fraction of instances on which a lower bound equals the optimum. Blue: random DAGs with exactly computed optima.
+Orange: forward and backward wrapper graphs of the held-out training and inference models, where the reference is the peak of the found
+order. (b) Time to certify that OPT −1 is infeasible, trap certificates versus an exact CP-SAT cumulative model with one worker and a
+120 s limit, on the certified graphs.
+5
+EVALUATION
+Setup.
+All runs use PyTorch 2.14.1 with Inductor. On
+CPU, every run uses FP32 and one thread; we also re-
+peat the inference grid in bfloat16.
+The GPU is an
+NVIDIA RTX 2080 Ti with a CUDA 12.6 build of
+the same release.
+The stock baseline is Inductor with
+reorder for peak memory and in-place buffer reuse
+enabled; only the compile cache is disabled. Dropout and
+stochastic depth are disabled. Weights are random unless
+stated otherwise; Section 5.7 shows that pretrained weights
+give identical schedules and peaks. Inference runs evaluate
+the model in evaluation mode without gradients. Train-
+ing runs measure one compiled forward pass, an MSE loss
+against a fixed random target and the backward pass, with-
+out an optimizer step. Peak is the maximum of tracked
+tensor allocations inside the measured step; it excludes the
+resident weights and inputs, which we add back where we
+report savings “including the frame”. Every run measures
+the stock, the normalized (our emission of the stock unit or-
+der) and the reordered program twice, and compares outputs
+and all gradients bitwise across them.
+The study has four parts:
+• server-scale inference: 22 configurations, including seg-
+mentation networks, CNNs, and Transformer prefill with
+long sequences;
+• microcontroller-class inference: 16 models, among them
+the four MLPerf Tiny reference networks (Banbury et al.,
+2021; Zhang et al., 2017), TC-ResNet keyword spot-
+ters (Choi et al., 2019), small MobileNets, MNASNet,
+ShuffleNet, SqueezeNet, EfficientNet-B0, GoogLeNet
+and a tiny U-Net;
+• compiled training: 50 configurations of 16 architectures,
+plus shape sweeps, ablations and seed repeats;
+• the GPU replication.
+5.1
+Regeneration is unreliable
+For every configuration we also map the optimized unit
+order back to Inductor’s scheduler nodes, force it in the
+reordering pass, recompile, and measure. Figure 3 plots the
+outcome against the saving that fixed-wrapper realization
+achieves with the same order. If regeneration were faithful,
+all points would lie on the diagonal. On CPU the regener-
+ated program misses its predicted peak in 22 of 54 training
+configurations. Where a saving exists it realizes 0.94% on
+average instead of 1.97%. In 9 configurations it is worse
+than stock, once by 30.6% (T5 encoder at sequence length
+512). On the GPU the picture is worse: regeneration is
+worse than stock in 19 of 50 configurations. The post-fusion
+graph is unchanged in all of these cases. What changes is
+how kernels are grouped into calls and which dead buffers
+are reused; for the encoder–decoder, 559 backward state-
+ments become 554. Since recompiled kernels also round
+differently, regeneration on GPU additionally changes gra-
+dients, while fixed-wrapper realization does not. A memory
+scheduler that may silently make a program worse, and
+change its numerics, is hard to deploy; this is the main
+reason we realize schedules on the generated program.
+5.2
+Inference: where reordering helps and where it
+cannot
+For server-scale inference, fixed-wrapper realization is ex-
+act in all 22 configurations, with zero prediction error and
+bitwise-identical outputs. The saving, however, is concen-
+trated.
+Only one configuration improves: DeepLabV3-
+ResNet50 at 512 × 512, whose peak drops by 10.0%.
+DeepLabV3’s atrous spatial pyramid has five parallel
+branches over a large feature map, and the stock order keeps
+several of their outputs alive at once. In the other configu-
+rations the certificates prove the stock order optimal for 20
+
+
+--- Page 6 ---
+Peak-Memory Schedules You Can Trust
+−2
+0
+2
+4
+6
+8
+10
+saving of fixed-wrapper realization (%)
+−7.5
+−5.0
+−2.5
+0.0
+2.5
+5.0
+7.5
+10.0
+saving after regeneration (%)
+regen = fixed
+-30.6%
+worse than stock
+CPU (72 configs)
+GPU RTX 2080 Ti (50 configs)
+Figure 3. The same optimized order, realized by permuting the
+generated program (x) versus regenerating code for it (y). Points
+below the diagonal lose part of the saving and points below zero
+are worse than the stock program; one CPU point at −30.6% is
+clipped.
+of the 22 inference graphs; the one open case is discussed
+in Section 5.5. This includes ResNet, MobileNetV2, Effi-
+cientNet, DenseNet, Inception, Swin, ViT, BERT, GPT-2
+and Llama prefill at up to 2048 tokens. Inference graphs are
+mostly chains of blocks whose activations die immediately,
+so a single sensible order is all there is. The practical value
+of the certificate is precisely to say so, and to direct effort
+elsewhere.
+Public microcontroller-class models.
+For the tiny mod-
+els we build the operator graph the way an embedded run-
+time sees it. Batch normalization is folded into convolutions,
+activations are fused into their producer, views are aliases,
+and activations are int8. We compare the order in which
+TFLite Micro would execute the model with the certified
+optimum, and evaluate the arena with a TFLite-Micro-style
+greedy planner. The certificates prove the model order al-
+ready optimal for all 16 models (up to 134 operators), and
+executing every schedule reproduces the modeled peak ex-
+actly. More importantly, in every one of them the peak
+equals a trivial lower bound: the inputs plus the output of a
+single operator. Figure 4 shows why. The memory profile of
+a tiny CNN has a sharp early spike at a high-resolution layer
+(MobileNets), or one at a skip-concatenation (U-Net), and
+the rest of the network is far below it. No schedule of whole
+tensors, with or without recomputation, can go below that
+single-operator bound. The capped-recomputation solver,
+given a cap of two on every operator, accordingly never
+finds a feasible reduction. These models are deliberately de-
+signed so that the early high-resolution layer dominates, and
+further savings for them require splitting that layer’s tensors
+into tiles, as patch-based inference does (Lin et al., 2021;
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+position in the network (fraction of operators)
+0.0
+0.2
+0.4
+0.6
+0.8
+1.0
+live activations / peak
+MobileNetV1-0.25 (VWW)
+MobileNetV2-0.35
+Tiny U-Net
+TC-ResNet8 (KWS)
+Figure 4. Live activation memory along four microcontroller-class
+models, executed in model order, normalized by the peak. Each
+peak is set by a single operator (an early high-resolution layer, or
+a U-Net skip concatenation), which bounds what any schedule of
+whole tensors can achieve.
+Alwani et al., 2016). Tiling recomputes the halo regions
+between tiles, which is exactly the selective recomputation
+with per-vertex caps studied in Section 6, now on a tile-level
+graph.
+5.3
+Selective recomputation on a speaker-embedding
+network
+ReDimNet (Yakovlev et al., 2024) is a family of speaker-
+embedding networks designed for on-device speaker recog-
+nition, in seven sizes (B0–B6). We take the public Vox-
+Celeb2 checkpoints and trace each backbone at the operator
+level, fusing normalization and activations into their produc-
+ers, with fp32 activations. Inputs are 2 s and 0.8 s of audio
+(201 and 81 feature frames); the latter is the typical window
+of a streaming engine. At every stage ReDimNet aggregates
+the outputs of all previous stages, and every stage also reads
+the stem output again. The stem output is therefore held
+across the whole network for these late reuses, although it is
+a short and cheap function of the input features, which are
+small.
+For every model the certificates prove the model order al-
+ready optimal, so reordering alone gains nothing. We then
+keep the small input features alive and recompute the stem
+chain once from them for its late uses. The transformed
+graph is rescheduled exactly, and the certificates prove the
+new order optimal for it as well. Executing the resulting
+schedule reproduces the modeled peak, and the output is
+bitwise identical to the original model. Table 1 shows the
+2 s results; the 0.8 s results have the same relative savings.
+The peak falls by 5.2–6.1% at 0.02–0.34% extra MACs,
+the smaller models paying more because their stem is a
+
+
+--- Page 7 ---
+Peak-Memory Schedules You Can Trust
+Table 1. Selective recomputation on the public ReDimNet back-
+bones (2 s input, fp32 activations). Peak live activation memory
+(MB) of the certified optimal order, before and after recomputing
+the stem for its late uses, and the extra MACs. All outputs are
+bitwise identical; both orders are certified optimal for their graphs.
+Size Ops GMACs Opt. order
+Recompute
+MACs
+B0
+309
+0.59
+7.28
+6.85 (−6.0%) +0.33%
+B1
+223
+0.85
+10.49
+9.85 (−6.1%) +0.33%
+B2
+364
+1.51
+16.78 15.91 (−5.2%) +0.25%
+B3
+651
+4.40
+16.78 15.91 (−5.2%) +0.09%
+B4
+537
+7.05
+33.56 31.76 (−5.4%) +0.11%
+B5
+537
+13.21
+33.56 31.76 (−5.4%) +0.06%
+B6
+433
+30.26
+33.56 31.76 (−5.4%) +0.02%
+Table 2. Peak saving of fixed-wrapper realization over stock Induc-
+tor (memory pass on), compiled training on CPU. The prediction
+error is 0 B and gradients are bitwise identical in every run.
+Group
+n
+> 0
+Median %
+Max %
+Replication of earlier rows
+9
+7
+2.54
+7.60
+Transformers (held-out)
+15
+14
+1.30
+2.75
+CNNs (held-out)
+8
+3
+0.00
+3.02
+BERT/GPT-2 batch×sequence
+18
+17
+1.30
+3.46
+larger share of the work. For B3 and B6 a greedy arena
+planner loses the saving to fragmentation; a joint order-and-
+placement step would be needed there. Recomputing the
+stage outputs themselves would not help, because each of
+them is a direct input of every later aggregation, including
+the one at the peak. The pattern that rewards selective re-
+computation is a value held only for a late reuse that does
+not coincide with the peak event.
+On internal production on-device models, which we cannot
+release, the same selective recomputation reduced the de-
+ployed TFLite activation arena by up to 15% at about 1%
+extra MACs, with bitwise-identical outputs. These numbers
+are reported for context only; all claims in this paper rest on
+the public models above.
+5.4
+Compiled training
+Training graphs have more freedom, because the backward
+pass interleaves gradient computation with the release of
+saved activations. Table 2 summarizes the savings of fixed-
+wrapper realization on CPU, and Table 4 in Section B.1 lists
+every configuration.
+The saving comes from lifetimes at the critical backward
+call, not from allocation volume, which is identical in both
+programs. Figure 5 shows the backward wrapper of a two-
+layer Transformer encoder. The stock order materializes
+two parameter gradients, of 64 KiB and 16 KiB, before the
+flash-attention backward call. The reordered program defers
+them past that call, holding one 32 KiB activation a little
+longer in exchange. The net saving is 48 KiB, and the new
+peak equals the certified lower bound. CNNs gain only
+0
+5
+10
+15
+20
+25
+30
+backward unit (execution step)
+600
+800
+1000
+live tensor memory (KiB)
+stock peak 1049 KiB
+stock Inductor order
+reordered (fixed wrapper)
+certified lower bound
+Figure 5. Live memory at each unit of the backward wrapper of a
+two-layer Transformer encoder. Deferring two parameter-gradient
+materializations past the flash-attention backward call lowers the
+peak to the certified lower bound.
+where the backward pass has parallel branches (ResNet-
+50, ConvNeXt, Swin); chain-like ones are already optimal,
+and their certificates prove it. The savings do not follow a
+simple rule. Over the batch and sequence sweeps they are
+non-monotone, because the critical call changes with the
+shape. Section B.6 gives two families in which either of the
+obvious rules, “finish the gradient branch first” or “always
+defer gradients”, nearly doubles the peak.
+Precise effects matter more than search.
+If every storage
+access is treated as a write, as a conservative implementa-
+tion might do, most of the saving disappears. The encoder
+loses all of its 4.6%, the large-sequence encoder all of its
+4.7%, and DistilBERT all of its 2.3%; the encoder–decoder
+drops from 7.6% to 6.2%. The freedom lies in reordering
+readers of the same buffer generation, for example the two
+matrix multiplications of a linear layer’s backward pass.
+Disabling Inductor’s own memory pass leaves the stock
+peak unchanged in six of eight configurations, and raises
+it by 1.3% and 1.9% in the other two. From either start-
+ing point, fixed-wrapper realization ends below the stock
+program with the pass enabled.
+5.5
+Certificates on held-out models
+None of the models in this section were used to design the
+bounds. On the 122 forward and backward wrapper graphs
+of the training grid and the inference grid, the trap bounds
+certify the found order optimal in 115 cases (94%). The
+forward bound alone certifies 99 and the reverse bound alone
+112, as Figure 2a shows. In training the remaining gaps,
+between 0.36% and 1.50%, occur in the backward graphs of
+DistilBERT, BERT and ViT-B. In inference there is a single
+open case, RegNetY-400MF, with a gap of 13%, the only
+graph where the bounds are clearly loose. These gaps may
+be due either to the bound or to the search. As a baseline
+we posed the same infeasibility question (OPT −1) to CP-
+
+
+--- Page 8 ---
+Peak-Memory Schedules You Can Trust
+SAT with an exact cumulative model (Figure 2b). CP-SAT
+answers 91 of 94 queries, with a median time of 0.02 s and a
+maximum of 66 s, and times out on 3. The certificates need
+a median of 0.004 s and at most 0.25 s, and unlike CP-SAT
+they can be checked independently.
+5.6
+GPU replication and the caching allocator
+We reran the training grid and the sweeps on the GPU (50
+configurations). The wrappers there call Triton kernels.
+Correctness carries over. In all 27 configurations where the
+stock program is itself deterministic, the reordered program
+is bitwise identical. In the other 23, where cuDNN or the
+attention backward use atomics, the reordered gradients
+differ from stock by no more than stock differs from itself.
+Exactness does not carry over (Figure 6). Fixed-wrapper
+realization lowers the peak reported by the allocator in 25
+configurations, by a median of 1.3% and up to 7.4%, but it
+raises it in 8, by up to 1.5%. The block-level prediction is
+exact in only 17 of 49.
+The cause is the frame condition (C5) of Theorem 1. The
+CUDA caching allocator rounds requests, and in its large-
+block pool it does not split off remainders below 1 MiB.
+Which block a tensor receives, and therefore how many
+bytes it occupies, depends on the allocation history. The log-
+ical peak, measured by the allocator’s requested bytes
+counter, moves exactly as on CPU; the 8-layer Llama, for
+example, drops by 0.86% in both settings. Expandable
+segments do not remove the effect. Replaying the CPU
+traces through a model of the caching allocator tells the
+same story. Of the 24 configurations with a logical saving,
+reserved memory decreases in 6, stays the same in 13 be-
+cause 20 MiB segments absorb the change, and increases in
+5. Because a single profiled step measures the true peak, we
+deploy reorderings on GPU behind a guard that keeps the
+stock program unless the measured peak improves. With
+the guard no configuration regresses, and the mean saving is
+0.92%. Static arenas, which embedded runtimes and ahead-
+of-time compilers use, do not have this problem. There
+the allocation is a function of the schedule alone, so the
+condition holds by construction.
+5.7
+Precision, pretrained weights and cost
+In bfloat16 inference (6 configurations) fixed-wrapper re-
+alization is again exact and bitwise identical to stock in 6
+cases, and the certificates again prove the stock order op-
+timal. The schedule depends only on shapes and on the
+generated program, not on weight values. With pretrained
+torchvision and Hugging Face checkpoints (6 configura-
+tions), the stock and optimized peaks are identical to those
+with random weights in 6 cases, and realization is exact
+in 6. In particular, pretrained DeepLabV3 saves the same
+10.0%. One caveat concerns DeepLabV3’s default torchvi-
+0
+1
+2
+3
+4
+5
+6
+7
+8
+saving on CPU (%)
+−2
+0
+2
+4
+6
+8
+saving on GPU, allocated (%)
+GPU prediction exact
+GPU prediction off (allocator blocks)
+Figure 6. Saving of the same reordering on CPU and on GPU
+(peak allocated by the CUDA caching allocator). Filled markers:
+the GPU peak equals the model prediction. Hollow squares: the
+allocator’s history-dependent block sizes break the prediction.
+sion checkpoint, which adds an auxiliary FCN head. That
+head changes the graph, because an additional intermedi-
+ate feature map must stay alive for it. This raises the peak
+by 10% and makes the stock order optimal. Saving mem-
+ory therefore starts with deploying exactly the graph that is
+needed. Reordering does not change the step time. In an
+alternating protocol over 10 CPU configurations, the median
+reordered-to-stock time ratio is 0.997, within [0.959, 1.045].
+On GPU the median ratio is 0.998. Profiling, building the
+model and certification take one extra step plus under a
+second for almost every graph.
+6
+SELECTIVE RECOMPUTATION AND ITS
+LIMITS
+When the certified optimum is still above the memory bud-
+get, the remaining lever is recomputation. For real-time
+inference it is acceptable only in a selective form, where a
+few cheap values are recomputed so that a large buffer need
+not be kept. We model this as in Moccasin (Bartan et al.,
+2023). Vertex v produces an immutable value of wv bytes at
+price cv (for example its MACs), and it may be computed at
+most kv times. Its inputs must be resident when it runs, and
+its output is allocated before inputs are released. The ques-
+tion is how little extra work buys a given memory budget B.
+Uniform caps kv = k and individual caps express different
+policies. An individual cap of two on cheap elementwise
+operators and one everywhere else is the kind of policy a
+real-time system can afford.
+Certificates of necessary recomputation.
+The one-shot
+bounds of Section 4 carry over. If a capped schedule com-
+puted every vertex of a set P exactly once with peak at
+most B, then the order of first computations would be a
+
+
+--- Page 9 ---
+Peak-Memory Schedules You Can Trust
+Table 3. Complexity of peak feasibility with recomputation caps
+(minimum work where noted). TTSP: two-terminal series–parallel
+graphs.
+Restriction
+Result
+fixed uniform cap k
+≥
+1,
+treewidth ≤2
+strongly NP-complete
+caps in binary
+PSPACE-complete (classi-
+cal)
+min. work, uniform k=2, TTSP,
+out-degree ≤2
+equals 0–1 knapsack
+caps ≤3, TTSP, out-degree ≤3
+NP-complete
+(peak,
+work)
+frontier,
+k=2,
+TTSP
+2m points on O(m) ver-
+tices
+min. work, tree decomposition of
+width t
+f(t, K, B) poly(n, L)
+one-shot schedule of the graph with all weights outside P
+set to zero, with peak at most B (Theorem 8). Hence any
+one-shot certificate above B for that projected graph proves
+that some vertex of P must be recomputed. Constraints on
+individual events strengthen this into a lower bound on the
+extra work. Every once-computed value that must survive
+an event contributes to that event’s memory, which yields
+a knapsack-cover constraint on the recomputed bytes (Sec-
+tion E). On 375 small DAGs with uniform cap two, where
+we compute everything exactly, three findings stand out.
+• Recomputation lowers the optimal peak in 117 of them,
+by a mean factor of 0.942.
+• Below the one-shot optimum, the projection certificate
+proves that recomputation is necessary in 270 of 290
+budgets.
+• The cover bound explains on average 43% of the exact
+extra work.
+Complexity.
+Table 3 summarizes what can and cannot be
+computed efficiently.
+Theorem 4. For every fixed k ≥1, deciding whether a
+DAG with uniform recomputation cap k can compute its
+sink with peak at most B is strongly NP-complete, even on
+DAGs of treewidth at most two.
+For k = 1 this is the strong NP-hardness of weighted one-
+shot scheduling on pumpkin graphs, which have treewidth
+two (Jin et al., 2023). For larger k we append a reset gadget:
+k phases separated by barriers of weight B, which force
+every old value to be evicted. With a uniform cap of k each
+old vertex then runs exactly once per phase, so each phase
+is a one-shot schedule. The gadget is a fan at the sink and
+keeps the treewidth at two (Section F). Small interfaces do
+not help either. On series–parallel graphs with out-degree
+two and a uniform cap of two, the minimum extra work is
+exactly the optimum of a knapsack instance,
+OPT(B)−
+X
+v
+cv =
+X
+i
+ci−max
+n X
+i∈S
+ci :
+X
+i∈S
+wi ≤C
+o
+,
+and the trade-off between peak and work can have exponen-
+tially many non-dominated points.
+An exact algorithm on bounded treewidth.
+Theorem 5. Given a tree decomposition of width t and
+an integer budget B, the minimum total work subject to
+peak at most B and all caps can be computed in time
+f(t, K, B)poly(n, L), where K bounds the caps and L is
+the input length.
+The difficulty is that the obvious interface state, namely
+which boundary values are resident and how often each was
+computed, is not sufficient. Two histories can agree on it and
+still differ in which internal vertices have exhausted their
+caps (Section G). The algorithm therefore records, at each
+node of the decomposition, the complete word of compute
+and delete events of the bag vertices, of length at most
+2K(t + 1). Between consecutive boundary events it keeps
+the typical-sequence reduction (Bodlaender et al., 2020)
+of the private memory profile, of length at most 2B + 1,
+together with a literal witness schedule. Theorem 4 shows
+that the dependence on B cannot be reduced to poly(B)
+unless P=NP. A rounding step yields a schedule with peak
+at most (1 + ε)B and work at most that of any schedule
+with at most p live values (Section G). The algorithm is
+a statement about tractability, not a tool. Our prototype
+exceeds 3 · 106 states on width-two graphs with six vertices
+at K = 2 and B = 8 (Section B.7).
+What this means for tiny models.
+On the public
+microcontroller-class models of Section 5.2, recomputa-
+tion of whole tensors is useless, because the peak is a single
+operator’s footprint. Tiling that operator, and possibly its
+neighbours, turns one large vertex into many small ones
+that share halo regions. Recomputing a halo is then a cap
+kv > 1 on a small vertex, and the extra work is the halo’s
+MACs. Tile-level graphs of a few early layers are narrow,
+so the exact machinery of this section, together with the
+certificates of Section 4, applies to them directly. Choos-
+ing tile shapes jointly with the schedule, under an explicit
+latency budget and with a certificate of optimality, is the
+natural continuation of this work. Patch-based inference
+today chooses them heuristically (Lin et al., 2021).
+7
+RELATED WORK
+Peak-memory scheduling.
+Register sufficiency, the unit-
+weight version of the problem, is NP-complete (Sethi, 1975).
+Jin et al. prove strong NP-hardness of the weighted one-shot
+
+
+--- Page 10 ---
+Peak-Memory Schedules You Can Trust
+problem on pumpkins and out-trees, and give exact algo-
+rithms for series–parallel graphs based on dominant sched-
+ules (Jin et al., 2023). SERENITY schedules irregularly
+wired networks for edge devices by dynamic programming
+and graph rewriting (Ahn et al., 2020). HMCOS expands
+hierarchical groups around the peak (Wang et al., 2022).
+MODeL optimizes order and address placement jointly with
+an ILP (Steiner et al., 2023), and Zhong et al. fold safe sub-
+graphs before solving an ILP (Zhong et al., 2023). Lower
+bounds based on event cuts and wavefronts are standard in
+I/O complexity (Elango et al., 2014), and iterated optimistic
+admission against resource bounds is the LP–RPG pattern
+in planning (Coles et al., 2013). Our trap bounds special-
+ize these ideas to tensor roots. To our knowledge, their
+domination over the event-cut bound, their incomparability
+and their computation with O(n2) cuts have not been stated
+before.
+Memory planning in compilers and embedded runtimes.
+XLA’s heap simulator accounts for allocation, free and shar-
+ing events over an instruction sequence (OpenXLA, 2026).
+MLIR provides staged side effects and ownership-based
+deallocation (LLVM Project, 2026). Exo verifies schedules
+of low-level code against memory effects (Ikarashi et al.,
+2022). µ-TWO profiles memory and executes optimized
+schedules for multi-model training (Purandare et al., 2023).
+TFLite Micro executes operators in model order over a
+statically planned arena (David et al., 2021). MCUNet co-
+designs architectures and inference for microcontrollers (Lin
+et al., 2020), and MCUNetV2 executes early layers patch
+by patch, recomputing overlaps (Lin et al., 2021), as fused-
+layer accelerators do in hardware (Alwani et al., 2016). Sun
+et al. study recomputation for peak-memory reduction of
+inference on IoT devices (Sun et al., 2023). Our contribu-
+tions are the measurement that regeneration is unreliable,
+a realization that is exact on the generated program, and
+certificates that say when scheduling is finished.
+Rematerialization.
+Checkpointing for chains goes back
+to revolve (Griewank & Walther, 2000) and to sublinear-
+memory training (Chen et al., 2016). Heterogeneous chains
+admit optimal dynamic programs (Herrmann et al., 2019).
+Checkmate (Jain et al., 2020), Moccasin (Bartan et al.,
+2023), Rockmate (Zhao et al., 2023), HiRemate (Gusak
+et al., 2025), MAGIS (Chen et al., 2024) and DTR (Kirisame
+et al., 2021) optimize recomputation with MILP, con-
+straint programming, hierarchy, graph transformations or
+online policies. Kumar et al. bound recomputation through
+treewidth (Kumar et al., 2019). Bounded-width composi-
+tion and typical sequences are classical (Downey & Fellows,
+1999; Bodlaender & Kloks, 1996; Bodlaender et al., 2020),
+and unrestricted pebbling is PSPACE-complete (Gilbert
+et al., 1980; Chan et al., 2023). Our complexity results
+delimit what selective recomputation with caps can achieve,
+which is the form relevant to real-time inference.
+8
+LIMITATIONS
+Exactness, as stated in Theorem 1, holds for allocators that
+return exactly what is requested, which is the case on our
+CPU runs and in static arenas. For the CUDA caching allo-
+cator we fall back to a measured guard. Searching against a
+simulated caching allocator could restore exactness, since
+its behaviour is deterministic for a fixed single-stream re-
+quest sequence, but we have not yet matched the simula-
+tor to the device, whose initial state includes the segments
+holding parameters. Library kernels’ effects and alloca-
+tion sequences are profiled and checked by re-measurement,
+not proven, and every model is specific to one input shape.
+The tiny-model study evaluates the operator graph and a
+greedy arena planner, not firmware on a microcontroller.
+The savings from reordering are small except on branching
+networks, typically 1–3% in training and zero on most infer-
+ence graphs. We present this as a finding that the certificates
+make visible, not as a weakness of the search. Theorem 5 is
+impractical, its novelty relative to general finite-state peb-
+bling frameworks was checked only by a bounded literature
+review, and whether OPT/ max(F, R) is bounded remains
+open.
+9
+CONCLUSION
+For memory-constrained inference, the cheapest memory is
+the memory saved by a free schedule change, and the most
+useful answer a scheduler can give is a certified one. We
+showed that a schedule must be realized on the program that
+runs: regenerating code for a better order is unreliable, while
+permuting the generated program under a checked contract
+is exact. Polynomial-time certificates show that most infer-
+ence graphs, and all the public microcontroller-class models
+we studied, are already scheduled optimally, and they iden-
+tify the branching networks where reordering pays. Beyond
+the certified optimum, selective recomputation with caps is
+computationally hard in every general sense we examined.
+It is useless on public tiny models whose peak is a single
+layer, but on architectures that hold a cheap value for a late
+reuse it pays: 5.2–6.1% on ReDimNet at under 0.4% extra
+MACs. This points to certified tile-level schedules as the
+way to buy memory at a bounded, explicit cost in latency.
+GENERATIVE AI USAGE STATEMENT
+In this work, we used generative AI tools to assist with trans-
+lation (parts of the text were translated from the authors’
+draft in another language into English), to implement meth-
+ods (the experimental code, including the compiler harness,
+the baselines and the scripts that produce the tables and
+figures from the saved results), and to generate synthetic
+
+
+--- Page 11 ---
+Peak-Memory Schedules You Can Trust
+data sets (the random DAG families of Section B.7, whose
+construction and properties were checked by the authors).
+Supporting qualitative and thematic data analysis is not ap-
+plicable to this work. Additionally, we used generative AI
+tools to polish the writing, to create the figures from our
+experimental results, to find related work, and to check that
+bibliographic entries exist and are cited correctly. We have
+reviewed all AI-assisted work: all code and all text were
+checked line by line by the authors. We take responsibility
+for the final content of this work, including text and claims
+produced with the aid of generative AI.
+REFERENCES
+Ahn, B. H., Lee, J., Lin, J. M., Cheng, H.-P., Hou, J., and Es-
+maeilzadeh, H. Ordering chaos: Memory-aware schedul-
+ing of irregularly wired neural networks for edge devices.
+In MLSys, 2020.
+Alwani, M., Chen, H., Ferdman, M., and Milder, P. Fused-
+layer CNN accelerators. In MICRO, pp. 1–12, 2016.
+Ansel, J., Yang, E., He, H., Gimelshein, N., Jain, A., Voz-
+nesensky, M., Bao, B., Bell, P., Berard, D., Burovski, E.,
+Chauhan, G., Chourdia, A., Constable, W., Desmaison,
+A., DeVito, Z., Ellison, E., Feng, W., Gong, J., Gschwind,
+M., Hirsh, B., Huang, S., Kalambarkar, K., Kirsch, L.,
+Lazos, M., Lezcano, M., Liang, Y., Liang, J., Lu, Y.,
+Luk, C. K., Maher, B., Pan, Y., Puhrsch, C., Reso, M.,
+Saroufim, M., Siraichi, M. Y., Suk, H., Zhang, S., Suo,
+M., Tillet, P., Zhao, X., Wang, E., Zhou, K., Zou, R.,
+Wang, X., Mathews, A., Wen, W., Chanan, G., Wu, P.,
+and Chintala, S. PyTorch 2: Faster machine learning
+through dynamic Python bytecode transformation and
+graph compilation. In ASPLOS, pp. 929–947, 2024.
+Banbury, C., Janapa Reddi, V., Torelli, P., Holleman, J.,
+Jeffries, N., Kiraly, C., Montino, P., Kanter, D., Ahmed,
+S., Pau, D., Thakker, U., Torrini, A., Warden, P., Cordaro,
+J., Di Guglielmo, G., Duarte, J., Gibellini, S., Parekh, V.,
+Tran, H., Tran, N., Wenxu, N., and Xuesong, X. MLPerf
+Tiny benchmark. In NeurIPS Datasets and Benchmarks,
+2021.
+Bartan, B., Li, H., Teague, H., Lott, C., and Dilkina, B.
+Moccasin: Efficient tensor rematerialization for neural
+networks. In ICML, 2023.
+Bodlaender, H. L. and Kloks, T. Efficient and constructive
+algorithms for the pathwidth and treewidth of graphs.
+Journal of Algorithms, 21(2):358–402, 1996.
+Bodlaender, H. L., Jaffke, L., and Telle, J. A.
+Typical
+sequences revisited — computing width parameters of
+graphs. In STACS, 2020.
+Chan, S. M., Lauria, M., Nordstr¨om, J., and Vinyals, M.
+Hardness of approximation in PSPACE and separation
+results for pebble games. arXiv:2305.19104, 2023.
+Chen, R., Ding, Z., Zheng, S., Zhang, C., Leng, J., Liu, X.,
+and Liang, Y. MAGIS: Memory optimization via coordi-
+nated graph transformation and scheduling for DNN. In
+ASPLOS, 2024.
+Chen, T., Xu, B., Zhang, C., and Guestrin, C. Training deep
+nets with sublinear memory cost.
+arXiv:1604.06174,
+2016.
+Choi, S., Seo, S., Shin, B., Byun, H., Kersner, M., Kim,
+B., Kim, D., and Ha, S. Temporal convolution for real-
+time keyword spotting on mobile devices. In Interspeech,
+2019.
+Coles, A., Coles, A., Fox, M., and Long, D. A hybrid LP-
+RPG heuristic for modelling numeric resource flows in
+planning. Journal of Artificial Intelligence Research, 46,
+2013.
+David, R., Duke, J., Jain, A., Janapa Reddi, V., Jeffries,
+N., Li, J., Kreeger, N., Nappier, I., Natraj, M., Regev, S.,
+Rhodes, R., Wang, T., and Warden, P. TensorFlow Lite
+Micro: Embedded machine learning for TinyML systems.
+In MLSys, 2021.
+Downey, R. G. and Fellows, M. R. Parameterized Complex-
+ity. Springer, 1999.
+Elango, V., Rastello, F., Pouchet, L.-N., Ramanujam, J.,
+and Sadayappan, P. On characterizing the data movement
+complexity of computational DAGs for parallel execution.
+In SPAA, 2014.
+Gilbert, J. R., Lengauer, T., and Tarjan, R. E. The pebbling
+problem is complete in polynomial space. SIAM Journal
+on Computing, 9(3):513–524, 1980.
+Griewank, A. and Walther, A. Algorithm 799: Revolve: An
+implementation of checkpointing for the reverse or ad-
+joint mode of computational differentiation. ACM Trans-
+actions on Mathematical Software, 26(1):19–45, 2000.
+Gusak, J., Zhao, X., Le Hellard, T., Li, Z., Eyraud-Dubois,
+L., and Beaumont, O. HiRemate: Hierarchical approach
+for efficient re-materialization of neural networks. In
+ICML, 2025.
+Herrmann, J., Beaumont, O., Eyraud-Dubois, L., Joly, A.,
+and Shilova, A. Optimal checkpointing for heterogeneous
+chains: How to train deep neural networks with limited
+memory. arXiv:1911.13214, 2019.
+Ikarashi, Y., Bernstein, G. L., Reinking, A., Genc, H., and
+Ragan-Kelley, J. Exocompilation for productive program-
+ming of hardware accelerators. In PLDI, pp. 703–718,
+2022.
+
+
+--- Page 12 ---
+Peak-Memory Schedules You Can Trust
+Jain, P., Jain, A., Nrusimha, A., Gholami, A., Abbeel, P.,
+Keutzer, K., Stoica, I., and Gonzalez, J. E. Checkmate:
+Breaking the memory wall with optimal tensor remateri-
+alization. In MLSys, 2020.
+Jin, C., Purohit, M., Svitkina, Z., Vee, E., and Wang,
+J. R.
+New tools for peak memory scheduling.
+arXiv:2312.13526, 2023.
+Kirisame, M., Lyubomirsky, S., Haan, A., Brennan, J., He,
+M., Roesch, J., Chen, T., and Tatlock, Z. Dynamic tensor
+rematerialization. In ICLR, 2021.
+Kumar, R., Purohit, M., Svitkina, Z., Vee, E., and Wang,
+J. R. Efficient rematerialization for deep networks. In
+NeurIPS, pp. 15146–15155, 2019.
+Lin, J., Chen, W.-M., Lin, Y., Cohn, J., Gan, C., and Han, S.
+MCUNet: Tiny deep learning on IoT devices. In NeurIPS,
+2020.
+Lin, J., Chen, W.-M., Cai, H., Gan, C., and Han, S.
+MCUNetV2: Memory-efficient patch-based inference
+for tiny deep learning. In NeurIPS, 2021.
+LLVM Project.
+MLIR: Side effects and speculation;
+ownership-based buffer deallocation. https://mlir.
+llvm.org/docs/, 2026.
+OpenXLA.
+XLA
+heap
+simulator.
+https:
+//github.com/openxla/xla/blob/main/
+xla/service/heap_simulator/heap_
+simulator.h, 2026.
+Purandare, S., Wasay, A., Jain, A., and Idreos, S. µ-TWO:
+3× faster multi-model training with orchestration and
+memory optimization. In MLSys, 2023.
+Sethi, R. Complete register allocation problems. SIAM
+Journal on Computing, 4(3):226–248, 1975.
+Steiner, B., Elhoushi, M., Kahn, J., and Hegarty, J. MODeL:
+Memory optimizations for deep learning. In ICML, pp.
+32618–32632, 2023.
+Sun, X., Xu, C., and Li, C. Minimizing peak memory
+footprint of inference on IoT devices by efficient recom-
+putation. In Advanced Intelligent Computing Technology
+and Applications (ICIC), LNCS, pp. 15–26, 2023.
+Wang, Z., Wan, C., Chen, Y., Lin, Z., Jiang, H., and Qiao,
+L. Hierarchical memory-constrained operator schedul-
+ing of neural architecture search networks. In Design
+Automation Conference (DAC), 2022.
+Yakovlev, I., Makarov, R., Balykin, A., Malov, P., Okhot-
+nikov, A., and Torgashov, N. Reshape dimensions net-
+work for speaker recognition. In Interspeech, 2024.
+Zhang,
+Y.,
+Suda,
+N.,
+Lai,
+L.,
+and Chandra,
+V.
+Hello edge:
+Keyword spotting on microcontrollers.
+arXiv:1711.07128, 2017.
+Zhao, X., Le Hellard, T., Eyraud-Dubois, L., Gusak, J., and
+Beaumont, O. Rockmate: an efficient, fast, automatic and
+generic tool for re-materialization in PyTorch. In ICML,
+2023.
+Zhong, S., Li, M., Liang, Y., Wang, R., and Huang,
+R. Memory-aware scheduling for complex wired net-
+works with iterative graph optimization.
+In ICCAD
+(arXiv:2308.13898), 2023.
+
+
+--- Page 13 ---
+Peak-Memory Schedules You Can Trust
+APPENDIX OVERVIEW
+The appendix is organized in four parts. Section A describes the experimental setup in enough detail to reproduce every
+number in the paper. Section B reports the complete results behind the summaries of Section 5, including the configurations
+that appear only in aggregate in the main text. Sections C to G contain the proofs, in the order in which the results appear in
+the paper. Section H describes the supplementary archive.
+A
+EXPERIMENTAL SETUP
+A.1
+Software and hardware
+All CPU experiments use PyTorch 2.14.1 (CPU build), Hugging Face Transformers 4.57.1 and torchvision 0.29.1 on a single
+thread (OMP NUM THREADS=1) of a 22-core x86-64 workstation. GPU experiments use the CUDA 12.6 build of the same
+PyTorch release on an NVIDIA GeForce RTX 2080 Ti (Turing, 11 GB), one GPU per configuration, with no other process
+on the device. CP-SAT is the OR-Tools implementation with one worker. Weights are random (seed 1802) unless stated
+otherwise, inputs are synthetic, and dropout and stochastic depth are disabled, because both make even the stock program
+non-reproducible.
+A.2
+Compiled-program experiments
+What is measured.
+For training we compile a function that runs the forward pass and an MSE loss against a fixed
+random target, and then call backward(). There is no optimizer step. For inference we compile the model in evaluation
+mode and run it under torch.no grad(). The stock baseline is Inductor with reorder for peak memory and
+inplace buffers enabled, which is the default; only the FX-graph cache is disabled, so that every run compiles afresh.
+The peak is the largest value of the profiler’s tracked tensor-allocation counter during one warm step. It includes the step’s
+outputs, its loss and all gradients, and excludes the resident weights and inputs. The column “including the frame” of Table 4
+adds the bytes of the parameters, buffers, inputs and target back to the denominator.
+Protocol per configuration.
+Each configuration runs in a fresh process and goes through the following steps.
+1. Compile once with the stock compiler and check the compiled outputs and gradients against eager execution (rtol = 10−4,
+atol = 10−5).
+2. Run two warm steps, then one observed step in which every wrapper statement executes inside a profiler scope and the
+storages bound to its assigned names are recorded.
+3. Build the root model of every wrapper, compute the trap bounds (20 s limit each) and search for an order (60 s limit).
+4. Install three versions of every wrapper in the same compiled module: the stock body, the stock unit order re-emitted by
+our emitter (“normalized”), and the optimized order.
+5. Measure the three versions twice each, alternating, and compare their outputs, losses and gradients bitwise.
+6. Force the optimized order into Inductor’s reordering pass, recompile, and measure the regenerated program (“Regen.”).
+The prediction error of a wrapper is the measured peak inside the wrapper’s window minus the predicted one. The prediction
+is the stock entry level plus the model’s peak minus the model’s initial live bytes.
+Configurations.
+Transformer encoders and encoder–decoders are torch.nn modules with four heads and a feed-forward
+width of four times the model width unless stated otherwise. Hugging Face models use their default configurations with the
+stated numbers of layers. For BERT, DistilBERT, GPT-2, T5 and ViT these are the base or small sizes; the Llama models are
+scaled down with hidden sizes 512 and 768. Vision models are torchvision definitions. The labels in the tables give the
+batch size b, the sequence length s, the model width d and the number of layers.
+Latency.
+Each latency configuration alternates the stock and the reordered program over four rounds. Every round runs
+three warm-up steps and then 5 to 50 timed steps per variant, depending on the model’s size. We report the ratio of the
+medians.
+
+
+--- Page 14 ---
+Peak-Memory Schedules You Can Trust
+A.3
+Operator-level inference experiments
+For the microcontroller-class models (Section 5.2), the speaker-embedding networks (Section 5.3) and the YOLO detectors
+we trace the model at the operator level and build an operator graph the way an embedded runtime sees it.
+• Tracing. Small convolutional models are traced symbolically, with batch normalization folded into convolutions. The
+others are traced with make fx on concrete shapes after functionalization, decomposing to core ATen operators but
+keeping activations as single operators.
+• Fusion. Elementwise operators with a single tensor input and the same number of elements (activations, decomposed
+normalization) are fused into their producer when they are its only user.
+• Views. View operators alias their source and own no buffer.
+• Sizes. Activations are int8 for the microcontroller models and fp32 for the speaker and detection models; each surviving
+operator owns one output buffer.
+• Outputs. The model outputs are pinned until the end, so multi-output detectors are modeled correctly.
+A schedule is executed operator by operator in Python, keeping exactly the values the schedule keeps. The executed peak
+and the bitwise equality of all outputs with an unscheduled reference run are checked for every schedule we report. The
+arena is computed with a TFLite-Micro-style greedy planner, which places buffers by decreasing size at the lowest offset
+that does not conflict, with 16- or 64-byte alignment. MACs are counted with PyTorch’s FLOP counter.
+A.4
+Selective recomputation
+Candidates for recomputation are values that are produced before the peak event of the current optimal order and have a
+consumer after it. For each candidate we enumerate single anchors a among its ancestors whose cone, i.e. the operators
+between a and the candidate, is closed: every input of an operator in the cone is a or lies in the cone. We keep the anchor
+that saves the most bytes, preferring cheaper cones on ties. A transformation duplicates the cone, either once for all late
+consumers or once per late consumer, and rewires those consumers to the copy. Every transformed graph is scheduled
+exactly and certified with the trap bounds. A greedy loop applies the transformation with the lowest resulting peak as long
+as the peak decreases and the extra MACs stay within the budget.
+A.5
+Theory experiments
+The random DAG families of Section B.7 have between 8 and 15 vertices with integer weights between 1 and 8.
+• random: edges with probability 0.15–0.45 to every earlier vertex;
+• sp: random two-terminal series–parallel graphs;
+• pumpkin: two to four chains between a source and a sink;
+• intree: random in-trees;
+• training: a forward chain followed by a backward chain that reads the saved forward activations.
+Exact optima are computed by dynamic programming over all ideals. The capped experiments use exact Dijkstra search
+over (live set, counters) states with uniform cap two.
+B
+COMPLETE RESULTS
+B.1
+Compiled training on CPU
+Table 4 lists every configuration of the main training grid. All 78 training runs, which add the shape sweeps, ablations,
+seed repeats, latency runs and runs without the Inductor pass, have zero prediction error and bitwise-identical outputs and
+gradients.
+B.2
+Inference on CPU
+Table 5 lists the 22 inference configurations of Section 5.2. Every reordered program has zero prediction error and bitwise-
+identical outputs. DeepLabV3 is the only configuration where the stock order is not optimal. RegNetY-400MF is the only
+configuration where the bounds leave a gap: the order found there equals the stock order, and the bound is 13% below it.
+
+
+--- Page 15 ---
+Peak-Memory Schedules You Can Trust
+Table 4. Compiled training on CPU, main grid. Saving is relative to stock Inductor with its memory pass. The prediction error is the
+largest absolute error over the wrapper windows of the fixed-wrapper run. “Regen.” hands the same order back to Inductor. “Cert. opt.”
+counts wrapper graphs for which max(F, R) equals the found peak.
+Configuration
+Params (M)
+Stock Inductor (B)
+Fixed wrapper (B)
+Saving %
+Pred. err
+Regen. saving %
+Regen. err (B)
+Cert. opt.
+TransformerEnc 2L d64 s128
+0.1
+1,074,056
+1,024,904
+4.58
+0
+4.58
+0
+2/2
+TransformerEnc 4L d64 s128
+0.2
+1,932,168
+1,883,016
+2.54
+0
+2.54
+0
+2/2
+TransformerEnc 2L d256 s128
+1.6
+6,842,376
+6,842,376
+0.00
+0
+0.00
+0
+2/2
+TransformerEnc 2L d256 s256
+1.6
+8,678,408
+8,542,472
+1.57
+0
+1.57
+0
+2/2
+TransformerEnc 2L d256 s512
+1.6
+16,813,320
+16,026,888
+4.68
+0
+4.68
+0
+2/2
+TransformerEnc 2L d256 s1024
+1.6
+32,557,064
+31,520,776
+3.18
+0
+3.18
+0
+2/2
+Transformer enc–dec d64
+0.2
+1,073,928
+992,264
+7.60
+0
+6.13
+15,872
+2/2
+DistilBERT b1 s128
+66.4
+266,628,104
+266,628,104
+0.00
+0
+-0.14
+385,536
+2/2
+DistilBERT b4 s512
+66.4
+657,635,336
+641,931,272
+2.39
+0
+2.39
+0
+2/2
+TransformerEnc 6L d256 s256
+4.7
+22,475,016
+22,198,536
+1.23
+0
+1.23
+0
+2/2
+TransformerEnc 4L d512 s512
+12.6
+62,243,080
+61,182,216
+1.70
+0
+1.70
+0
+2/2
+Transformer enc–dec d256
+3.7
+15,142,920
+14,946,312
+1.30
+0
+0.00
+196,608
+2/2
+DistilBERT b2 s256
+66.4
+278,829,064
+272,537,608
+2.26
+0
+1.70
+1,564,672
+1/2
+BERT-base b1 s128
+109.5
+436,743,176
+436,743,176
+0.00
+0
+-0.09
+385,536
+2/2
+BERT-base b2 s256
+109.5
+446,582,792
+441,854,984
+1.06
+0
+1.06
+3,072
+1/2
+GPT-2 small b1 s256
+124.4
+503,269,384
+500,904,968
+0.47
+0
+0.47
+0
+2/2
+GPT-2 small b2 s512
+124.4
+712,161,288
+699,590,664
+1.77
+0
+1.77
+0
+2/2
+Llama 4L h512 b1 s256
+29.0
+119,296,008
+117,721,096
+1.32
+0
+1.32
+0
+2/2
+Llama 4L h512 b2 s512
+29.0
+151,750,664
+149,852,424
+1.25
+0
+1.25
+0
+2/2
+Llama 8L h768 b1 s512
+81.2
+334,289,928
+331,402,248
+0.86
+0
+0.86
+0
+2/2
+T5-small enc b2 s128
+35.3
+144,471,048
+143,420,424
+0.73
+0
+-3.72
+6,422,528
+2/2
+T5-small enc b1 s512
+35.3
+153,120,776
+149,975,048
+2.05
+0
+-30.65
+50,072,576
+2/2
+ViT-S/16 (6L) b4
+11.0
+129,562,456
+126,002,248
+2.75
+0
+2.75
+0
+2/2
+ViT-B/16 b2
+85.8
+361,024,904
+352,079,240
+2.48
+0
+2.48
+0
+1/2
+ResNet-18 b8
+11.7
+213,121,800
+213,121,800
+0.00
+0
+0.00
+0
+2/2
+ResNet-50 b4
+25.6
+418,362,888
+408,368,648
+2.39
+0
+1.14
+5,218,304
+2/2
+MobileNetV2 b8
+3.5
+436,370,056
+436,370,056
+0.00
+0
+-1.20
+5,246,848
+2/2
+EfficientNet-B0 b4
+5.3
+224,117,064
+224,117,064
+0.00
+0
+-3.10
+6,949,856
+2/2
+DenseNet-121 b2
+8.0
+261,278,600
+261,278,600
+0.00
+0
+-2.51
+6,563,840
+2/2
+ConvNeXt-T b2
+28.6
+241,359,048
+238,301,192
+1.27
+0
+0.89
+903,168
+2/2
+RegNetY-400MF b8
+4.3
+246,797,672
+246,797,672
+0.00
+0
+-0.59
+1,460,360
+2/2
+Swin-T b2
+28.3
+220,170,192
+213,530,552
+3.02
+0
+2.36
+1,449,624
+2/2
+B.3
+GPU replication
+Table 6 lists the 50 GPU configurations of Section 5.6. “Det. stock” records whether two stock runs are bitwise identical.
+Where they are not, “within” means that the reordered program differs from the stock one by no more than stock differs
+from itself.
+Table 6: GPU replication on an RTX 2080 Ti. Peak allocated by the CUDA caching allocator inside the
+measured step.
+Configuration
+Stock (MB)
+Ours (MB)
+Saving %
+Pred. err (B)
+Regen. %
+Det. stock
+Bitwise
+bert-base-b1-s128
+438.79
+438.79
+0.00
+0
+-0.45
+no
+within
+bert-base-b2-s256
+468.94
+457.02
+2.54
+11,667,456
+2.10
+no
+within
+convnext-tiny-b2
+239.08
+235.99
+1.29
+368,640
+0.92
+no
+within
+densenet121-b2
+261.49
+261.49
+0.00
+0
+-2.59
+no
+within
+distilbert-b1-s128
+270.12
+270.12
+0.00
+0
+-0.73
+yes
+yes
+distilbert-b2-s256
+288.08
+282.84
+1.82
+6,436,352
+3.00
+yes
+yes
+distilbert-b4-s512
+658.17
+658.17
+0.00
+–
+0.00
+yes
+yes
+efficientnet-b0-b4
+226.04
+226.04
+0.00
+0
+-1.36
+no
+within
+enc-L2-d256-s1024
+33.69
+32.47
+3.62
+917,504
+3.62
+yes
+yes
+enc-L2-d256-s128
+6.85
+6.84
+0.07
+0
+0.07
+yes
+yes
+enc-L2-d256-s256
+8.69
+8.67
+0.20
+0
+0.20
+yes
+yes
+enc-L2-d256-s512
+17.12
+16.31
+4.71
+0
+4.71
+yes
+yes
+enc-L2-d64-s128
+1.18
+1.13
+4.17
+0
+4.17
+yes
+yes
+enc-L4-d512-s512
+66.14
+65.08
+1.60
+1,089,536
+1.60
+yes
+yes
+enc-L4-d64-s128
+2.04
+1.99
+2.41
+0
+2.41
+yes
+yes
+enc-L6-d256-s256
+22.64
+22.33
+1.34
+0
+1.34
+yes
+yes
+encdec-L2-d256
+15.14
+14.95
+1.30
+0
+0.00
+no
+within
+encdec-L2-d64
+1.14
+1.05
+7.39
+0
+7.39
+yes
+yes
+gpt2-small-b1-s256
+504.32
+504.32
+0.00
+786,432
+0.00
+yes
+yes
+gpt2-small-b2-s512
+712.70
+712.70
+0.00
+9,435,648
+0.00
+yes
+yes
+llama-L4-h512-b1-s256
+119.30
+117.72
+1.32
+0
+-0.88
+yes
+yes
+llama-L4-h512-b2-s512
+154.52
+152.67
+1.20
+2,112,000
+1.20
+yes
+yes
+llama-L8-h768-b1-s512
+344.38
+346.87
+-0.72
+20,936,192
+-1.64
+yes
+yes
+mobilenetv2-b8
+441.12
+447.24
+-1.39
+7,771,648
+-3.79
+no
+within
+regnet-y400-b8
+250.36
+250.36
+0.00
+231,424
+-0.73
+no
+within
+resnet18-b8
+253.18
+252.98
+0.08
+524,288
+0.08
+no
+within
+
+
+--- Page 16 ---
+Peak-Memory Schedules You Can Trust
+Table 6: GPU replication on an RTX 2080 Ti. Peak allocated by the CUDA caching allocator inside the
+measured step.
+Configuration
+Stock (MB)
+Ours (MB)
+Saving %
+Pred. err (B)
+Regen. %
+Det. stock
+Bitwise
+resnet50-b4
+418.16
+418.21
+-0.01
+2,801,664
+-1.91
+no
+within
+sweep-bert-L4-b1-s128
+211.33
+211.33
+0.00
+0
+-0.93
+no
+within
+sweep-bert-L4-b1-s256
+217.63
+216.05
+0.73
+1,024
+-1.08
+no
+within
+sweep-bert-L4-b1-s512
+224.05
+222.78
+0.57
+4,739,584
+0.57
+no
+within
+sweep-bert-L4-b2-s128
+216.70
+218.15
+-0.67
+4,063,232
+-1.03
+no
+within
+sweep-bert-L4-b2-s256
+227.06
+225.49
+0.69
+5,263,872
+1.44
+no
+within
+sweep-bert-L4-b2-s512
+234.71
+235.71
+-0.43
+9,335,808
+-0.32
+no
+within
+sweep-bert-L4-b4-s128
+227.06
+223.13
+1.73
+3,693,056
+2.48
+no
+within
+sweep-bert-L4-b4-s256
+234.71
+236.76
+-0.88
+6,315,008
+-0.43
+no
+within
+sweep-bert-L4-b4-s512
+454.50
+454.50
+0.00
+3,037,184
+0.00
+no
+within
+sweep-gpt2-L4-b1-s128
+274.50
+274.50
+-0.00
+786,432
+-0.00
+yes
+yes
+sweep-gpt2-L4-b1-s256
+276.07
+276.07
+0.00
+786,432
+0.00
+yes
+yes
+sweep-gpt2-L4-b1-s512
+282.89
+282.89
+0.00
+1,594,368
+0.00
+yes
+yes
+sweep-gpt2-L4-b2-s128
+274.50
+274.50
+0.00
+1,966,080
+0.00
+yes
+yes
+sweep-gpt2-L4-b2-s256
+277.28
+281.45
+-1.51
+4,192,256
+-1.79
+yes
+yes
+sweep-gpt2-L4-b2-s512
+285.96
+285.96
+0.00
+9,485,312
+0.00
+yes
+yes
+sweep-gpt2-L4-b4-s128
+276.88
+279.66
+-1.00
+9,781,248
+-1.24
+yes
+yes
+sweep-gpt2-L4-b4-s256
+284.65
+284.03
+0.22
+9,998,336
+-0.20
+yes
+yes
+sweep-gpt2-L4-b4-s512
+507.99
+507.99
+0.00
+9,449,984
+0.00
+no
+within
+swin-t-b2
+223.62
+218.94
+2.10
+314,368
+0.59
+no
+within
+t5enc-small-b1-s512
+153.13
+149.98
+2.06
+0
+1.37
+no
+within
+t5enc-small-b2-s128
+144.47
+144.47
+0.00
+0
+-6.26
+no
+within
+vit-base-b2
+355.61
+355.10
+0.14
+10,948,608
+-0.06
+yes
+yes
+vit-small-b4
+128.93
+125.37
+2.77
+0
+2.77
+yes
+yes
+B.4
+Microcontroller-class models
+Table 7 lists the 16 models of Section 5.2. In every model the order in which TFLite Micro executes the operators is certified
+optimal, and the peak equals the inputs plus the output of a single operator.
+B.5
+Speaker-embedding networks and detectors
+Table 8 completes Table 1 with the 0.8 s inputs and the greedy arena. For B3 and B6 the greedy planner does not realize the
+saving, because of fragmentation. Table 9 reports the YOLO detectors at 640 × 640. In YOLOv5nu and YOLOv8n the peak
+is the input image plus the output of the first convolution. In the other models it is a concatenation in the feature pyramid,
+whose large inputs are both needed at the peak event. Selective recomputation therefore has almost nothing to work with,
+which illustrates the condition stated in Section 5.3.
+B.6
+Negative rule families for gradient scheduling
+A natural question is whether the savings of Section 5.4 follow a simple rule. Two candidate rules are “finish a stage’s
+parameter-gradient branch before advancing the backbone” and “always defer parameter gradients”. Both can nearly double
+the peak. Let a source produce a private activation a of size A and a tensor u of size 1. Operation G consumes a and u
+and creates a pinned gradient of size P. Operation X consumes u and creates z of size 1 with scratch Q. Counting outputs
+allocated before inputs are released, the two orders have peaks
+peak(GX) = max(A + 1 + P, P + Q + 2),
+peak(XG) = max(A + Q + 2, A + P + 2).
+With A = 1 and P = Q = M, finishing G first costs 2M + 2, while deferring it costs M + 3. With A = Q = M and
+P = 1 the outcomes are exchanged. Hence neither rule is safe; each loses a factor approaching two on one of the families.
+B.7
+Theory experiments
+Table 10 breaks the comparison of the lower bounds with exact optima down by family. The reverse bound is exact on every
+in-tree and training-shaped instance, which matches Theorem 6. Table 11 reports the number of states that our prototype of
+the bounded-treewidth algorithm generates. The growth with K and B is the parameter dependence of Theorem 5, and it
+confirms that the algorithm is a tractability statement rather than a practical tool.
+
+
+--- Page 17 ---
+Peak-Memory Schedules You Can Trust
+Table 5. Inference on CPU (fp32, evaluation mode). Peak of the stock and of the reordered program, the best lower bound, whether it
+certifies the order, and bitwise equality with the stock program.
+Configuration
+Units
+Stock (MB)
+Ours (MB)
+Saving %
+max(F, R) (MB)
+Cert.
+Bitwise
+BERT-base, b8 s512
+133
+75.50
+75.50
+0.0
+75.50
+yes
+yes
+ConvNeXt-T, b8
+115
+58.00
+58.00
+0.0
+58.00
+yes
+yes
+DeepLabV3-R50, b2, 5122
+119
+167.77
+150.99
+10.0
+150.99
+yes
+yes
+DenseNet-121, b8
+242
+144.51
+144.51
+0.0
+144.51
+yes
+yes
+DistilBERT, b8 s512
+67
+75.50
+75.50
+0.0
+75.50
+yes
+yes
+EfficientNet-B0, b8
+164
+48.17
+48.17
+0.0
+48.17
+yes
+yes
+TransformerEnc 2L d64
+2
+0.39
+0.39
+0.0
+0.39
+yes
+yes
+TransformerEnc 4L, b4 s1024
+4
+167.77
+167.77
+0.0
+167.77
+yes
+yes
+Transformer enc–dec d256
+34
+1.05
+1.05
+0.0
+1.05
+yes
+yes
+FCN-R50, b2, 5122
+107
+171.97
+171.97
+0.0
+171.97
+yes
+yes
+GoogLeNet, b8
+89
+38.54
+38.54
+0.0
+38.54
+yes
+yes
+GPT-2 small, b4 s1024
+109
+130.84
+130.84
+0.0
+130.84
+yes
+yes
+Inception-v3, b8
+172
+66.54
+66.54
+0.0
+66.54
+yes
+yes
+Llama 4L, b4 s1024
+57
+92.29
+92.29
+0.0
+92.29
+yes
+yes
+Llama 8L, b2 s2048
+113
+146.80
+146.80
+0.0
+146.80
+yes
+yes
+LR-ASPP-MNv3, b4, 5122
+132
+90.83
+90.83
+0.0
+90.83
+yes
+yes
+MobileNetV2, b16
+106
+96.34
+96.34
+0.0
+96.34
+yes
+yes
+RegNetY-400MF, b16
+168
+73.87
+73.87
+0.0
+64.24
+no
+yes
+ResNet-50, b8
+104
+57.80
+57.80
+0.0
+57.80
+yes
+yes
+Swin-T, b8
+154
+97.76
+97.76
+0.0
+97.76
+yes
+yes
+T5-small enc., b8 s512
+63
+100.96
+100.96
+0.0
+100.96
+yes
+yes
+ViT-B/16, b16
+123
+97.07
+97.07
+0.0
+97.07
+yes
+yes
+Table 7. Microcontroller-class models (batch 1, int8 activations). Peak live activations and greedy arena of the model order, whether the
+order is certified optimal, and whether executing the schedule is bitwise exact.
+Model
+Ops
+MMACs
+Peak (KB)
+Arena (KB)
+Order opt.
+Exact
+FC autoencoder (AD)
+11
+0.3
+0.8
+0.8
+yes
+yes
+EfficientNet-B0, 1282
+134
+130.4
+491.5
+491.5
+yes
+yes
+GoogLeNet, 962
+82
+277.1
+184.3
+184.3
+yes
+yes
+ResNet-8 (CIFAR)
+15
+12.6
+49.2
+49.2
+yes
+yes
+DS-CNN (KWS)
+12
+3.3
+19.2
+19.2
+yes
+yes
+TC-ResNet8-1.5
+16
+3.4
+6.5
+6.5
+yes
+yes
+TC-ResNet8
+16
+1.6
+5.7
+5.7
+yes
+yes
+MobileNetV2-0.35, 1602
+65
+32.4
+384.0
+384.0
+yes
+yes
+MobileNetV2-0.35, 962
+65
+12.5
+138.2
+138.2
+yes
+yes
+MobileNetV3-S, 1282
+80
+20.4
+114.7
+114.7
+yes
+yes
+MNASNet-0.5, 1282
+65
+36.0
+131.1
+163.8
+yes
+yes
+Tiny U-Net, 1282
+24
+161.5
+786.4
+786.4
+yes
+yes
+Tiny U-Net, 962
+24
+90.9
+442.4
+442.4
+yes
+yes
+ShuffleNetV2-0.5, 1282
+92
+14.5
+147.5
+147.5
+yes
+yes
+SqueezeNet1.1, 1282
+39
+106.5
+315.5
+315.5
+yes
+yes
+MobileNetV1-0.25 (VWW)
+30
+7.7
+55.3
+64.5
+yes
+yes
+Table 8. Public ReDimNet backbones: peak of the certified optimal order, after recomputing the stem (and the saving), greedy arena
+before and after, and extra MACs.
+Size
+Frames
+Opt. peak
+Recompute
+Arena before
+Arena after
+MACs %
+B0
+201
+7.28
+6.85 (−6.0%)
+7.29
+6.85
+0.33
+B0
+81
+2.96
+2.79 (−6.0%)
+2.97
+2.79
+0.34
+B1
+201
+10.49
+9.85 (−6.1%)
+10.49
+9.85
+0.33
+B1
+81
+4.27
+4.01 (−6.1%)
+4.27
+4.01
+0.34
+B2
+201
+16.78
+15.91 (−5.2%)
+16.79
+15.91
+0.25
+B2
+81
+6.83
+6.47 (−5.2%)
+6.83
+6.48
+0.25
+B3
+201
+16.78
+15.91 (−5.2%)
+16.79
+16.85
+0.09
+B3
+81
+6.83
+6.47 (−5.2%)
+6.83
+6.86
+0.09
+B4
+201
+33.56
+31.76 (−5.4%)
+33.57
+31.77
+0.11
+B4
+81
+13.66
+12.93 (−5.4%)
+13.67
+12.94
+0.11
+B5
+201
+33.56
+31.76 (−5.4%)
+33.57
+31.77
+0.06
+B5
+81
+13.66
+12.93 (−5.4%)
+13.67
+12.94
+0.06
+B6
+201
+33.56
+31.76 (−5.4%)
+33.57
+33.63
+0.02
+B6
+81
+13.66
+12.93 (−5.4%)
+13.67
+13.69
+0.02
+
+
+--- Page 18 ---
+Peak-Memory Schedules You Can Trust
+Table 9. YOLO detectors at 640 × 640 (fp32, raw head outputs). The model order is certified optimal in every case.
+Model
+Ops
+GMACs
+Optimal peak (MB)
+Cert.
+With recomputation (MB)
+YOLOv5nu
+69
+3.9
+11.47
+yes
+11.47 (−0.0%)
+YOLOv8n
+65
+4.4
+11.47
+yes
+11.47 (−0.0%)
+YOLO11n
+101
+3.3
+14.34
+yes
+14.34 (−0.0%)
+YOLOv8s
+68
+14.3
+22.12
+yes
+21.71 (−1.9%)
+YOLO11s
+103
+10.8
+28.67
+yes
+28.67 (−0.0%)
+YOLOv8m
+84
+39.5
+39.32
+yes
+39.32 (−0.0%)
+YOLO11m
+123
+34.1
+56.52
+yes
+56.12 (−0.7%)
+Table 10. Number of random DAGs on which each lower bound equals the exact optimum, and the worst ratio of the optimum to
+max(F, R).
+Family
+n
+Mandatory
+G
+F
+R
+max(F, R)
+Worst OPT/ max
+random
+160
+63
+111
+116
+143
+148
+1.188
+sp
+160
+137
+145
+146
+156
+157
+1.231
+pumpkin
+160
+75
+113
+116
+145
+148
+1.231
+intree
+160
+142
+142
+142
+160
+160
+1.000
+training
+160
+160
+160
+160
+160
+160
+1.000
+Table 11. States generated by the complete-trace dynamic program (limit 3 · 106) on ladder graphs (width 2) and two-arm pumpkins, with
+K the cap and B the memory budget.
+Graph
+K
+B
+n=6
+n=8
+n=10
+n=12
+n=14
+ladder
+1
+4
+4
+34
+17
+232
+118
+ladder
+1
+6
+313
+268
+121
+4,849
+595
+ladder
+1
+8
+1,615
+3,280
+41,656
+43,055
+2,705
+ladder
+2
+4
+10
+659
+169
+45,831
+17,554
+ladder
+2
+6
+105,131
+128,836
+31,570
+> 3·106
+1,101,844
+ladder
+2
+8
+> 3·106
+> 3·106
+> 3·106
+> 3·106
+> 3·106
+pumpkin
+1
+4
+64
+55
+55
+55
+55
+pumpkin
+1
+6
+1,089
+2,317
+23,100
+33,279
+40,650
+pumpkin
+1
+8
+6,011
+102,948
+764,110
+> 3·106
+> 3·106
+pumpkin
+2
+4
+8,333
+2,967
+2,967
+2,967
+2,967
+pumpkin
+2
+6
+> 3·106
+> 3·106
+> 3·106
+> 3·106
+> 3·106
+pumpkin
+2
+8
+> 3·106
+> 3·106
+> 3·106
+> 3·106
+> 3·106
+
+
+--- Page 19 ---
+Peak-Memory Schedules You Can Trust
+C
+EXACT REALIZATION
+C.1
+The contract
+The contract of Theorem 1 describes what a generated program must guarantee for a permutation of its statements to be both
+correct and exactly predictable. Its state Q = (E, G, O, U, H) consists of five parts:
+• the live storage epochs E, where an epoch is one allocation-to-free interval of a storage;
+• the defined content generations G of byte regions inside those epochs;
+• the owners O of each epoch, namely wrapper names, tuple slots, saved values, native references and returned values;
+• the outstanding asynchronous uses U;
+• any externally visible state H, such as random-number generators.
+The six conditions are the following.
+(C1) Every unit’s reads and writes are described at the level of byte regions and content generations, including partial writes
+through aliases.
+(C2) Every owner is recorded, and every access has completed before the storage it touches is released.
+(C3) Every unit computes a deterministic function of the contents it reads.
+(C4) The sequence of charged allocation and release events of every unit is the recorded one.
+(C5) This sequence is independent of the surrounding live memory: executing a unit next to any disjoint live frame R adds
+exactly |R| to every event and leaves R untouched.
+(C6) Emitting a new order introduces no events other than those of the units, their allocations and their releases.
+An order is admissible if it respects every conflicting pair of region accesses and every recorded ownership constraint.
+C.2
+Proof of Theorem 1
+The proof has two parts, one about values and one about memory.
+For values, consider two adjacent units in the reference order that have no conflicting accesses. Swapping them changes
+neither the contents either of them reads nor the contents left behind, because their written regions are disjoint from each
+other’s read and written regions. An admissible order can be reached from the reference order by such swaps. By (C1) and
+(C3), every unit therefore reads, in the new order, exactly the content generations it read in the reference order and computes
+the same result. If the units are deterministic at the byte level the results are bitwise equal.
+For memory, we maintain a correspondence between the abstract state of the root model and the concrete state of the
+program, event by event. Allocation creates a fresh epoch on both sides. Binding a name or saving a value adds the same
+owner on both sides. Releasing a name removes it on both sides. A storage is freed only when its owner set is empty and its
+accesses are complete, which happens at the same event on both sides by (C2). By (C4) the charged sizes match, and by
+(C5) the bytes held by units that are not currently executing contribute the same constant to every event. By (C6) no other
+events occur. Hence the live bytes agree after every event, and so do their maxima.
+C.3
+What breaks without each condition
+Each condition is needed; the following small programs violate one condition each.
+• Owner-sensitive call (C2). A root of size 10 has two owners, a and z. Unit D drops z. Unit K reads the root, drops a
+and allocates an output of size 6. The order D, K peaks at 10, while K, D peaks at 16, with identical code and inputs.
+• Hidden runtime state (C3, C5). A unit uses scratch 4 or 64 depending on a flag that another unit sets.
+• Partial write through an alias (C1). One unit reads element zero through one view, another overwrites only element
+zero through another view. Swapping them changes the returned value from 2 to 9.
+• Asynchronous completion (C2). An asynchronous read observes a later overwrite unless completion is ordered before
+the write.
+• Regrouping (C6). Two units that each allocate and free 8 bytes peak at 8 when executed atomically and at 16 when their
+events are interleaved.
+• Envelope versus workspace. A unit that frees an input of 10 and then allocates an output of 6 has net change −4 and
+maximal prefix change 0, so the commonly used difference between the two is 4 although the unit has no workspace.
+• A late alias (observed during development). Emitting an alias only at the return statement kept a tuple, and with it a
+
+
+--- Page 20 ---
+Peak-Memory Schedules You Can Trust
+gradient, alive and raised the ResNet-18 backward peak by 16 KiB. Emitting aliases as early as their dependencies allow
+restores exactness.
+• The caching allocator (C5). On the GPU the block assigned to a request depends on the history of the allocator’s pools
+(Section 5.6), which is the failure we measure there.
+D
+TRAP BOUNDS
+Throughout, L(X) is the live memory after the ideal X, c(v) the event cost of v beyond the live memory, A(v) the strict
+ancestors and D(v) the descendants of v including v.
+D.1
+Soundness and domination
+Soundness of F.
+Fix a proper ideal R and an arbitrary topological order. Let v be the first operation of the order outside
+R. All ancestors of v precede it and lie in R, so v is in the ready frontier F(R). The set X of operations before v satisfies
+A(v) ⊆X ⊆R, so the event of v costs L(X) + c(v) ≥fv(R) ≥minu∈F (R) fu(R). Taking the maximum over R gives
+F ≤OPT.
+Soundness of R.
+Fix a nonempty ideal T and let v be the last operation of T in the order. Then v is maximal in T, and the
+set of operations before v contains T \ {v} and contains no descendant of v. The event of v therefore costs at least qv(T).
+Domination of G.
+For every v the set Rv = V \ D(v) is an ideal whose ready frontier is exactly {v}. The ideals X with
+A(v) ⊆X ⊆Rv are exactly the ideals that contain A(v) and exclude v. Hence fv(Rv) equals the event-cut term gv, and
+F ≥maxv gv = G. Symmetrically, T = A(v) ∪{v} has the unique maximal element v and the interval [A(v), V \ D(v)],
+so R ≥G.
+D.2
+Computation
+At a capacity λ, call a ready operation v admissible for R if fv(R) ≤λ. Enlarging R can only enlarge the interval over
+which fv minimizes, so admissibility persists. Saturating admissions from R = ∅therefore reaches a unique fixed point. If
+the fixed point is a proper ideal R, every operation of its frontier has fv(R) > λ, which certifies F > λ. Conversely, if
+some proper ideal T has minv∈F (T ) fv(T) > λ, no admission sequence can leave T. The first operation to leave it would
+be admissible for an ideal contained in T, and hence for T itself, a contradiction. Saturation thus completes if and only
+if λ ≥F. The adaptive algorithm avoids a search over λ: it admits an operation of minimum fv(R) at every step and
+returns the largest value it recorded. It performs n admissions with at most n frontier evaluations each. Each evaluation is a
+minimum-weight closure: operations carry their allocations, a release node per root carries a gain equal to the root’s size,
+and infinite arcs encode precedence and the interval endpoints. This gives O(n2) minimum-cut computations. The reverse
+bound removes maximal operations from V in the same way; its converse argument uses the first removed member of any
+nonempty ideal.
+D.3
+Incomparability
+• R > F. On the backward wrapper of DistilBERT (b1, s128) the forward bound is 266,237,960 B, while the reverse bound
+and the optimum are both 266,628,104 B.
+• F > R. Let two independent operations each consume their own external input of size 2 and use scratch 1, with initial
+memory 4. Whichever runs first costs 5, so F = OPT = 5. In the reverse bound each operation may assume that the
+other has already run, so R = 3, and 4 with the boundary terms.
+D.4
+Two families
+Proposition 6. Let Th be a complete binary in-tree of height h ≥1 with unit weights, a zero-weight source feeding every
+leaf, and a pinned root. Then F = 3 and R = OPT = h + 2.
+Proof. OPT = h + 2. Evaluating one child subtree, keeping its root, then evaluating the other and finally the parent gives
+h + 2 by induction. For the lower bound, restrict any order to each child subtree; by induction each restriction contains an
+event with at least h + 1 live values. At the later of these two events the other subtree has already started and its parent has
+
+
+--- Page 21 ---
+Peak-Memory Schedules You Can Trust
+not yet run, so the other subtree holds at least one live value, which gives h + 2.
+F = 3. Every internal vertex is admissible at capacity 3 using the ideal of its own ancestors, in which exactly its two
+children are live. Hence saturation completes at capacity 3. The lowest internal vertex shows F ≥G ≥3.
+R ≥h + 2. Let T consist of the source and all vertices of height at most one; its maximal elements are the vertices of
+height one. Fix such a vertex v and an ideal X with T \ {v} ⊆X ⊆V \ D(v); here D(v) consists of v and its h −1 strict
+ancestors. Both children of v lie in X and are live because v /∈X. For each strict ancestor a of v, let a′ be its child off the
+path to v. The subtree of a′ meets X, because it contains vertices of height at most one. The restriction of X to that subtree
+is a nonempty ideal of an in-tree whose root’s consumer a is not in X, so some maximal element of the restriction has an
+unexecuted consumer and is live. These h −1 subtrees are disjoint from each other and from the children of v. Hence
+L(X) ≥2 + (h −1) and qv(T) ≥h + 2, and soundness gives R ≤OPT.
+Proposition 7. Let a zero-weight source feed k ≥2 unit-weight values a1, . . . , ak. Let a zero-weight merge mij consume
+ai and aj for every pair i < j, and let a zero-weight sink consume all merges. Then F = 2 and R = OPT = k.
+Proof. Computing all ai first and then all merges has peak k, so OPT ≤k. For F ≤2, consider a proper ideal R. If
+some ai /∈R, it is ready with prefix {s} and costs 1. If all ai ∈R but some merge mij is not, its prefix {s, ai, aj} has
+two live values. Otherwise only the sink is outside R and costs nothing. Every merge shows G ≥2. For R ≥k, let
+T = {s, a1, . . . , ak}, whose maximal elements are the ai, and let X satisfy T \{ai} ⊆X ⊆V \D(ai). Every al with l̸ = i
+lies in X, and its consumer mil lies in D(ai) and hence outside X, so al is live. Therefore qai(T) ≥1 + (k −1) = k.
+Exhaustive computation confirms R = OPT also with merges of weight one for k ≤6, where F =
+ k
+2
+
+and R = OPT =
+ k
+2
+
++ 2. Whether OPT/ max(F, R) is bounded on all DAGs remains open; the largest ratio we found is 1.5.
+E
+NECESSARY RECOMPUTATION
+Lemma 8 (Projection). Let P ⊆V and let ZP be the one-shot instance with the weights of all vertices outside P set to zero
+and the dependencies unchanged. If a capped schedule computes every vertex of P exactly once with peak at most B, then
+OPT1(ZP ) ≤B.
+Proof. The order of first computations is a topological order of ZP . A value of P that is computed only once cannot be
+deleted while it is still needed, since it could not be recreated. It is therefore resident at every event of ZP at which the
+one-shot schedule keeps it, and each one-shot event costs no more than the corresponding capped event.
+The cover bound.
+For an event h let ℓ(h) = wh + P
+p∈pred(h) wp be its local footprint. Let Xh be the values produced by
+strict ancestors of h that have a consumer among the strict descendants of h, excluding the inputs of h. Every value in Xh
+that is computed only once must be resident at the first execution of h. With zv = 1[Nv ≥2] this gives the knapsack-cover
+constraint
+P
+v∈Xh wvzv ≥ℓ(h) + P
+v∈Xh wv −B.
+Its fractional minimum of P
+v cvzv, obtained greedily by increasing cv/wv, is a lower bound on the extra work. The
+maximum over all events is the cover bound evaluated in Section 6. The constraints of all events can also be combined in
+one covering linear program; a rational dual solution then certifies the bound without trusting the solver.
+F
+HARDNESS
+F.1
+Proof of Theorem 4
+Membership.
+With a uniform cap k, a normalized schedule has at most kn computations and at most kn deletions, so it is
+a polynomial certificate whose peak can be checked in polynomial time.
+Hardness.
+We reduce from weighted one-shot pebbling on pumpkin graphs, which is strongly NP-hard (Jin et al., 2023).
+Let (G, B) be an instance with sink t. First, make all weights positive: replace every weight wv by (n + 1)wv + 1 and B by
+(n + 1)B + n. At most n values coexist, so this preserves the answer, and the numbers remain polynomial in unary. Next,
+append the following gadget:
+
+
+--- Page 22 ---
+Peak-Memory Schedules You Can Trust
+• zero-weight vertices r1, . . . , rk and z1, . . . , zk−1, and barrier vertices h1, . . . , hk−1 of weight B;
+• edges t →ri for every i, and ri →hi →zi →ri+1 for i < k;
+• the new sink is rk, and every vertex receives the cap k.
+If. Run a one-shot schedule of G with peak at most B, compute r1, delete every old value, compute h1 and z1, delete h1,
+and repeat. Each phase stays within B, and every vertex is computed at most k times.
+Only if. At the first computation of each barrier hi, no old value can be resident, because all old weights are positive and hi
+alone has weight B. The first computation of ri+1 requires a fresh t, and hence a computation of every old vertex, after that
+barrier, and the first r1 requires one before the first barrier. These k phases are disjoint, so with cap k every old vertex is
+computed exactly once in each phase. Restricting any one phase to the old events yields a one-shot schedule of G with peak
+at most B.
+Treewidth. A pumpkin has treewidth two. Attach to a bag containing t the chain of bags {t, ri, hi}, {t, hi, zi}, {t, zi, ri+1}
+for i = 1, . . . , k −1. These bags cover all new edges, every vertex occurs in a connected set of bags, and no bag has more
+than three vertices.
+F.2
+Binary caps
+If two moments of an execution have the same live set, the actions between them can be removed: the remaining schedule is
+still valid, its counters only decrease and its peak does not increase. Hence caps above 2n are never needed, and with caps
+written in binary the problem embeds unrestricted black pebbling, which is PSPACE-complete (Gilbert et al., 1980; Chan
+et al., 2023).
+F.3
+Series–parallel graphs
+The fork/join region.
+Given items i with weights wi and prices ci, build a binary tree of zero-weight forks fI and joins
+jI of weight W = C + 1, whose leaves are the item vertices ai of weight wi and price ci. The region is two-terminal
+series–parallel with out-degree two. All of its values fit in B = P
+i wi + (n −1)W.
+Knapsack equality for minimum work with uniform cap two.
+Append t →r1 →H →z →r2 and t →r2, where H
+has weight B −C and the other new vertices have weight zero. At the first computation of H no join fits beside it, so the
+resident item vertices form a set S with P
+i∈S wi ≤C. After H, every join and every item outside S must be computed
+again to produce t for r2. Conversely, every set S with P
+S wi ≤C can be realized this way. Hence the minimum extra
+work equals P
+i ci −max{P
+i∈S ci : P
+i∈S wi ≤C}.
+Partition with caps at most three.
+Require three results of the region, separated by two barriers of weight B −C. Give
+item vertices cap two and all other vertices cap three. An item that is absent at both barriers would need three computations,
+so the item sets S1, S2 resident at the two barriers cover all items. Each has weight at most C, and the total weight is 2C, so
+they form an exact partition.
+An exponential trade-off frontier.
+Take the path s →u1 →· · · →um →g →h →q →vm →· · · →v1 with
+the additional edges ui →vi. Let w(ui) = c(ui) = ai = 2i−1, w(h) = H ≥A = P
+i ai, and give all other vertices
+weight and price zero. Keeping a subset S of the ui resident through h and recomputing the others realizes the pair
+(M, E) = (H + a(S), A −a(S)) of peak and extra work. Every schedule satisfies M + E ≥H + A, so all 2m pairs are
+non-dominated.
+G
+THE BOUNDED-TREEWIDTH ALGORITHM
+G.1
+Why the obvious interface fails
+Take vertices s, u, a, h, c, t with weights 0, 10, 1, 100, 1, 1, edges s →u →a →h →c →t and u →t, and cap two
+everywhere. In history A every vertex is computed once and u is kept through h, with peak 111. In history B u is discarded
+before h and recomputed afterwards, with peak 101. Both end with the same resident boundary values and the same
+boundary counters, yet history B has used up both computations of u. A later reset of weight 111 that requires the region
+again can be completed after history A but not after history B. Hence resident boundary values and boundary counters do
+not form a sufficient interface, even when no internal value is resident.
+
+
+--- Page 23 ---
+Peak-Memory Schedules You Can Trust
+G.2
+Local witnesses and types
+Fix a nice tree decomposition of width t, let h = t + 1, and let Xx, Vx and Ix = Vx \ Xx be the bag, the vertices below
+node x and its private vertices. A local witness at x is a complete event sequence over Vx that starts and ends empty. It
+computes every private vertex between one and its cap times, respects every edge inside Vx, and stays within B. Its boundary
+word is the subsequence of compute and delete events of bag vertices, of length at most 2Kh. Between consecutive
+boundary events, and before the first and after the last, we record the sequence of private resident weights and reduce it to its
+typical sequence (Bodlaender et al., 2020), which has length at most 2B + 1. The type of a witness is its boundary word
+together with these reduced profiles; the number of types is at most W(h, K) T (B)2Kh+1 with W ≤P
+ℓ≤2Kh(2h)ℓand
+T (B) = (B + 1)2B+1. For each type the algorithm retains an actual witness of minimum private work.
+G.3
+The invariant
+The algorithm maintains word-preserving segmentwise one-way coverage: for every admissible local witness there is a
+retained witness with the same boundary word, no more private work, and a private profile that stutter-dominates the other
+one in every segment. Two facts make this invariant compose. First, typical sequences are compatible with concatenation
+and with constant shifts, and they admit a merge lemma for sums of independent profiles (Bodlaender et al., 2020). Second,
+private vertices interact with the rest of the schedule only through memory, and their caps have already been checked on the
+retained witness. Replacing a witness by a retained one with the same word therefore keeps every surrounding schedule
+valid without increasing its peak or its work. Typical equivalence is used only to deduplicate; the induction relies on one-way
+domination.
+G.4
+Transitions
+• Leaf. The empty witness.
+• Introduce v. No private vertex is adjacent to v, so only edges inside the bag need checking. For every retained child
+witness, a dynamic program over the position in that literal witness and the type of the prefix built so far inserts up to kv
+compute/delete pairs of v. Equal prefix types at the same position have the same future, so one representative suffices; this
+needs O(Kn) positions times a parameter-bounded number of types, not nK placements.
+• Forget v. Relabel the events of v as private, which concatenates segments and shifts their levels by wv where v is resident,
+require that v was computed at least once, and charge cv times its number of computations.
+• Join. Combine two retained witnesses with identical boundary words: synchronize the bag events, interleave the private
+events of the two children by a dynamic program over pairs of positions and the merged prefix type, count resident bag
+values once, and add the private work.
+• Root. At the empty root every vertex is private, so the retained witness is a complete schedule; truncating it after the first
+computation of the sink gives the answer.
+Every step uses polynomially many literal positions times a number of types that depends only on t, K and B, which gives
+the bound f(t, K, B) poly(n, L) of Theorem 5.
+G.5
+Comparison-restricted augmentation
+Let OPT(B, p) be the least work over schedules that never have more than p resident values of positive weight at an
+allocation event. For 0 < ε ≤1 round every positive weight to ⌈wv/δ⌉with δ = εB/p, and solve exactly with budget
+B′ = ⌊p/ε⌋+ p. Every comparison schedule fits in B′, because rounding adds at most p units at each event. The returned
+schedule respects all caps, its true peak is at most δB′ ≤(1 + ε)B, and its work is at most OPT(B, p). The running time is
+f(t, K, p, 1/ε) poly(n, L).
+H
+SUPPLEMENTARY MATERIAL
+The supplementary archive reproduces every number, table and figure that concerns public models, and it contains all result
+files behind them.
+• experiments/harness/: fixed-wrapper realization for Inductor: wrapper capture, root models, emission, regenera-
+tion and the per-configuration driver.
+• experiments/edge/: operator-level graphs, schedule execution, the arena planner and selective recomputation.
+
+
+--- Page 24 ---
+Peak-Memory Schedules You Can Trust
+• experiments/*.py: the study drivers, the CP-SAT baseline, the allocator simulation, and the scripts that regenerate
+all tables and figures from the saved results.
+• experiments/runs*/, edge/results/, edge/rdnpub/, theory/: the saved results.
+• solvers/: the exact capacity search, the forward and reverse trap bounds, their independent verifiers, the CP-SAT
+model with recomputation caps, and the prototype of the bounded-treewidth algorithm.
+The README.md maps every section, table and figure to the command that produces it. The certificate verifiers and the
+table scripts use only the Python standard library.

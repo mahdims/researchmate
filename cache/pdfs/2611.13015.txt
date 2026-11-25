@@ -1,0 +1,1984 @@
+--- Page 1 ---
+From Questions to Decisions: Benchmarking How LLM Agents
+Acquire Decision-Relevant Information from Human Beings
+Yuhan Tang1∗, Ke Fan2∗, Xinkai Zou3∗, Baichuan Mo2†, Kangxin Cui4, Ao Qu1,
+Ou Zheng5, Jiangbo Yu6, Xuan Jiang1, Haris N. Koutsopoulos7, Jinhua Zhao1‡, Yuan Zhou2‡
+1Massachusetts Institute of Technology
+2Tsinghua University
+3University of California, San Diego
+4Tongji University
+5Peking University
+6McGill University
+7Northeastern University
+Abstract
+LLM agents are increasingly asked to make plans for peo-
+ple, such as scheduling drivers or assigning nurses. However,
+people’s requests are often incomplete, and the supporting
+information for decision making may be outdated, requiring
+agents to ask for clarification. Existing benchmarks typically
+provide fully specified problems or rely on uncalibrated LLM-
+simulated users, leaving this ability insufficiently tested. We
+introduce Ask2Decide, a benchmark of 43 planning tasks
+that evaluates whether agents ask for missing information that
+matters for their decisions. An operator holds facts absent
+from the agent’s request and records, and optimization solvers
+determine which facts change the optimal plan. We also in-
+clude similarly worded facts that leave the optimal plan un-
+changed to test whether agents distinguish useful information
+from irrelevant details. We collect 79 interaction sessions from
+19 participants and find that, after an incorrect plan, human
+replies omit the correcting fact far more often than replies
+from an uncalibrated simulated user (43% versus 7%). Us-
+ing these interactions, we calibrate a simulated operator that
+more closely matches human reply patterns. Evaluating four
+frontier LLMs, we find that their initial plans are infeasible on
+58–98% of tasks when information is missing, compared with
+5–28% when all facts are provided upfront. Agents uncover
+facts that change the optimal plan only slightly more often
+than facts that leave it unchanged (39–52% versus 32–41%).
+These results show that obtaining decision-relevant informa-
+tion through interaction remains a major bottleneck for LLM
+planning. This is ongoing work and will be updated. The
+date of this version is shown on the first page.
+1
+Introduction
+LLM agents are increasingly asked to make plans for real-
+world operations. Recent work has made progress in translat-
+ing complete problem descriptions into optimization mod-
+els (Ramamonjison et al. 2023; AhmadiTeshnizi, Gao, and
+Udell 2024; Huang et al. 2025; Jiang et al. 2025). In prac-
+tice, however, neither the initial request nor the organization’s
+records describe the problem as it stands today. Some rules
+were never written down; some conditions changed after the
+∗These authors contributed equally.
+†Corresponding author.
+‡Senior authors.
+records were made, through an accident, new information
+or a system update not yet entered; and some records are
+simply wrong. Those missing information could make the fi-
+nal plans infeasible. A dispatcher asking for today’s delivery
+routes may omit that one driver must return by 10:00. Assign-
+ing that driver a longer route could make the plan infeasible.
+Such conditions are known to the people involved but absent
+from the request and the available records, so the agent can
+learn them only from those people. Yet missing facts differ
+in their consequences: some change which plan is feasible or
+preferred, while others leave the decision unchanged. Effec-
+tive planning therefore requires the agent to recognize what
+it needs to know and direct its questions toward those facts.
+This raises a question that current benchmarks do not answer:
+can an agent elicit the missing information that matters for
+its decision?
+Existing evaluations fall short in two aspects. (1) They do
+not measure the decision value of acquired information. Ex-
+isting optimization evaluations focus on modeling and solv-
+ing from fixed problem descriptions, without testing whether
+agents uncover temporary changes in operational conditions.
+Benchmarks for clarification and information acquisition ad-
+dress missing information: QuestBench tests whether models
+identify the clarification question needed to solve an under-
+specified task (Li, Kim, and Wang 2025), while OR-Clarify
+evaluates the recovery of withheld formulation requirements
+before modeling (Ge et al. 2026). However, these evaluations
+do not quantify the consequences of missing facts for plan
+feasibility and solution quality, or evaluate the operational
+plan produced after the interaction. This leaves open whether
+agents acquire the information that matters for the decisions
+they make. (2) Their simulated users do not reliably com-
+municate as real human beings do. Interactive benchmarks
+evaluate agents through conversations with LLM-simulated
+users (Yao et al. 2025). Compared with real human beings,
+default simulators produce overly verbose and polite replies,
+exhibit less stylistic variation, and disclose information more
+completely and earlier in the conversation (Dou et al. 2025;
+Zhou et al. 2026). These differences can change how much
+agents need to ask and yield success rates and failure patterns
+that differ from human evaluations (Seshadri et al. 2026). Re-
+liable evaluation therefore requires calibrating and validating
+Work in progress. This version: November 9, 2026
+arXiv:2611.13015v2  [cs.AI]  15 Nov 2026
+
+
+--- Page 2 ---
+Default LLM operator Human operators
+Initial
+Final
+Initial
+Final
+Interactive 48.5%
+6.1%
+32.9%
+7.6%
+Full brief
+3.0%
+0.0%
+6.3%
+3.8%
+Table 1: Share of infeasible plans with a default LLM op-
+erator and with human operators (22 tasks, planning agent:
+DeepSeek V4.1 Flash).
+simulated responses against real human interactions.
+To address both gaps, we introduce Ask2Decide, a bench-
+mark for evaluating how agents acquire decision-relevant
+information from people. It contains 43 planning tasks in
+routing, scheduling, staffing and other domains. The agent
+receives a brief and an incomplete knowledge base, and an
+operator holds today’s hidden facts. Optimization makes a
+good testbed because a solver can do two things exactly. It
+computes the value of each hidden fact: its regret ∆is the
+loss that the safest plan can still incur when the agent does
+not know whether that fact holds, with the rest of the problem
+fixed. And it scores any submitted plan against the true facts,
+from 0 for an optimal plan to 1 for a plan that cannot be car-
+ried out. Facts that change the plan (∆> 0) are paired with
+twins: facts of the same form about another object that sound
+just as important but leave the best plan unchanged. Figure 1a
+shows such a pair. Recovering many facts is therefore not the
+same as asking useful questions.
+Table 1 runs the same planning agent (DeepSeek V4.1
+Flash) on 22 tasks, once with the human operators of our
+study (19 participants, 79 sessions) and once with a default
+LLM operator (three runs per task). First, interactive plan-
+ning is hard: with a full brief (every hidden fact in the first
+message), the initial plan is rarely infeasible (3.0–6.3%), but
+in the interactive condition, where the hidden facts are not
+given, it is infeasible in 32.9–48.5% of episodes. Rejections
+and revisions bring the final plan below 8%. Second, the op-
+erator changes the result: the initial plan fails more often with
+the default operator than with people, but the final plan fails
+less often, because after a wrong plan the default operator
+withholds the correcting fact in only 7% of replies, against
+43% for people. We therefore build CalOp, a simulated oper-
+ator calibrated on the human sessions, and Section 4 validates
+it against them.
+Because a solver can score every plan both with and with-
+out the hidden facts, Ask2Decide can separate abilities that
+a single success rate mixes together: modelling the problem,
+asking for the facts that matter, and recovering after a rejected
+plan. Since the operator is simulated, we also test how the
+choice of operator changes these measurements. In Section 5
+we use CalOp to evaluate four LLMs as the planning agent
+on all 43 tasks and organize the results around four research
+questions.
+RQ1: How does access to complete information affect
+initial-plan quality? Strongly. Models that plan well when
+told every hidden fact produce an initial plan that cannot be
+carried out on most tasks when those facts are not given. Ob-
+taining the information, more than modelling the problem, is
+the bottleneck.
+RQ2: Do models ask about facts that change the plan?
+Only weakly. Models uncover the facts that change the plan
+barely more often than look-alike twins that do not, and on
+large instances asking more questions does not rescue the
+initial plan.
+RQ3: How much do models recover after a rejected plan?
+Much, but recovery hides how they asked. A rejection it-
+self tells the agent that something is wrong today, and after
+revisions, models that asked very differently end up close
+together. We therefore score the initial plan for asking and
+report the final plan as a measure of recovery.
+RQ4: How does the choice of simulated operator affect
+planning outcomes? It shifts individual scores in both direc-
+tions but not the main conclusion: under both a default and
+the calibrated operator, the interactive condition leaves far
+more initial plans infeasible than a full brief.
+In summary, our contributions are threefold:
+• We introduce Ask2Decide, a benchmark of 43 planning
+tasks in which an operator holds hidden facts that the
+agent needs for its plan. Every hidden fact has an exact
+or bounded regret label, matched zero-value twins serve
+as controls, and the initial plan is scored under the true
+conditions, so what an agent learns is tied to the quality
+of its decision.
+• We collect 79 operator sessions from 19 participants that
+show how people release information. From these ses-
+sions we build CalOp, a calibrated simulated operator,
+and validate its reply form, factual faithfulness and plan-
+ning outcomes against the human sessions. It matches
+them more closely than a default LLM operator, so new
+agents can be evaluated repeatedly without new human
+dialogues.
+• We evaluate four LLMs on all 43 tasks, comparing each
+model’s initial plan with and without full hidden facts,
+its uptake of relevant facts against twins, its initial plan
+against its final plan, and two simulated operators. Even
+the best model’s initial-plan loss rises from 0.03 when
+told every hidden fact to 0.60 in the interactive condition,
+and models uncover relevant facts only 5–11 points more
+often than twins. Most of the loss comes from not asking
+what matters, rather than from modelling.
+2
+Ask2Decide: Task Formulation
+Ask2Decide measures whether an agent can ask people for
+the information its decision depends on. When an LLM agent
+helps a human being to make a decision, some of the facts
+that matter are known only to that person: they are missing
+from the request and from the records. A good agent does
+not ask about everything. It finds the few facts that change
+its decision.
+An episode is one complete run of a task, from the initial
+request to the evaluation of the submitted plans. It sepa-
+rates three roles: the agent receives a request and incomplete
+records, asks questions and submits plans; the operator holds
+the missing facts and answers questions about specific ob-
+jects; and the judge evaluates submitted plans against the true
+conditions.
+
+
+--- Page 3 ---
+(a) One task: what each side knows
+  Operator’s request →Agent
+Plan this morning’s door-to-door rides: Alice and Peter to the hospital,
+Joan home. Use two vehicles and minimize total distance.
+Æ Agent’s knowledge base
+Addresses, distances, time windows, seats and wheelchair needs.
+Recorded return time: 11:40 for both vehicles.
+  Operator’s private notes
+hidden from the agent
+ID
+Hidden fact
+Kind
+∆sa
+∆cond
+H2
+Vehicle 1 back by 10:00.
+relevant
+0.353
+0.007
+H5
+Vehicle 2 back by 10:40.
+twin of H2
+0
+0
+H3
+Into hospital: +15 min.
+relevant
+0.440
+0.141
+H4
+Peter has a companion.
+irrelevant
+0
+0
+S1
+Ride time ≤25 min.
+missing rule
+0
+0.141
+(b) One episode: ask, plan, score
+1
+⃝Ask the operator
+Æ
+Agent
+Any other constraints I should know about?
+ 
+Operator
+Which object do you mean?
+p No object specified: no hidden fact disclosed.
+Æ
+Agent
+When does vehicle 1 have to be back?
+ 
+Operator
+By 10.
+✓H2 disclosed: update the return-time constraint.
+2
+⃝Plan with the solver
+3
+⃝Score the initial plan
+Ô Solver tool
+model + code
+Æ Initial plan
+routes for V1, V2
+Judge: true problem
+0 optimal · gap · 1 infeasible
+∆sa / ∆cond: standalone / conditional regret.
+S1 denotes a standing rule absent from the records.
+If rejected, the agent may revise up to twice.
+The final plan is reported separately.
+Figure 1: Overview of Ask2Decide on hard1_dialaride. (a) The agent gets a brief and the records, and the operator holds
+today’s notes, each labelled by the solver with its regret ∆. The twin H5 has the same form as H2 but leaves the best plan
+unchanged. (b) The operator answers only questions about a specific object, and the agent’s initial plan is scored on the true
+problem. Replies are constructed for illustration.
+To make the value of a question measurable, we instantiate
+the decision as an optimization problem. A solver can then
+compute two things exactly: how much each missing fact can
+change the best decision, and how good the final decision is
+under the true facts. Whether a question was worth asking is
+therefore computed by the solver, not judged by annotators.
+Section 2.1 specifies what the agent, operator and judge
+know and do, and describes how questions, plans and revi-
+sions form an episode. Section 2.2 defines the loss of a plan
+and the value of a hidden fact, the regret that can arise when it
+remains unknown, and introduces twins as controls for facts
+that leave the plan unchanged. Section 2.3 explains how plan
+quality, information acquisition and recovery are measured,
+and how comparison with complete information helps distin-
+guish information acquisition from modelling. Section 3 then
+describes how operational problems are turned into bench-
+mark tasks by specifying the initial records and hidden facts,
+adding controls and verifying their effects with a solver.
+2.1
+Setting
+The three roles have different responsibilities and access to
+information.
+• The agent is the LLM under test, run in our planning
+harness. It receives a short request from the operator, the
+brief, and a knowledge base: the task’s existing records,
+such as addresses, distances, time windows and vehicle
+capacities. It can ask the operator questions, write a model
+and solve it, and submit plans.
+• The operator is a human participant or a simulated opera-
+tor. It holds a few notes: facts about today that the records
+do not show. Each note is one sentence about one object,
+such as “vehicle 1 must be back at the depot by 10:00”. A
+note may change a number in the records, take an object
+out of use, add a rule the records leave out, or change
+what the plan should optimize.
+• The judge holds the true problem, that is, the knowledge
+base with all notes applied. It checks every submitted plan
+against this problem. The agent never sees the judge’s
+result.
+An episode runs as follows. The operator sends the brief,
+which states the goal (“plan this morning’s rides, shortest
+total distance”) but none of the notes. The agent then asks
+questions and runs its solver. The operator may send at most
+15 messages. The agent is told that its initial plan will be
+carried out and scored, so it should ask before it plans. We
+call this plan the initial plan. If the operator rejects it, the
+agent may revise it up to twice. We call the last plan the final
+plan and score it separately.
+The operator answers only questions about a specific ob-
+ject. Otherwise the agent could ask “any other constraints?”
+and receive every note at once. Human participants are asked
+to follow this rule. The simulated operator enforces it and
+asks the agent to be more specific when a question covers
+more than three objects.
+Figure 1 shows an example: panel (a) gives what each side
+knows, panel (b) one episode. The agent plans door-to-door
+rides with two vehicles. The operator holds five notes (S1,
+H2, H3, H4, H5). Only H2, H3 and S1 change the best plan.
+H5 looks just like H2, but the same plan is best whether it
+holds or not. Under this rule, “any other constraints?” reveals
+
+
+--- Page 4 ---
+nothing, while “when does vehicle 1 have to be back?” reveals
+H2 and changes the plan, as in the episode of Figure 1b. The
+rest of this section defines “changes the plan” precisely.
+2.2
+Plan Loss and the Value of a Fact
+The tested agent sees a request, the records and the operator’s
+answers, and it builds its own model from them. Behind
+each task, however, we keep a reference model that only the
+judge uses, and this model is what makes the value of a
+fact computable. A plan is a decision written in the format
+the task fixes, for example a route and a timetable for each
+vehicle. Let X be the set of all such plans. A problem θ
+specifies which plans are feasible, X(θ) ⊆X, and the cost
+f(x; θ) of each plan. Its optimal value is
+z(θ) =
+min
+x∈X(θ) f(x; θ).
+(1)
+We write everything for minimization. For maximization,
+the differences below change sign. Every problem we solve
+is feasible and has a nonzero optimal value.
+Let H be the set of hidden items of a task. For S ⊆H, θS is
+the problem obtained by starting from the agent’s knowledge
+base and applying the true versions of the hidden items in S
+only: every other hidden item keeps the value the knowledge
+base gives it, and a rule the knowledge base lacks stays absent.
+Thus θ∅is the problem exactly as the knowledge base states
+it, before any note is applied, and θH is today’s true problem,
+with every note applied. In Figure 1, vehicle 1 must be back
+by 11:40 in θ∅and by 10:00 in θH. A hidden item can change
+a number in the model (48% of all hidden items), take an
+object out of use (18%), add a constraint (25%) or change
+the objective (9%). θS is the problem an agent would face if
+it had learned exactly the hidden items in S.
+To score a plan x under a problem θ, the judge puts the
+plan itself into θ:
+ℓ(x; θ) =
+
+
+
+1
+x /∈X(θ),
+min
+n
+1, f(x; θ) −z(θ)
+|z(θ)|
+o
+x ∈X(θ).
+(2)
+An infeasible plan, or one not in the task’s format, lies outside
+X(θ) and receives loss 1. Plans submitted in an episode
+are scored under the true problem, ℓ(x; θH). A plan that
+cannot be carried out loses everything; otherwise its loss is
+the fraction by which it falls short of the best plan, capped
+at 1. The judge computes f from the decision of the plan
+proposed by the agent.
+How much does it cost not to know a hidden item? An
+agent that has not asked about h does not know which of
+two problems it faces, the one without h or the one with
+h, but it must still commit to one plan. Whatever h does,
+whether it changes a number, takes an object out of use, adds
+a constraint or changes the objective, it turns one problem
+into the other. In Figure 1, H2 moves vehicle 1’s return from
+11:40 to 10:00, and S1 adds a 25-minute ride limit that the
+knowledge base lacks. A plan built for the problem without
+h may fail or do badly in the problem with h; a plan built for
+the problem with h may be worse than necessary if h does
+not hold. The cost of not knowing h is the loss of the safest
+plan, the one whose worse case is best. For a hidden item
+h and a set S ⊆H \ {h} of other hidden items whose true
+versions are known, we define the regret
+∆h(S) = min
+x∈X max
+
+ℓ(x; θS), ℓ(x; θS∪{h})
+	
+,
+(3)
+known as minimax regret (Savage 1951). ∆h(S) = 0 when
+one plan is optimal whether or not h holds, so asking about
+h cannot improve the decision. A large ∆h(S) means that
+every plan made without h can go badly wrong.
+The regret depends on what else the agent already knows.
+We report it at the two extremes,
+∆sa
+h = ∆h(∅),
+∆cond
+h
+= ∆h(H \ {h}).
+(4)
+The standalone regret ∆sa
+h measures how much h matters to
+an agent that knows only the records; the conditional regret
+∆cond
+h
+measures how much it matters to an agent that knows
+every other hidden item, so that its two problems are today’s
+true problem θH and θH with only h reverted to the records.
+Often the regret can be read off the two optimal values.
+Suppose h leaves the objective unchanged and only removes
+feasible plans, X(θS∪{h}) ⊆X(θS), as an added or tight-
+ened constraint or an object taken out of use does. Then
+∆h(S) = min
+n
+1, z(θS∪{h}) −z(θS)
+|z(θS)|
+o
+.
+(5)
+A plan infeasible under θS∪{h} has loss 1 there. A plan
+feasible under it costs at least z(θS∪{h}) in both problems,
+so its loss under θS is at least the ratio in Eq. 5, and the
+optimal plan of θS∪{h} attains this bound. When h only
+adds feasible plans, the same holds with the two problems
+swapped. In both cases the regret is the relative gap between
+the two optimal values, measured against the optimum of the
+less constrained problem.
+In two situations, however, Eq. 5 does not hold, and the
+regret must be computed from Eq. 3 directly. When h moves
+a time window, neither feasible set contains the other. When
+h changes the objective, the optimal value can change al-
+though the optimal plan does not. In the candy-blending
+task (medium6_candy_blend), today’s optimal profit is
+$2800. Without the true glucose-syrup price it would be
+$3250, and without the true maltose price $5110. Both prices
+lower the optimal profit, but the glucose-syrup price leaves
+the optimal blend unchanged, so its conditional regret is 0:
+the lower profit is a cost no plan can avoid, not a consequence
+of not asking. The maltose price changes the blend, and its
+conditional regret is 0.093. We therefore compute every label
+from Eq. 3. Where an optimum is not proved (frontier-B),
+solver bounds turn the label into an interval (Appendix B).
+We call a hidden item relevant if ∆sa
+h > 0 or ∆cond
+h
+>
+0. The two regrets can order hidden items differently. In
+Figure 1, H2 has ∆sa = 0.353 but ∆cond = 0.007: once
+the other hidden items are known, it changes the plan only
+slightly. S1, the 25-minute ride limit, shows the opposite: it
+does not matter on its own (∆sa = 0) but has ∆cond = 0.141
+when the other hidden items hold. A twin is a hidden item of
+the same form as a relevant one but about another object, with
+both regrets zero. H5 (vehicle 2 back by 10:40) is the twin
+of H2: it sounds just as important, yet one plan is optimal
+whether or not it holds. An agent that asks about everything
+
+
+--- Page 5 ---
+collects both, while an agent that reasons about its plan asks
+about H2. Not every hidden item with zero regret is a twin:
+H4 (Peter has a companion) has no relevant counterpart.
+2.3
+Evaluation Metrics
+A single score for the whole episode would mix three abili-
+ties: building and solving a correct model, asking for the facts
+that matter, and recovering after a rejected plan. A poor final
+plan could come from a failure in any of them. We therefore
+score the episode at a fixed point, add a control without any
+missing information, and measure asking directly.
+The main score is the loss of the initial plan. Let x1 be the
+initial plan an agent submits in an episode and xfin its last
+one. The initial-plan loss is ℓ(x1; θH) (Eq. 2): 1 if the plan
+cannot be carried out in today’s true problem, and otherwise
+its optimality gap, capped at 1. Like the quality–yield index
+for generated heuristics (Chen et al. 2026a), it folds feasibility
+and quality into one number, so we also report two parts of
+it separately: the infeasible rate, the share of tasks with x1 /∈
+X(θH), and the optimal rate, the share with ℓ(x1; θH) = 0.
+We score the initial plan because it is the only one made
+before any feedback. A rejection itself tells the agent that
+something is wrong, so later plans reflect trial and error
+rather than asking. The final-plan loss ℓ(xfin; θH) is reported
+separately as a measure of recovery. All scores are averaged
+over tasks.
+A high initial-plan loss does not yet say whether the agent
+failed to ask or failed to model and solve. To separate the two,
+we run every task in a second condition. In the interactive
+condition described so far, the hidden items are available
+only from the operator. In the all-info condition, the agent
+is given every hidden item together with the request and the
+knowledge base, so it starts from today’s true problem. There
+is no operator, and it submits a single plan xall. Its all-info
+loss ℓ(xall; θH) measures how well the agent models and
+solves when nothing is missing. The asking gap is the initial-
+plan loss minus the all-info loss, computed per task and then
+averaged. It is the part of the loss that comes from the hidden
+information. Both plans are made before any feedback, so
+the comparison is fair.
+Neither loss shows which facts the agent went after. For
+this we use the twins as controls. For a task, let R be its
+relevant hidden items, T its twins and D the hidden items
+the operator has disclosed before the initial plan. The relevant
+recall is |D ∩R|/|R| and the twin rate is |D ∩T|/|T|. Both
+are averaged over the tasks that have relevant hidden items
+and twins. A twin reads just as important as its relevant
+counterpart, so an agent that does not reason about its plan
+learns both at about the same rate, and a gap between the two
+shares shows a preference for facts that matter. The operator
+also discloses notes it was not asked about, so we report a
+stricter version in which D contains only the hidden items
+that one of the agent’s questions was about, as judged by the
+operator. Finally, we report the number of questions the agent
+asks before its initial plan.
+3
+Benchmark Construction
+We build each task from an optimization instance and a set of
+hidden operational facts. The construction specifies the re-
+Category
+Example from the task suite
+Basic information A standing rule staff know but the records
+omit: “our vans hold 60 crates at most” (S#;
+constraint).
+Sudden accident
+“One truck broke down this morning, so we
+can run 3 truck trips at most today” (value);
+“the road from warehouse 1 to warehouse 4
+is closed today” (availability).
+New information
+“The hotel chain ordered 600 kg of Value
+candy” (constraint); “CA1502 picked up a
+tailwind, now expected at 08:15” (objective).
+System update
+“The grid company has new ramping rules:
+at most 20 MW an hour” (constraint); a price
+change this week (objective).
+Human error
+A record nobody updated: “C07’s certificate
+for routine nursing checks has lapsed” while
+the records still list C07 for them (availabil-
+ity).
+Table 2: The five categories of hidden information. Paren-
+theses give each example’s effect on the model.
+quest and records available to the agent, the additional facts
+held by the operator, and the complete problem used by the
+judge to score plans. As shown from left to right in Figure 2,
+the four steps prepare the records and checker, introduce
+hidden items and controls, compute their value labels, and
+validate their effects on the plan. Together, these steps pro-
+vide operational hidden information, solver-computed val-
+ues, matched controls and a verifiable outcome.
+First, a task starts from an optimization instance: a
+textbook problem, Solomon’s r101 vehicle-routing in-
+stance (Solomon 1987), or an instance from FrontierOR,
+ORAgentBench, OR-Library or MIPLIB (Kong et al. 2026;
+Li et al. 2026; Beasley 1990; Gleixner et al. 2021). Its data
+are written as the knowledge base, the operator’s brief states
+the goal, and a task-specific checker scores any plan under
+the true specification. This step secures a verifiable outcome.
+Second, the author writes the hidden items. They are not
+drawn at random. Each one is a fact of a kind that working
+operators hold and records miss. Table 2 sorts the hidden
+information into five kinds: basic information that was never
+written down, sudden accidents, new information that arrived
+after the records were made, system updates not yet reflected
+in the records, and human errors in the records. The kind
+says why the records miss a hidden item. It is independent
+of the item’s effect on the model, defined in Section 2.2, and
+the table tags each example with that effect. Hidden items are
+written for specific objects of the instance, so that the agent
+can reach each one with a specific question. Some hidden
+items get twins of the same form about other objects. The
+frontier tasks generate both from shared templates. This step
+secures operational hidden information: each hidden item is
+a fact about today or an unwritten rule, not a missing piece
+of a formulation template.
+Third, for every hidden item, the solver computes the stan-
+dalone and conditional labels of Eq. (3). A hidden item’s
+kind says how it could arise in practice, while its label says
+whether it changes the plan. Because the labels are com-
+
+
+--- Page 6 ---
+  1. Records
+Vehicle
+Seats
+Back by
+V1
+4
+11:40
+V2
+4
+11:40
+Distances and time windows
+The brief and a plan checker
+  2. Hidden items
+H2 Vehicle 1 back by 10:00.
+H5 Vehicle 2 back by 10:40.
+Same form, different vehicle.
+H5 is H2’s twin.
+Hidden-item categories: Table 2
+Ô 3. Solver labels ∆
+H3
+0.440
+H2
+0.353
+H5
+0
+H4
+0
+Standalone regret ∆sa.
+Matched twins must have value 0.
+Ô 4. Validate
+Run plans built from the records
+on today’s true problem.
+p Record-optimal plans fail.
+✓Reference plans score correctly.
+⇒verifiable outcome
+⇒operational hidden info
+⇒computed value & controls
+⇒the task needs asking
+Figure 2: How a task is built (dial-a-ride example). Steps 1–2 are written by the task author, or by a script for the frontier splits.
+Steps 3–4 are run by the solver. Below each step: the design criterion it secures.
+puted, this step secures computed value, and checking that
+twins come out at zero secures matched controls.
+Fourth, the construction checks whether plans that are
+optimal under incomplete knowledge remain optimal today.
+A solver bound can exclude all such plans, whereas checking
+one stored solution shows only that this solution fails. If an
+optimal plan survived without the relevant hidden items, the
+agent could do well without asking.
+Table 3 summarizes the 43 tasks, which come in five splits
+of growing size. Its item counts include the missing rules
+(S#), and Appendix A lists every task.
+• Easy, medium and hard (24 tasks) are textbook-size prob-
+lems that a solver handles in seconds. They differ in how
+much modelling the agent must do and how the hidden
+items interact. In easy tasks the knowledge base lists six
+or seven candidate plans, so the agent only has to pick
+one. Two hidden items change the plan. In medium tasks
+the agent writes a small LP or MILP itself (transporta-
+tion, assignment, covering, cutting). Two or three hidden
+items change the plan, each with a twin. Hard tasks are
+routing and scheduling problems (dial-a-ride, job shop,
+unit commitment, crew duties), in which the value of one
+hidden item depends on what else is known and a missed
+item often makes the plan infeasible.
+• The frontier splits (19 tasks) are larger problems with
+many named objects (flights, vessels, trips, work orders,
+clients), built by a scripted pipeline. In frontier-A (17
+tasks) offline solves prove optimality, so every ∆is exact.
+The agent itself works under a shorter online run limit.
+In frontier-B (2 tasks) offline solves do not close, so ∆is
+a certified interval and plans are scored against the best
+known solution rather than a proved optimum.
+4
+From Human Operators to a Calibrated
+Simulated Operator
+Evaluating an agent needs an operator who answers it many
+times, over many tasks and seeds. People are too costly for
+every run, and, as Table 1 shows, a default LLM operator
+answers unlike people. We call this baseline DefaultOp: a
+single prompt that gives an LLM the notes and the answer-
+ing protocol. We therefore record how people play the op-
+erator, build from these records CalOp, a human-calibrated
+Split
+Tasks
+Items
+Rel.
+Twins
+Max ∆cond
+Easy
+8
+32
+16
+16
+0.235
+Medium
+8
+37
+21
+16
+0.667
+Hard
+8
+55
+29
+17
+0.484
+Frontier-A
+17
+101
+59
+42
+0.836
+Frontier-B
+2
+10
+6
+4
+0.058†
+All
+43
+235
+131
+95
+0.836
+Table 3: The 43 tasks by split. Rel.: hidden items with
+∆cond > 0. †Upper end of a certified interval.
+simulated operator, and check it against both people and De-
+faultOp. Figure 3 shows the whole design.
+Operator study.
+In deployment, the operator is a domain
+expert who knows today’s facts without looking them up. Our
+participants cannot be experts in every task domain, so we
+give them what such an expert would carry in mind: hidden
+information notes, a check of each plan against the true condi-
+tions, and an optional hinter that points to the note a question
+concerns. These aids, shown in Figure 3a, spare participants
+from working out the task themselves, so that they can an-
+swer as readily as an expert would. Every participant plays
+the operator of one task on a web app. They see the brief and
+the notes, answer the planning agent (DeepSeek V4.1 Flash)
+in their own words, and accept or reject its plans. Under the
+answering protocol they answer only questions about a spe-
+cific object. Nineteen participants completed 79 sessions on
+22 tasks, giving 321 operator replies. Appendix C describes
+the interface.
+How people answer.
+Table 4 shows three regularities. (1)
+People are terse: a reply has 24.2 characters on average,
+not counting spaces and punctuation, against 35.1 for De-
+faultOp. (2) They answer what is asked: a reply discloses
+about 1.4 notes. (3) After a wrong plan they often say only
+that it is wrong: 43% of such replies reject or hint without
+stating the correcting fact, against 7% for DefaultOp. The
+last point matters most for evaluation, because a rejection that
+carries the fact lets an agent repair its plan without asking.
+CalOp.
+CalOp reproduces these regularities with three
+steps per turn and two LLM calls. As Figure 3b shows, it
+takes the participant’s place in the same loop. (1) Policy. Code
+
+
+--- Page 7 ---
+(a) Stage 1: people play the operator
+  Participant
+plays the operator
+aids that stand in for an expert’s
+knowledge: notes card, plan
+check, hinter
+Æ Planning agent
+DeepSeek V4.1 Flash
+Ô Solver tool
+model + code
+ask
+answer (repeat; ≤15 messages)
+plan
+accept / reject (≤3 plans)
+Logs
+79 sessions, 19 people
+321 operator replies
+(b) Stage 2: CalOp takes the person’s place
+Æ CalOp
+simulated operator
+each turn: policy sampled from
+human rates →what was asked
+→wording
+Æ Any LLM under test
+same harness
+Ô Solver tool
+model + code
+ask
+answer
+plan
+accept / reject
+Ô Judge
+scores the plans
+on the true problem
+calibrate CalOp on the human replies and validate it against them (Table 4)
+Figure 3: Study design. (a) People play the operator against a solver-equipped planning agent; the agent asks and plans, the
+person answers and accepts or rejects plans, and every exchange is logged. (b) The logs calibrate CalOp, which takes the
+person’s place in the same loop, so that any LLM can be evaluated without new human sessions. Orange: LLM components;
+teal: people and data; blue: solver.
+samples the turn’s behavior from the rates of the development
+participants: the reaction to a plan (accept, reject, hint or
+correct), whether to answer in a word or two, the maximum
+number of facts, a length target, and whether to number
+the answers. (2) Content. An LLM call selects the notes
+that the message literally asks about. A changed fact about
+an object the agent names must be stated, with numbers
+verbatim. A rejection targets a note flagged by the plan check.
+(3) Wording. A second LLM call writes the reply at the target
+length, using real replies from other tasks as style examples.
+Both LLM calls use DeepSeek V4.1 Flash with thinking off,
+as does DefaultOp. Unlike earlier variants (Appendix D),
+CalOp keeps no per-participant profile.
+Validation.
+A simulated operator is useful only if it can
+stand in for a person, so we check three things in turn: does
+it answer like a person, does it answer correctly, and does an
+agent reach similar plans with it as with a person? Table 4 has
+one block per question and compares CalOp and DefaultOp
+with the human column. For the first (block a), we give
+CalOp the same conversation as each of the 321 human
+replies, let it write its own reply, and compare its replies with
+the human ones on 11 measures such as length, the number
+of notes disclosed and how often the fact is withheld after a
+wrong plan (Appendix E). Averaged over the measures, its
+gap to people is about half that of DefaultOp (0.213 vs.
+0.395), and the largest difference disappears: after a wrong
+plan, people withhold the fact in 43% of replies, CalOp in
+48% and DefaultOp in only 7%. For the second (block b),
+we ask CalOp about single notes and let a scripted agent ask
+about every note in turn: 1.1% of its answers are wrong or
+invented, and the scripted agent reaches the optimal plan on
+21 of 22 tasks. For the third (block c), the planning agent
+of the study talks to each simulated operator on the same 22
+tasks, three times per task. The final plans are about as good as
+with people (loss 0.100 with CalOp, 0.117 with people and
+Humans DefaultOp CalOp
+(a) Does it answer like a person? (321 replies)
+Distance to humans ↓
+–
+0.395
+0.213
+Characters per reply
+24.2
+35.1
+25.3
+Notes disclosed per reply
+1.36
+1.24
+1.41
+Withholds fact after wrong plan
+0.43
+0.07
+0.48
+(b) Does it answer correctly?
+Wrong or invented answers ↓
+–
+0.000
+0.011
+Scripted asker reaches optimum
+–
+1.00
+0.95
+(c) Does an agent end with similar plans?
+Final plan optimal
+0.815
+0.833
+0.773
+Final plan feasible
+0.915
+0.939
+0.924
+Final-plan loss
+0.117
+0.085
+0.100
+Table 4: Can a simulated operator stand in for people? Each
+block answers one question. A good operator is close to the
+Humans column (79 sessions).
+0.085 with DefaultOp), and the intervals overlap. CalOp
+thus differs from DefaultOp mainly in how it answers. RQ4
+in Section 5.5 shows what this changes in the evaluation of
+agents.
+5
+Experiments
+5.1
+Experimental Setting
+Tasks and models.
+We evaluate four LLMs on all 43 tasks:
+GPT-6.1 Sol, Gemini 3.8 Flash, DeepSeek V4.1 Flash and
+GLM-5.3 Flash. Each model acts as the agent in the same
+planning harness and calls Gurobi through a solver service.
+CalOp plays the operator in the main evaluation.
+Conditions.
+We run each model in two conditions. In the
+interactive condition, the hidden facts are available only from
+the operator. In the all-info condition, the agent receives
+
+
+--- Page 8 ---
+every hidden item up front and submits one plan without
+an operator. This tells us how well it plans once nothing is
+missing. All-info is compared only with the initial interactive
+plan, which is also made before any feedback, so it needs no
+chance to revise. To test the operator itself, we fix DeepSeek
+V4.1 Flash as the model, use the 24 easy, medium and hard
+tasks, and compare the interactive condition with a full-brief
+condition: the operator gives every hidden item in its first
+message and still reacts to plans, so both conditions allow the
+same revisions. Each runs with CalOp and with DefaultOp,
+giving four conditions and 96 episodes.
+Protocol.
+Each episode allows at most 15 operator mes-
+sages and three plans. Only the initial plan counts for the
+benchmark score. Later plans measure recovery. The agent
+is told this in the interactive condition, and is told that it
+has three attempts in the full-brief condition. Both operators
+follow the same answering protocol, and a check makes sure
+their replies agree with the notes. The judge scores each plan
+on the true problem and never shows the score to the agent.
+All runs use seed 0 and a solver budget of two threads and
+300 seconds.
+Metrics.
+We use the metrics of Section 2.3. For the initial
+plan, we report loss, the infeasible rate and the optimal rate,
+together with all-info loss and the asking gap. For asking, we
+report relevant recall, twin rate and the number of questions
+before the initial plan. For recovery, we report the same scores
+for the final plan. Intervals are 95% bootstrap intervals over
+tasks.
+5.2
+How does access to complete information
+affect initial-plan quality?
+A model can fail a task for two reasons: it cannot model and
+solve the problem, or it does not learn the facts the problem
+depends on. To tell the two apart, we compare each model’s
+initial plan in the interactive condition with its initial plan in
+the all-info condition. If the two are close, asking is not the
+bottleneck; if the first is much worse, the loss comes from
+what the model did not find out.
+Table 5 reads from left to right. Block (a) is the bench-
+mark score: the initial plan a model submits in the interac-
+tive condition. Block (b) shows where the model ends after
+feedback, which RQ3 discusses. Block (c) gives the same
+model’s initial-plan loss when it is told every hidden item,
+and the asking gap, the part of the loss that comes from the
+hidden information. Complete information substantially im-
+proves every model’s initial plan. Told every hidden item, the
+models reach an initial-plan loss of 0.03–0.26; in the inter-
+active condition, it rises to 0.60–0.98. For every model, the
+asking gap (0.56–0.81) is larger than the all-info loss, so the
+hidden information costs more than modelling and solving.
+Even the strongest model, GPT-6.1 Sol, returns an initial plan
+that cannot be carried out on 58% of tasks in the interactive
+condition. Most of the loss thus comes from plans that fail
+outright, not from plans that are merely suboptimal.
+Table 6 breaks the comparison down by split and shows
+two sources of difficulty. On easy and medium tasks, all-info
+loss is almost zero: the models can model and solve these
+problems, and the loss under interaction comes from not
+finding out the facts. On frontier-A, some models still lose
+much when told every fact (DeepSeek V4.1 Flash 0.59), so
+modelling and solving are also a bottleneck there. The asking
+gap should therefore be read together with the all-info loss.
+A small gap can mean that the model asks well and does well
+in both conditions, as GPT-6.1 Sol does on easy tasks (0.18
+interactive, 0.00 all-info), or that it does poorly in both, as
+DeepSeek V4.1 Flash does on frontier-A (1.0 and 0.59).
+5.3
+Do models ask about facts that change the
+plan?
+A model that knows what matters should learn the relevant
+hidden items more often than their twins, which look just
+as important but leave the plan unchanged. A model that
+simply asks broadly should learn both at about the same
+rate. We therefore compare, before the initial plan, the share
+of relevant items a model learned (relevant recall) with the
+same share for twins (twin rate). Table 7 counts an item in
+two ways. Disclosed counts every item the operator stated,
+including facts it volunteered; asked about counts only items
+that one of the model’s questions targeted, so that a lucky
+answer does not count as good asking.
+Models prefer relevant items only weakly. For the three
+models that ask regularly, relevant recall exceeds the twin
+rate by 5–12 percentage points under either count. GLM-5.3
+Flash asks almost no questions and learns almost nothing.
+On the large tasks the preference disappears. On frontier-
+A, all three models are told twins at least as often as relevant
+items, and counting only what they asked about, the two
+shares differ by at most 4 points. This is not for lack of
+asking: Table 6 shows that GPT-6.1 Sol asks 11.2 questions
+per episode on frontier-A, more than on any textbook split,
+yet learns only 37% of the relevant items. Asking more is
+therefore not the same as asking the right questions. With
+a limited number of messages, the hard part is to work out
+which missing facts could change the plan and to ask about
+those first.
+5.4
+How much do models recover after a rejected
+plan?
+Feedback helps every model. Comparing blocks a and b of
+Table 5, after at most two revisions the loss falls from 0.60–
+0.98 for the initial plan to 0.42–0.62 for the final one. Table 6
+shows that most of the gain comes from the smaller tasks:
+on easy and medium tasks, GPT-6.1 Sol, Gemini 3.8 Flash
+and DeepSeek V4.1 Flash end with a final loss of at most
+0.13, while on frontier-A all four models stay at 0.77–0.82.
+Feedback thus repairs plans when the model can solve the
+problem but missed some facts, but does little when the
+problem itself is too hard.
+Recovery, however, says little about asking. A rejection
+tells the agent that something about today is wrong, and
+often which plan element broke, so a model can fix its plan
+without having asked well. GLM-5.3 Flash shows this most
+clearly: it asks 0.6 questions per episode, yet its loss falls
+from 0.98 to 0.62 after rejections. Likewise, GPT-6.1 Sol,
+Gemini 3.8 Flash and DeepSeek V4.1 Flash start far apart
+(0.60–0.82) but end close together (0.42–0.45). A final-plan
+
+
+--- Page 9 ---
+(a) Initial plan
+(b) Final plan
+(c) All-info
+Model
+#Q
+Loss ↓
+Infeas. ↓
+Opt. ↑
+Loss ↓
+Infeas. ↓
+Opt. ↑
+All-info loss ↓
+Asking gap
+GPT-6.1 Sol
+8.2
+0.603
+58%
+28%
+0.424
+42%
+49%
+0.029
+0.574
+Gemini 3.8 Flash
+3.9
+0.797
+79%
+16%
+0.451
+44%
+42%
+0.058
+0.739
+DeepSeek V4.1 Flash
+5.9
+0.819
+81%
+16%
+0.447
+44%
+51%
+0.258
+0.561
+GLM-5.3 Flash
+0.6
+0.979
+98%
+0%
+0.623
+58%
+19%
+0.173
+0.807
+Table 5: Main results on all 43 tasks with CalOp. (a) The benchmark score: the initial plan in the interactive condition. (b) The
+final plan after up to two revisions. (c) The same model’s loss when told every hidden item, and the asking gap, (a) minus (c).
+#Q: questions per episode; Opt.: share of optimal plans.
+Model
+Easy
+Medium
+Hard
+Front.-A Front.-B
+GPT-6.1 Sol
+.18/.00 .27/.00 .67/.00 .88/.07
+1.0/.01
+Gemini 3.8 Flash
+.53/.00 .63/.00 .88/.13 .94/.09
+1.0/.01
+DeepSeek V4.1 Flash .40/.00 .63/.00 1.0/.13 1.0/.59
+1.0/.01
+GLM-5.3 Flash
+.89/.00 1.0/.01 1.0/.02 1.0/.42
+1.0/.01
+Final-plan loss, after feedback
+GPT-6.1 Sol
+.01
+.13
+.14
+.82
+1.0
+Gemini 3.8 Flash
+.01
+.01
+.51
+.77
+1.0
+DeepSeek V4.1 Flash
+.00
+.13
+.38
+.78
+1.0
+GLM-5.3 Flash
+.28
+.31
+1.0
+.77
+.51
+Questions per episode
+GPT-6.1 Sol
+3.3
+8.3
+4.8
+11.2
+15.0
+Gemini 3.8 Flash
+1.3
+3.5
+3.0
+6.1
+0.0
+DeepSeek V4.1 Flash
+2.3
+4.8
+6.0
+7.7
+8.5
+GLM-5.3 Flash
+0.1
+0.0
+0.0
+0.7
+6.5
+Table 6: By split. Top: initial-plan loss, interactive / all-info.
+Middle: final-plan loss after feedback. Bottom: questions per
+episode.
+score therefore hides how well a model asked. We score the
+initial plan for asking and report the final plan as a measure
+of recovery.
+5.5
+How does the choice of simulated operator
+affect planning outcomes?
+Table 8 shows that replacing DefaultOp with CalOp
+produces mixed changes in planning outcomes. Although
+CalOp better matches the observed human reply statistics in
+Table 4, it yields more optimal final plans and also higher
+mean final loss. This combination is possible because loss
+penalizes infeasibility heavily. A small number of infeasible
+plans can outweigh gains in optimality elsewhere. The two
+metrics therefore reveal different aspects of the outcome dis-
+tribution, and neither operator consistently gives the planning
+agent an advantage across the reported measures.
+The much larger contrast is between asking for information
+and receiving the full brief. Under either operator, provid-
+ing the notes up front makes feasible initial plans common,
+whereas interaction leaves many initial plans infeasible. The
+information gap thus persists across the two simulators. Both
+share code-enforced answering rules, which may constrain
+their behavioral differences, although isolating that effect
+would require an ablation. The differing instructions about
+revisions also limit a causal interpretation of the information
+Disclosed
+Asked about
+Model
+Relevant Twins Relevant Twins
+GPT-6.1 Sol
+52%
+41%
+39%
+27%
+Gemini 3.8 Flash
+39%
+32%
+36%
+31%
+DeepSeek V4.1 Flash
+43%
+38%
+36%
+29%
+GLM-5.3 Flash
+3%
+0%
+2%
+0%
+Frontier-A only (17 tasks)
+GPT-6.1 Sol
+37%
+39%
+24%
+21%
+Gemini 3.8 Flash
+31%
+33%
+28%
+32%
+DeepSeek V4.1 Flash
+26%
+27%
+15%
+17%
+Table 7: Relevant recall and twin rate before the initial plan.
+Disclosed: the operator stated the item; asked about: a ques-
+tion targeted it.
+comparison.
+These results support evaluating operator behavior and
+planning outcomes together. Reply statistics describe how
+information is released, while the plan metrics measure
+how an agent performs within that interaction. In this one-
+model, one-seed control, a matched human condition would
+be needed to determine how either simulator changes scores
+relative to human interaction.
+6
+Related Work
+Table 9 places Ask2Decide among related benchmarks
+along five properties: whether information is withheld from
+the agent, whether people played the answering role, whether
+the agent’s plan or solution is scored, how the value of a
+missing item is defined, and whether zero-value controls are
+included.
+Clarification and information seeking.
+QuestBench (Li,
+Kim, and Wang 2025) casts missing information as an un-
+derspecified constraint satisfaction problem with one miss-
+ing variable. Active task disambiguation (Kobalczyk et al.
+2025) and EVPI-based question ranking (Rao and Daumé III
+2018) choose questions by expected information value. Ask-
+before-Plan (Zhang et al. 2024) studies clarification in travel
+planning. Closest to us, OR-Clarify (Ge et al. 2026) hides for-
+mulation slots of optimization problems, grades their severity
+by annotation, and checks with an LLM judge whether they
+were recovered. We hide numerical and rule information as
+well, assign regret labels that are exact or bounded, include
+∆= 0 controls, and score submitted plans under the true task
+
+
+--- Page 10 ---
+Initial plan
+Final plan
+Condition
+Operator
+#Q
+Infeasible
+Loss
+Infeasible
+Optimal
+Loss
+Interactive
+DefaultOp
+4.67
+14/24
+0.594
+3/24
+17/24
+0.136
+Interactive
+CalOp
+4.33
+16/24
+0.676
+4/24
+20/24
+0.167
+Full brief + feedback
+DefaultOp
+0.08
+2/24
+0.083
+2/24
+22/24
+0.083
+Full brief + feedback
+CalOp
+0.04
+1/24
+0.042
+1/24
+23/24
+0.042
+Table 8: Interactive and full-brief conditions with each operator (DeepSeek V4.1 Flash, 24 tasks).
+Benchmark
+Hidden
+Human
+Plan
+Value of
+Zero-value
+info
+data
+scored
+an item
+controls
+NL4Opt, OptMATH, OPT-Engine
+×
+×
+✓
+–
+×
+HeuriGym
+×
+×
+✓
+–
+×
+QuestBench
+✓
+×
+×
+required var.
+×
+OR-Clarify
+✓
+×
+×
+annotated
+×
+τ-bench
+✓
+×
+✓
+–
+×
+Collab. Battleship
+✓
+✓
+✓
+EIG (state)
+×
+Ask2Decide (ours)
+✓
+✓
+✓
+regret (plan)
+✓
+Table 9: Comparison with related benchmarks.
+conditions. Drossman, Jacquillat, and Martin (2026) study
+conversational refinement of a solution with LLM stakehold-
+ers. Collaborative Battleship (Grand et al. 2026) is closest in
+method: it collects human games, compares human and LM
+askers, and scores questions by expected information gain
+(EIG) about the hidden board. EIG values information about
+the state; our ∆values information about the decision, and
+the twins are hidden items with information about the state
+but none about the decision. Its finding that high-EIG ques-
+tions alone do not raise game performance is in line with our
+separation of asking and planning.
+LLMs for optimization modelling.
+NL4Opt, OptiMUS,
+ORLM, LLMOPT and OptMATH (Ramamonjison et al.
+2023; AhmadiTeshnizi, Gao, and Udell 2024; Huang et al.
+2025; Jiang et al. 2025; Lu et al. 2025) assume a com-
+plete problem statement. Our tasks reuse such instances (e.g.
+IndustryOR) and remove information. OPT-Engine (Chen
+et al. 2026b) scales instance size under full information and
+finds that added non-canonical constraints, rather than word-
+ing or objective changes, cause most failures. Our hidden
+notes are such constraints, held back. HeuriGym (Chen et al.
+2026a) scores LLM-written heuristics by feasibility and qual-
+ity against expert solutions in a feedback loop. We score plans
+in the same way but withhold part of the problem.
+Simulated users.
+τ-bench (Yao et al. 2025) and its succes-
+sors evaluate agents against LLM-simulated users. Compar-
+isons with real users find simulators over-cooperative and
+stylistically uniform, inflating agent success (Zhou et al.
+2026; Seshadri et al. 2026; Dou et al. 2025; Wang et al.
+2025). We calibrate the operator on human sessions from the
+same tasks and validate it on the benchmark outcome.
+7
+Discussion and Conclusion
+Implications for agents.
+The results point to three open
+problems. (1) Deciding what to ask. Told every hidden item,
+the models reach an initial-plan loss of 0.03–0.26; in the
+interactive condition, it rises to 0.60–0.98, and they learn
+relevant items only 5–12 points more often than twins. Ask-
+ing more does not fix this: on frontier-A, GPT-6.1 Sol asks
+11.2 questions per episode and is still told twins as often
+as relevant items. The solver that scores a plan could also
+rank candidate questions, as expected information gain ranks
+questions in information-seeking games (Grand et al. 2026).
+A regret-guided asker is a natural baseline. (2) Solving at
+scale. On frontier-A, some models lose much even when
+told everything (DeepSeek V4.1 Flash 0.59), so modelling
+large instances remains a second bottleneck. (3) Evaluating
+the initial plan. A rejection tells the agent that something
+is wrong, so final plans move close together (0.42–0.45 for
+three models), even for a model that hardly asks. Benchmarks
+of interactive planning should score the plan made before any
+feedback and report the final plan separately, as recovery.
+Conclusion.
+We introduced Ask2Decide, a benchmark of
+43 planning tasks in which an operator holds hidden facts
+the agent needs, a solver labels the value of every fact, and
+the plan is scored under the true conditions. From 79 human
+sessions we built CalOp, a simulated operator that answers
+like people, including withholding the correcting fact after
+a wrong plan, which a default LLM operator almost never
+does. Evaluating four LLMs, we find that current models
+can solve a fully stated problem but rarely find out what the
+problem is: their initial plan cannot be carried out on 58–98%
+of tasks in the interactive condition, and they barely prefer
+the facts that matter over look-alikes that do not. Feedback
+hides much of this gap, so the initial plan is what measures
+asking. We hope Ask2Decide helps to build agents that ask
+what matters.
+
+
+--- Page 11 ---
+References
+AhmadiTeshnizi, A.; Gao, W.; and Udell, M. 2024. Opti-
+MUS: Scalable Optimization Modeling with (MI)LP Solvers
+and Large Language Models. In International Conference
+on Machine Learning.
+Beasley, J. E. 1990. OR-Library: Distributing Test Problems
+by Electronic Mail. Journal of the Operational Research
+Society, 41(11): 1069–1072.
+Chen, H.; Wang, Y.; Cai, Y.; Hu, H.; Li, J.; Huang, S.; Deng,
+C.; Liang, R.; Kong, S.; Ren, H.; Samaranayake, S.; Gomes,
+C. P.; and Zhang, Z. 2026a. HeuriGym: An Agentic Bench-
+mark for LLM-Crafted Heuristics in Combinatorial Opti-
+mization. In International Conference on Learning Repre-
+sentations.
+Chen, Y.; Cheng, C.; Sun, Y.; Ling, Z.; and Ge, D. 2026b.
+OPT-Engine: Benchmarking the Limits of LLMs in Opti-
+mization Modeling via Complexity Scaling. In International
+Conference on Machine Learning.
+Dou, Y.; Galley, M.; Peng, B.; Kedzie, C.; Cai, W.; Ritter, A.;
+Quirk, C.; Xu, W.; and Gao, J. 2025. SimulatorArena: Are
+User Simulators Reliable Proxies for Multi-Turn Evaluation
+of AI Assistants? In Proceedings of the 2025 Conference on
+Empirical Methods in Natural Language Processing.
+Drossman, J.; Jacquillat, A.; and Martin, S. 2026. Let’s Have
+a Conversation: Designing and Evaluating LLM Agents for
+Interactive Optimization. arXiv preprint arXiv:2604.02666.
+Ge, S.; Lin, Y.; Zhou, C.; Lin, J.; Yao, T.; and Ge, D.
+2026. Ask Before You Optimize: Dynamic Pre-Formulation
+Clarification for Interactive Optimization.
+arXiv preprint
+arXiv:2609.05258.
+Gleixner, A.; Hendel, G.; Gamrath, G.; Achterberg, T.; Bas-
+tubbe, M.; Berthold, T.; Christophel, P.; Jarck, K.; Koch, T.;
+Linderoth, J.; Lübbecke, M.; Mittelmann, H. D.; Ozyurt, D.;
+Ralphs, T. K.; Salvagnin, D.; and Shinano, Y. 2021. MIPLIB
+2017: Data-Driven Compilation of the 6th Mixed-Integer
+Programming Library. Mathematical Programming Compu-
+tation, 13(3): 443–490.
+Grand, G.; Pepe, V.; Tenenbaum, J. B.; and Andreas, J. 2026.
+Shoot First, Ask Questions Later? Building Rational Agents
+that Explore and Act Like People. In International Confer-
+ence on Learning Representations.
+Huang, C.; Tang, Z.; Hu, S.; Jiang, R.; Zheng, X.; Ge, D.;
+Wang, B.; and Wang, Z. 2025. ORLM: A Customizable
+Framework in Training Large Models for Automated Op-
+timization Modeling. Operations Research, 73(6): 2986–
+3009.
+Jiang, C.; Shu, X.; Qian, H.; Lu, X.; Zhou, J.; Zhou, A.; and
+Yu, Y. 2025. LLMOPT: Learning to Define and Solve Gen-
+eral Optimization Problems from Scratch. In International
+Conference on Learning Representations.
+Kobalczyk, K.; Astorga, N.; Liu, T.; and van der Schaar, M.
+2025. Active Task Disambiguation with LLMs. In Interna-
+tional Conference on Learning Representations.
+Kong, M.; Jiang, C.; Qu, A.; Ouyang, W.; Zeng, Z.; Guo, X.;
+Li, Z.; Li, J.; Fan, Y.; Zheng, X.; Jing, X.; Zhang, Y.; Liang,
+Z.; Kim, S.; Yang, R.; Zhou, Z.; Li, S.; Zheng, H.; Ying, W.;
+Zheng, O.; Wang, C.; Zhao, J.; Qin, H.; Wu, C.; Liang, P. P.;
+Zhao, J.; and Wang, H. 2026. FrontierOR: Benchmarking
+LLMs’ Capacity for Efficient Algorithm Design in Large-
+Scale Optimization. arXiv preprint arXiv:2605.25246.
+Li, B. Z.; Kim, B.; and Wang, Z. 2025. QuestBench: Can
+LLMs Ask the Right Question to Acquire Information in
+Reasoning Tasks? In Advances in Neural Information Pro-
+cessing Systems, Datasets and Benchmarks Track.
+Li, J.; Cai, M.; Li, Y.; Ding, Y.; Hou, R.; Nie, G.; Han, X.; and
+Wang, W. 2026. ORAgentBench: Can LLM Agents Solve
+Challenging Operations Research Tasks End to End? arXiv
+preprint arXiv:2606.19787.
+Lu, H.; Xie, Z.; Wu, Y.; Ren, C.; Chen, Y.; and Wen, Z.
+2025. OptMATH: A Scalable Bidirectional Data Synthe-
+sis Framework for Optimization Modeling. In International
+Conference on Machine Learning.
+Ramamonjison, R.; Yu, T.; Li, R.; Li, H.; Carenini, G.; Ghad-
+dar, B.; He, S.; Mostajabdaveh, M.; Banitalebi-Dehkordi, A.;
+Zhou, Z.; and Zhang, Y. 2023. NL4Opt Competition: Formu-
+lating Optimization Problems Based on Their Natural Lan-
+guage Descriptions. In Proceedings of the NeurIPS 2022
+Competitions Track, volume 220 of Proceedings of Machine
+Learning Research, 189–203.
+Rao, S.; and Daumé III, H. 2018. Learning to Ask Good
+Questions: Ranking Clarification Questions using Neural Ex-
+pected Value of Perfect Information. In Proceedings of the
+56th Annual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers), 2737–2746.
+Savage, L. J. 1951. The Theory of Statistical Decision. Jour-
+nal of the American Statistical Association, 46(253): 55–67.
+Seshadri, P.; Cahyawijaya, S.; Odumakinde, A.; Singh, S.;
+and Goldfarb-Tarrant, S. 2026. Lost in Simulation: LLM-
+Simulated Users are Unreliable Proxies for Human Users
+in Agentic Evaluations. In Proceedings of the 64th Annual
+Meeting of the Association for Computational Linguistics
+(Volume 1: Long Papers).
+Solomon, M. M. 1987. Algorithms for the Vehicle Routing
+and Scheduling Problems with Time Window Constraints.
+Operations Research, 35(2): 254–265.
+Wang, Z.; Geng, N.; Guo, Z.; Ma, W.; and Zhang, M. 2025.
+Human vs. Agent in Task-Oriented Conversations. In Pro-
+ceedings of the 2025 Annual International ACM SIGIR Con-
+ference on Research and Development in Information Re-
+trieval in the Asia Pacific Region (SIGIR-AP), 133–142.
+Yao, S.; Shinn, N.; Razavi, P.; and Narasimhan, K. 2025.
+τ-bench: A Benchmark for Tool-Agent-User Interaction in
+Real-World Domains. In International Conference on Learn-
+ing Representations.
+Zhang, X.; Deng, Y.; Ren, Z.; Ng, S.-K.; and Chua, T.-S.
+2024. Ask-before-Plan: Proactive Language Agents for Real-
+World Planning. In Findings of the Association for Compu-
+tational Linguistics: EMNLP 2024, 10836–10863.
+Zhou, X.; Sun, W.; Ma, Q.; Xie, Y.; Liu, J.; Du, W.; Welleck,
+S.; Yang, Y.; Neubig, G.; Wu, S. T.; and Sap, M. 2026. Mind
+the Sim2Real Gap in User Simulation for Agentic Tasks. In
+Conference on Language Modeling.
+
+
+--- Page 12 ---
+A
+Task inventory and cards
+The following inventory and English task-card export were
+generated from repository snapshot ba6dbd5. Counts use
+only the displayed notes, not spare answer-key items. An ex-
+act positive conditional label is relevant; for an interval, its
+lower bound must be positive. The two frontier hidden items
+below 0.005 remain included: x_warehouse/H2 (0.0032)
+and x_watch/S1 (0.0039). The export preserves recorded
+labels and outcome descriptions. It is not a new solver certi-
+fication. In Table 3, Rel. counts positive conditional labels,
+using positive lower bounds for interval labels. No 0.005
+threshold is applied. Twins are the stored irrelevant
+controls. Nine other hidden items have zero conditional value
+and are not in that control category.
+Effect of each hidden item on the model.
+We tagged every
+displayed hidden item by what it changes in the model, using
+its recorded model change and the task’s knowledge base: a
+value the records hold, the availability of an object or option,
+a new constraint, or the objective. Over all 235 hidden items
+the counts are 112 / 43 / 58 / 21, and one hidden item (a twin
+in easy1_dispatch) changes nothing in the model. By
+split (value / availability / constraint / objective): easy 16 / 5
+/ 7 / 3, medium 15 / 7 / 3 / 12, hard 31 / 5 / 13 / 6, frontier-A
+46 / 26 / 29 / 0, frontier-B 4 / 0 / 6 / 0. Of the 27 S# hidden
+items, 25 add a constraint and 2 tighten a value the records
+already hold. Twins and the other notes have similar profiles
+(other notes 64 / 25 / 13 / 11, twins 46 / 18 / 20 / 10), so a
+twin cannot be told apart by the kind of change it makes.
+
+
+--- Page 13 ---
+Table 10: Task inventory by split, with counts of hidden items, conditionally relevant items and controls.
+Task
+Split
+Items
+Cond. rel.
+Controls
+easy1_dispatch
+easy
+4
+2
+2
+easy2_laundromat
+easy
+4
+2
+2
+easy3_family_trip
+easy
+4
+2
+2
+easy4_calf_feed
+easy
+4
+2
+2
+easy5_store_delivery
+easy
+4
+2
+2
+easy6_ad_buy
+easy
+4
+2
+2
+easy7_audit_staffing
+easy
+4
+2
+2
+easy8_device_choice
+easy
+4
+2
+2
+medium1_warehouses
+medium
+4
+2
+2
+medium2_containers
+medium
+5
+3
+2
+medium3_job_assignment
+medium
+4
+2
+2
+medium4_nurse_roster
+medium
+5
+3
+2
+medium5_warehouse_lease
+medium
+5
+3
+2
+medium6_candy_blend
+medium
+5
+3
+2
+medium7_rebar_cutting
+medium
+4
+2
+2
+medium8_seat_allocation
+medium
+5
+3
+2
+hard1_dialaride
+hard
+6
+3
+2
+hard2_truck_evan
+hard
+7
+4
+2
+hard2b_r101_25
+hard
+7
+4
+3
+hard3_job_shop
+hard
+7
+4
+2
+hard4_runway
+hard
+7
+3
+2
+hard5_metro_crew
+hard
+7
+3
+2
+hard6_unit_commitment
+hard
+7
+4
+2
+hard7_bus_network
+hard
+7
+4
+2
+x_airland
+frontier-A
+8
+4
+4
+x_berth
+frontier-A
+5
+3
+2
+x_crewbus
+frontier-A
+5
+3
+2
+x_ebus
+frontier-A
+5
+3
+2
+x_field_service
+frontier-A
+7
+4
+3
+x_frontier2
+frontier-A
+7
+4
+3
+x_gap
+frontier-A
+5
+3
+2
+x_gate
+frontier-A
+8
+5
+3
+x_homecare
+frontier-A
+8
+5
+3
+x_jobshop
+frontier-A
+4
+2
+2
+x_miplib
+frontier-A
+7
+4
+3
+x_parmachine
+frontier-A
+5
+3
+2
+x_prodroute
+frontier-A
+5
+3
+2
+x_unitcommit
+frontier-A
+5
+3
+2
+x_vrpb
+frontier-A
+7
+4
+3
+x_warehouse
+frontier-A
+5
+3
+2
+x_watch
+frontier-A
+5
+3
+2
+x_frontier2_b
+frontier-B
+5
+3
+2
+x_miplib_b
+frontier-B
+5
+3
+2
+
+
+--- Page 14 ---
+B
+Computing regret labels
+Each label is ∆h(S) from Eq. 3. It compares two problems,
+θS and θS∪{h}, that differ only in the hidden item h being
+tested: the standalone label uses S = ∅, so every other hidden
+item keeps its knowledge-base value, and the conditional
+label uses S = H \ {h}, so every other hidden item is at
+its true value. When h leaves the objective unchanged and
+only removes or only adds feasible plans, the label follows
+from the two optimal values by Eq. 5. Otherwise, when h
+changes the objective or moves a time window, we solve one
+more optimization problem, of the same type as the task’s
+own model: it looks for a single plan that is feasible in both
+problems and minimizes the larger of its two losses. If no
+plan is feasible in both, the label is 1. Some earlier tasks
+record more than two plausible values for a hidden item; the
+maximum in Eq. 3 then runs over the problems for all of them.
+Exact labels require proved optima. If a solve remains open,
+solver bounds give a regret interval. A zero label applies to
+the background in which it was checked, rather than to every
+possible knowledge state.
+The frontier tasks generate twins from shared templates.
+The earlier tasks also contain less strictly matched irrelevant
+notes, such as H4 in Figure 1. We count only the stored
+irrelevant controls as twins. All of them have zero standalone
+and zero conditional regret. We do not assume that every
+relevant hidden item has its own twin.
+C
+Human study and assistance
+The selected data contain 79 completed protocol sessions.
+They cover 22 tasks. The 321 replies are split by participant:
+nine participants and 161 replies in development, ten partic-
+ipants and 160 replies in test. The human data do not include
+hard1_dialaride or hard2b_r101_25. Figure 1 is
+therefore an illustrative task, not a transcript excerpt.
+Participants see a brief and hidden notes, answer the plan-
+ning agent, and accept or reject its plans. The app disables
+ordinary paste actions. Each plan card can show a check un-
+der the true task conditions. The optional Hinter can explain
+which question to answer and, in the checked implementa-
+tion, can state a numeric answer from the notes or reference.
+It must not disclose the reference optimum as an answer.
+The planning agent does not receive the participant’s private
+plan-check display directly.
+Each session allows up to 15 messages and three plans. The
+planning agent can call a solver: it sends a model and PuLP
+code, and each plan must state the result of its latest optimal
+run. Measured on the raw text with whitespace removed, the
+median human reply has 15 characters and 40.8% of replies
+contain no punctuation. The 24.2-character mean in Table 4
+instead excludes spaces and punctuation.
+The historical study uses sandboxed Python/PuLP with
+CBC and a 60-second solve limit. The main benchmark in-
+stead uses the Gurobi service described in the experimental
+setup. These settings must not be treated as identical.
+D
+Operator design and earlier variants
+The selected f_min4 operator samples reply behavior from
+population statistics and separates content selection from
+wording.
+Earlier variants added per-person profiles, calibration,
+style controls and additional checks. The pooled replay dis-
+tances are 0.395 for default, 0.350 for pc2s, 0.339 for
+f_v5, 0.289 for f_v6, 0.242 for f_v7, and 0.213 for
+f_min4. These are comparisons among developed systems,
+not controlled estimates of the causal effect of removing
+each component. They also do not establish which version
+best represents a new participant population.
+The planning benchmark adds an object-enumeration
+guard and a truth-check wrapper. The historical operator
+validation does not measure the combined effect of these
+components. The historical probe results show that f_min4
+is imperfect: its oracle loop succeeds on 21 of 22 tasks. The
+failure involves an answer that names a football match with-
+out stating that the person cannot attend.
+In the full-brief comparison, the operator instructions still
+describe the notes as private even though the agent receives
+them. This limits interpretation of that comparison.
+E
+Evaluator definitions and uncertainty
+The 11 replay measures are character count, sentence count,
+colloquial rate, structured-answer rate, information-point
+count, information density, extra-information ratio, hidden
+notes disclosed, the share of replies that disclose at least two
+notes, repetition rate, and withholding after a wrong plan.
+Character count excludes spaces and punctuation. Informa-
+tion density is 100 times the number of information points
+divided by that count. The semantic annotations use a fixed
+model judge and rubric. They are not human ground truth.
+The historical evaluator reports 5,816 annotated replies out
+of 5,827 across its selected sources. Metric sample counts
+differ when an annotation or denominator is missing.
+For metric m, let am and hm be the operator and human
+group means. The pooled distance is
+D = 1
+11
+11
+X
+m=1
+|am −hm|
+max(|hm|, 0.05).
+(6)
+This summary can hide distributional and per-participant
+differences. Paired reply errors are separate metrics. A de-
+velopment/test split alone does not turn the pooled summary
+into held-out validation.
+For closed-loop outcomes, we average sessions or seeds
+within a task and then average the 22 task means. Because
+every task has equal weight, these rates differ slightly from
+the per-session rates in Table 1. The table below uses 20,000
+percentile bootstrap samples of those task means, with boot-
+strap seed 20261101. These intervals condition on the ob-
+served participants and runs. They do not capture participant-
+population uncertainty. Historical optimality means a feasi-
+ble plan with relative gap at most 0.001.
+For the main evaluation in Tables 5 and 7, the task-
+bootstrap 95% intervals are: initial-plan loss GPT-6.1 Sol
+[0.46, 0.74], Gemini 3.8 Flash [0.67, 0.91], DeepSeek V4.1
+Flash [0.70, 0.93], GLM-5.3 Flash [0.94, 1.00]; relevant re-
+call (disclosed) GPT-6.1 Sol [42%, 63%], Gemini 3.8 Flash
+[28%, 50%], DeepSeek V4.1 Flash [34%, 53%]; twin rate
+
+
+--- Page 15 ---
+Source
+Metric
+Mean [95% task interval]
+Humans
+Optimal
+.815 [.695, .918]
+Feasible
+.915 [.832, .980]
+Loss
+.117 [.047, .201]
+DefaultOp
+Optimal
+.833 [.697, .955]
+Feasible
+.939 [.864, 1.000]
+Loss
+.085 [.016, .173]
+CalOp
+Optimal
+.773 [.652, .894]
+Feasible
+.924 [.848, .985]
+Loss
+.100 [.035, .178]
+Table 11: Task-balanced historical operator outcomes. Sim-
+ulated runs use seeds 0–2; the additional default seed 3 is
+excluded to keep the comparison matched. Intervals are de-
+scriptive, not equivalence tests.
+(disclosed) GPT-6.1 Sol [30%, 53%], Gemini 3.8 Flash
+[21%, 43%], DeepSeek V4.1 Flash [27%, 50%].

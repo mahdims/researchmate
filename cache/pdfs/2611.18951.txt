@@ -1,0 +1,664 @@
+--- Page 1 ---
+Coordinating Distributed AI Servers with Industrial
+Loads to Reduce Grid-Interconnection Needs
+Ruike Lyu and Bolun Xu
+Columbia University, Earth and Environmental Engineering, New York, NY, USA
+Email: rl3763@columbia.edu, bx2177@columbia.edu
+Abstract—We show that co-locating distributed AI servers
+with industrial demand and coordinating AI workloads with
+production loads can substantially reduce the additional grid
+interconnection that AI computing requires. Grid interconnection
+is increasingly constraining the expansion of large AI data
+centers. Factories already have grid connections sized for their
+peak production loads, and we propose hosting AI servers during
+production valleys. We formulate a joint optimization that sizes
+CPU and GPU servers, schedules deadline-constrained tasks, and
+routes tasks among factories, and use it to compare three factory-
+site architectures with new large data centers serving the same
+demand. Applying this framework to 31 Chinese manufacturing
+industries, we find that AI demand and production loads often do
+not peak together. As a result, AI servers placed at factories and
+scheduled according to production peaks need about 60% less
+additional interconnection capacity than new large data centers,
+and 98% less when tasks are routed among a group’s factories.
+Index Terms—AI computing load, data center flexibility, grid
+interconnection, industrial load, workload scheduling
+I. INTRODUCTION
+Rapid growth in AI computing load is driving up global
+data-center electricity use and interconnection needs [1]. Be-
+cause new generation and grid infrastructure take years to
+plan, permit, and build, large data centers can face lengthy
+interconnection delays [2]. Efforts to ease this bottleneck focus
+on expanding the electricity infrastructure available to data
+centers and making data-center demand more flexible [3].
+Shifting data-center workloads across time and locations has
+long been studied as a way to reduce electricity costs, emis-
+sions, and peak demand charges [4]. More recently, such
+flexibility has been examined as a means of accelerating large-
+load interconnection and reducing the grid capacity that new
+data centers require [5], [6]. These measures make it easier to
+integrate large data centers into the grid, but the AI computing
+load is still located at new sites, each of which needs its own
+grid connection.
+With the growing capability and hardware efficiency of
+open-weight models [7], [8], deploying local AI servers at
+factory sites offers a promising alternative to meet part of en-
+terprises’ own AI needs. Factory grid connections are sized for
+peak production loads, which provides considerable intercon-
+nection headroom during non-peak use times [9]. AI servers
+placed at factories can use this spare capacity depending on
+the type of AI services and when these tasks run. Interactive
+This work was partly supported by the National Science Foundation under
+award ECCS-2239046 and by Columbia School of Engineering and Applied
+Science Interdisciplinary Research Seed Funding.
+services such as office assistants must respond immediately,
+but tasks such as R&D simulation and production scheduling
+can often wait for hours and run when production loads are
+low. Factory-site deployment therefore has the potential to
+reduce the additional interconnection capacity needed for AI
+loads.
+This study quantifies the additional grid-interconnection
+capacity required by AI computing loads when they are
+deployed at factory sites and coordinated with production
+loads. It addresses a gap in the literature where commercial
+investment has concentrated on hyperscalers and ever-larger
+AI models, while the potential of efficient open-weight models
+running on local AI servers to meet industrial AI demand more
+cost-effectively and sustainably has been largely overlooked.
+The contributions of this paper are as follows.
+• We formulate a sizing-and-scheduling model to jointly
+determine server size and AI task schedules around pro-
+duction loads, and use it to study various AI deployment
+architectures.
+• Using projected 2030 AI demand and measured hourly
+production loads for 31 Chinese manufacturing indus-
+tries [10], we compare three factory-site architectures and
+benchmark them with centralized data center solutions.
+• Our study shows that new large data centers would re-
+quire 1,488 MW of additional interconnection capacity to
+serve the studied industrial AI demand, whereas factory-
+site deployment would require 556–576 MW, or as little
+as 30 MW with routing among factories. Most individual
+factory sites require less than 1 MW.
+We formulate the problem in Section II, and present the case
+study in Section III. Section IV concludes the paper.
+II. PROBLEM AND MODEL
+A. Service Scope and Deployment Architectures
+We consider scenarios in which manufacturers use AI
+services for their own operations, which can run either on-site
+or in a shared computing pool. These AI services are solely
+for manufacturer business support. We classify these AI de-
+mands into six categories: office knowledge services, business-
+process agents, visual quality review, predictive maintenance
+and diagnosis, production scheduling and optimization, and
+R&D simulations & digital twins. Large language models and
+other foundation models are integral to many of these services,
+typically interpreting requests and orchestrating workflows.
+arXiv:2611.18951v1  [cs.DC]  13 Nov 2026
+
+
+--- Page 2 ---
+Large data center (LDC)
+Per-factory (PFD)
+Host-factory (HFD)
+AI service assignment
+Multi-site (MSD)
+Cross-site AI service routing
+Fig. 1. Illustration of the four AI server deployment architectures.
+Specialized models, optimizers, and simulators perform the
+majority of underlying CPU and GPU computations. Demand
+for each class is categorized as either firm demand, which must
+be served immediately upon arrival, or flexible demand, which
+can be delayed until an intraday or multi-day (batch) deadline.
+Service is quantified in reference workload units, and server
+throughput in such units per server-hour.
+We consider four AI server deployment architectures
+(Fig. 1). Per-factory deployment (PFD) runs each service
+locally at its source factory. Host-factory deployment (HFD)
+runs all services for a corporate group at a single designated
+factory site. Multi-site deployment (MSD) allows tasks to
+be routed among several factories in the group within their
+deadlines. Large-data-center deployment (LDC) serves the
+same AI demand in new facilities without existing load or grid
+connections. Both HFD and LDC consolidate computing at a
+single site; however, HFD utilizes the existing grid connection
+of a host factory, where production load leaves part of the
+connection capacity unused outside peak periods. In contrast,
+LDC requires a new connection sized for its full AI load peak.
+Each factory that hosts servers is defined as a computing node,
+its AI load sharing the grid connection with the production
+load.
+B. Server Sizing and Scheduling Model
+For each architecture a and industry, the enterprise de-
+termines the sizing of CPU and GPU servers at each node
+and schedules AI tasks over a representative horizon T to
+minimize annualized cost. In the initial quantification, the
+model is deterministic and assumes production loads Ln,t
+are fixed. Therefore, any cost reduction results solely from
+the placement and scheduling of the AI load, rather than
+from industrial demand flexibility [12]. The nomenclature and
+problem formulation are listed below.
+Indices and sets:
+a
+Deployment architecture (PFD, HFD, MSD,
+or LDC).
+Na, n
+Computing nodes under a; node.
+h
+Hardware type, CPU or GPU.
+k
+Task class.
+j
+Flexible job, with task class kj.
+T , t
+Hours of the representative horizon; hour.
+Tj
+Hours in which job j can be executed.
+Decision variables:
+zn,h
+Installed server groups (integer).
+vn,h,t
+Online server groups.
+un,h,t
+Compute demand.
+yk,n,t, xj,n,t
+Executed firm and flexible service.
+pn,t
+AI load (facility power).
+δn
+Incremental connection capacity.
+Our optimization problem is formulated as follows
+min P
+n,h Chzn,h + Cd
+P
+n δn + Y P
+n,t Πtpn,t
+(1a)
+s.t. P
+n∈Na yk,n,t = Rk,t,
+(1b)
+P
+n∈Na
+P
+t∈Tj xj,n,t = Dj,
+(1c)
+yk,n,t = ΩnRk,t, P
+t∈Tj xj,n,t = ΩnDj,
+(1d)
+un,h,t = P
+k WkQk,h
+ yk,n,t + P
+j:kj=k xj,n,t
+
+,
+(1e)
+un,h,t ≤Ghvn,h,t,
+0 ≤vn,h,t ≤zn,h ∈Z+,
+(1f)
+pn,t = Ma
+P
+h
+
+Bhzn,h + (Ih −Bh)vn,h,t
++ (Ph −Ih)un,h,t/Gh
+
+,
+(1g)
+Ln,t + pn,t ≤Kn + δn,
+δn ≥0,
+(1h)
+zn,h ≥(1 + r) P
+t un,h,t/(|T |Gh),
+(1i)
+where each constraint holds for all indices that appear in it.
+Objective: Equation (1a) defines the objective as the sum
+of the annualized cost Ch for each installed server group,
+the maximum-demand charge Cd for incremental connection
+capacity, and the energy cost of the AI load at hourly prices
+Πt, with the planning horizon repeated Y = 365/7 times per
+year.
+Service: Constraint (1b) requires that all firm service Rk,t
+of task class k be executed in its arrival hour, with yk,n,t
+denoting the portion executed at node n. Flexible demand
+sharing the same task class, release hour Aj, and maximum
+delay Fj is aggregated into a flexible job j. Constraint (1c)
+ensures that each job’s volume Dj is completed within Tj =
+{(Aj + τ) mod |T | : τ = 0, . . . , Fj}, where xj,n,t represents
+the service of job j executed at node n in hour t, and xj,n,t = 0
+for t /∈Tj.
+Spatial allocation: In per-factory and host-factory deploy-
+ments, the execution location of each service is predetermined,
+resulting in each node executing a fixed share Ωn of every
+firm task-hour and every flexible job (1d). In contrast, multi-
+site deployment removes this constraint, allowing the time and
+location of each task to be determined jointly.
+Server sizing: The executed service generates compute
+demand un,h,t on hardware h ∈{cpu, gpu} (1e), where Wk
+denotes the compute required per unit of service and Qk,h
+the compute routed to h per unit. Each online server group
+vn,h,t can serve up to Gh per hour and cannot exceed the
+number of installed server groups zn,h (1f), which constitutes
+the sizing decision. Constraint (1i) sizes installed capacity at
+least a planning margin r above average compute demand.
+AI load and connection capacity: Each server group con-
+sumes standby power Bh when installed and Ih when online
+but idle, with power consumption increasing linearly to Ph
+at full load. The facility-power multiplier Ma accounts for
+
+
+--- Page 3 ---
+Low
+Base
+High
+0
+25
+50
+75
+100
+125
+150
+175
+200
+Effective service (million units/day)
+55.5
+95.5
+191.1
+a  National demand in 2030
+0
+2
+4
+6
+8
+10
+Base-demand effective service (million units/day)
+Electronics
+General machinery
+Electrical machinery
+Chemicals
+Special-purpose equip.
+Non-metallic products
+Motor vehicles
+Fabricated metals
+b  Major industries in the base-demand scenario
+Office services
+Business agents
+Vision QA
+Maintenance
+Scheduling
+R&D simulation
+Fig. 2. Manufacturing AI service demand in China in 2030. (a) National demand by task class in the low-, base-, and high-demand scenarios; all results
+presented use the base (core) scenario. For scale, a top-down estimate derived from national projections of computing electricity use is about 14 TWh/yr [11].
+(b) The eight largest industries in the base-demand scenario.
+TABLE I
+DEPLOYMENT ARCHITECTURES AS MODEL INSTANCES
+PFD
+HFD
+MSD
+LDC
+Nodes Na
+each factory
+one host
+≤5 hosts
+one pool
+Production load Ln,t
+own site
+host site
+host sites
+0
+Routing
+fixed, (1d)
+none
+optimized
+none
+Facility multiplier Ma
+1.30
+1.30
+1.30
+1.22
+cooling and power delivery (1g). Constraint (1h) ensures that
+grid demand, defined as the sum of production load Ln,t
+and AI load, remains within the existing connection capacity
+Kn plus incremental capacity δn. Here, Kn = maxt Ln,t
+is the factory’s peak demand without AI servers, which
+is conservative since actual connections often have spare
+contract or network capacity. Given Cd > 0, the optimal
+δn = max{0, maxt(Ln,t +pn,t)−Kn} is the increase in peak
+demand due to AI, and the national requirement is P
+n δn. For
+new large data centers, Ln,t = 0 and Kn = 0, so the entire
+AI peak is additional. The model can therefore avoid δn by
+shifting or routing work away from production peaks, at the
+cost of more servers or higher-priced energy hours.
+Table I provides a summary of the four instances. In
+the large-data-center deployment, the demand from all 31
+industries is aggregated at a single node. This pooling is based
+on average demand and is therefore conservative.
+III. CASE STUDY
+We consider a 2030 AI demand scenario estimated bottom-
+up for 31 Chinese manufacturing industries, based on enter-
+prise adoption, task coverage, and service intensity, consistent
+with a reported national adoption rate above 30% [13]. In the
+core scenario, demand reaches 96 million service units per day
+(Fig. 2), or approximately 12 TWh/yr of AI facility electricity
+in the model, representing about 0.25% of the projected
+TABLE II
+ADDITIONAL GRID-INTERCONNECTION CAPACITY AND BATTERY
+ALTERNATIVE UNDER THE CORE SCENARIO
+Capacity
+Reduction
+Battery
+Battery cost
+(MW)
+vs. LDC
+(MWh)
+(CNY bn)
+LDC
+1,488
+–
+–
+–
+PFD
+556
+63%
+1,080
+0.71–1.09
+HFD
+576
+61%
+1,583
+0.93–1.49
+MSD
+30
+98%
+46
+0.03–0.05
+Battery power equals the additional capacity.
+0
+<0.1
+0.1–1
+1–10
+10–100 100–1k 1k–10k
+Additional capacity per site (MW)
+0
+20
+40
+60
+80
+Share of sites (%)
+PFD
+HFD
+MSD
+Reported AI data centers
+Fig. 3. Distribution of factory sites by additional capacity range under the core
+scenario, in comparison with the peak facility power of 69 publicly reported
+AI data centers and campuses (gray; Epoch AI, 1.2× IT power).
+2030 electricity consumption of the 31 industries [14]. Due
+to the unavailability of enterprise logs, flexibility shares are
+assigned to each task class according to the nature of its work.
+Approximately one third of service units are firm, while the
+remainder can be delayed by up to 4–12 h (intraday) or 72 h
+(batch). R&D simulation and production scheduling, which
+together account for 61% of demand, are the most flexible,
+with firm shares of 10% and 25%, respectively. In contrast,
+interactive office services and visual review are 70–75% firm.
+
+
+--- Page 4 ---
+Mon
+Tue
+Wed
+Thu
+Fri
+Sat
+Sun
+0
+20
+40
+60
+80
+Site load (MW)
+a  Production and AI load at one factory
+Thu 00
+06:00
+12:00
+18:00
+Fri 00
+06:00
+12:00
+18:00
+Illustrative 48-hour window
+0
+20
+40
+60
+80
+100
+Site load (MW)
+b  AI load is reduced during the production peak
+Production-aware schedule
+Schedule optimized without production load
+0.0
+0.5
+1.0
+1.5
+2.0
+Additional capacity (MW)
+R1
+R2
+R3
+R4
+R5
+Multi-site node
+c  Routing reduces the added peak at every node
+Before routing
+After routing
+R1
+R2
+R3
+R4
+R5
+0
+20
+40
+60
+80
+100
+Site load / pre-AI peak (%)
+d  AI load before and after routing
+Production
+Before routing (left)
+After routing (right)
+Above pre-AI peak
+Fig. 4. Non-coincident peaks within and across factories in the vehicle-manufacturing group. (a) Production load (gray) and AI load (orange) at factory R4
+during a representative week under host-factory deployment, in which R4 hosts the AI demand of all nine production sites in the group. The dashed line
+marks the pre-AI production peak, pale blue denotes the remaining headroom, and red highlights load exceeding that peak. (b) A 48-hour interval surrounding
+the weekly production peak; the purple dashed line represents the combined load when the AI schedule is optimized independently of production load. (c)
+Additional capacity at each of the five multi-site nodes before and after cross-site routing. (d) Production and AI load at each node before (left) and after
+(right) routing, normalized by the node’s pre-AI peak.
+Weekly production-load shapes are derived from measured
+hourly profiles in EWELD [10]. The representative horizon
+consists of a 168-hour week of weekday-aligned profiles.
+The reference GPU server group consists of a 2U server
+equipped
+with
+two
+NVIDIA
+L20
+accelerators,
+drawing
+1.50 kW at full load and 0.36 kW when idle. Compute per task
+is reduced threefold across all architectures to reflect antici-
+pated hardware efficiency gains by 2030. Installed capacity
+incorporates a 15% planning margin over average compute
+demand. Electricity prices are based on the Guangdong two-
+part tariff for industrial users [15], including a maximum-
+demand charge of 36.1 CNY/(kW·month) and hourly day-
+ahead energy prices. All instances are solved using Gurobi;
+code and data are publicly available.1
+IV. RESULTS
+A. Grid-Interconnection Requirements
+All three factory-site architectures require substantially less
+additional grid-interconnection capacity compared to new
+large data centers serving equivalent AI demand (Table II).
+National totals are 556 MW for per-factory deployment and
+576 MW for host-factory deployment, representing reductions
+of 63% and 61%, respectively, relative to the 1,488 MW
+required by new large data centers. Multi-site deployment
+1https://github.com/ruikelyu/distributed_LLM
+further reduces the requirement to 30 MW, which is 98% lower
+than that of new large data centers.
+Factory-site deployment also requires much less capacity
+at each connection point. In per-factory deployment, 68% of
+sites require less than 0.1 MW of additional capacity, while
+58% of host-factory sites require between 0.1 and 1 MW. In
+multi-site deployment, more than 99% of sites require less than
+0.1 MW, and 22% require no additional capacity (Fig. 3). For
+comparison, 69 AI data centers and campuses in the Epoch AI
+database [16], primarily located in the United States, exhibit
+peak demands ranging from 21 to 1,135 MW, with a median
+of 182 MW. Consequently, a new AI data center typically
+requires a connection more than two orders of magnitude
+larger than that required by a factory site.
+B. Mechanisms of Capacity Reduction
+Here we examine why co-locating AI computing with
+production loads can reduce required network capacity.
+1) Non-coincident AI and production peaks: Factory grid
+connections are designed to accommodate production peaks,
+resulting in unused connection capacity during off-peak pe-
+riods that can be utilized to host AI servers (Fig. 4a,b). In
+the absence of production loads at host sites, the entire AI
+peak constitutes an additional demand, requiring 1,585 MW
+for host-factory deployment, which is marginally higher than
+the requirement for new large data centers due to a higher
+facility multiplier. Co-location reduces this to 576 MW (64%).
+
+
+--- Page 5 ---
+Without task shifting (Fj = 0), the standalone requirement
+is 2,372 MW, and co-location still reduces it to 1,343 MW
+(43%), as AI and production peaks do not fully overlap.
+2) Non-coincident peaks across factories: Factories en-
+counter production peaks at different times, leading to variable
+spare connection capacity across sites throughout the day.
+Routing computing tasks to sites with available capacity
+enables more efficient utilization of existing infrastructure
+(Fig. 4c,d). If tasks remain fixed to their origin nodes as de-
+fined in (1d), national multi-site deployment requires 562 MW.
+Permitting routing among these nodes reduces the require-
+ment to 30 MW, representing a 95% reduction. This analysis
+assumes unrestricted routing of all tasks, without network
+or data-residency limitations; therefore, the 95% reduction
+illustrates the upper-bound benefit of cross-site routing.
+C. Possible Infrastructure Reductions
+Most factory sites require less than 1 MW of additional
+network capacity, thereby avoiding the large-load intercon-
+nection processes encountered by new AI data centers [2].
+These additional peaks can also be shaved with batteries that
+factories install and operate behind the meter [17]. We consider
+one battery sized at each AI host site to cover its largest
+daily excess above the pre-AI peak (only 1.6% of per-factory
+sites, where AI load stays above the pre-AI peak for most
+of the week, cannot fully shave the peak increase), based
+on Chinese battery power and energy costs [14], [18]. For
+multi-site deployment, batteries cost CNY 0.05 billion or less
+(Table II). In comparison, the 220-kV substation and lines of
+a 300-MVA data center in Datong cost CNY 0.23 billion [19],
+or CNY 1.2 billion when scaled to 1,488 MW.
+Factory-site deployment further reduces other infrastructure
+requirements. Per-factory deployment uses 0.47 million m3
+nationally of on-site cooling and humidification water per
+year, about 85% less than new large data centers providing
+equivalent service, because air-cooled factory server rooms are
+assumed to use 0.05 L/kWh of IT energy, compared to about
+0.33 L/kWh reported for air-cooled large data centers [20].
+Per-factory deployment requires 0.92 million m2 of floor area,
+or about 120 m2 per site, which can likely be accommodated
+within existing industrial sites. In contrast, new large data cen-
+ters require 1.34 million m2 of floor area and 0.38 million m2
+of land conversion, estimated from public project filings [14].
+These reductions need not increase enterprise payments, which
+at public prices (Aug. 2026) are CNY 55 billion per year at
+factory sites and CNY 95–101 billion for equivalent cloud
+procurement.
+V. CONCLUSION
+We show that locating AI servers at factory sites reduces
+the additional interconnection capacity needed to serve man-
+ufacturers’ AI demand by 60% compared to building new
+large data centers, and by up to 98% when AI tasks can
+be routed among deployed servers across multiple factories
+under the same enterprise. This is because AI and production
+loads do not peak simultaneously, and flexible AI tasks can be
+scheduled outside production peak periods. In addition, since
+factories’ production loads peak at different times, AI tasks
+can be assigned in real time to sites with network headroom,
+further reducing needed interconnection capacity.
+Beyond grid interconnection capacity, deploying distributed
+AI servers could also reduce land and water use compared with
+large data centers. Future research should further examine how
+differences in computing capability and efficiency between
+distributed and centralized architectures, temporal variations
+and uncertainties in industrial production and AI demand affect
+the achievable infrastructure savings and benefits of distributed
+AI computing.
+REFERENCES
+[1] International Energy Agency, “Energy and AI,” International Energy
+Agency, Paris, Tech. Rep., 2025. [Online]. Available: https://www.iea.
+org/reports/energy-and-ai
+[2] N.
+M.
+Frick
+and
+V.
+Srinivasan,
+“2025
+large
+load
+literature
+review,” Lawrence Berkeley National Laboratory, Tech. Rep., Dec.
+2025. [Online]. Available: https://eta-publications.lbl.gov/publications/
+large-load-literature-review
+[3] Y. Chen and X. Zheng, “To defer or to shift? The role of AI data center
+flexibility on grid interconnection,” arXiv:2604.05376, 2026.
+[4] P. Colangelo, A. K. Coskun, J. Megrue, C. Roberts, S. Sengupta,
+V. Sivaram, E. Tiao, A. Vijaykar, C. Williams, D. C. Wilson, B. Records,
+Z. MacFarland, D. Dreiling, N. Morey, A. Ratnayake, and B. Vairamo-
+han, “AI data centres as grid-interactive assets,” Nature Energy, vol. 11,
+no. 2, pp. 254–261, 2026.
+[5] T. H. Norris, T. Profeta, D. Patiño-Echeverri, and A. Cowie-Haskell,
+“Rethinking load growth: Assessing the potential for integration of large
+flexible loads in US power systems,” Duke Univ., Tech. Rep., 2025.
+[6] H. Z. Butt, R. Fatima, and X. Li, “Minimizing grid interconnec-
+tion capacity requirements for AI data centers: A developer-side
+planning framework with onsite resources and workload flexibility,”
+arXiv:2608.29359, 2026.
+[7] A. Yang, A. Li, B. Yang, B. Zhang, B. Hui, B. Zheng, B. Yu, C. Gao,
+C. Huang, C. Lv et al., “Qwen3 technical report,” arXiv preprint
+arXiv:2505.09388, 2025.
+[8] DeepSeek-AI, “DeepSeek-V3.2: Pushing the frontier of open large
+language models,” arXiv preprint arXiv:2512.02556, 2025.
+[9] R. Lyu, A. Li, J. Wang, H. Luo, Y. Shen, H. Guo, E. Du, C. Kang,
+and J. Jenkins, “Industrial overcapacity can enable seasonal flexibility
+in electricity use,” Nature Energy, pp. 1–13, 2026.
+[10] G. Liu, J. Liu, Y. Bai, C. Wang, H. Wang, H. Zhao, G. Liang, J. Zhao,
+and J. Qiu, “EWELD: A large-scale industrial and commercial load
+dataset in extreme weather events,” Sci. Data, vol. 10, p. 615, 2023.
+[11] China Academy of Information and Communications Technology, “Re-
+search report on coordinated development of computing power and
+electric power (2025),” CAICT, Tech. Rep., 2025, in Chinese.
+[12] R. Lyu, H. Guo, G. Strbac, and C. Kang, “Data-driven dimension
+reduction for industrial load modeling using inverse optimization,” IEEE
+Trans. Smart Grid, vol. 16, no. 3, pp. 2695–2698, 2025.
+[13] MIIT of China, “Symposium on manufacturing digital transformation
+assessment,” Jul. 2026, in Chinese.
+[14] “distributed_LLM,” github.com/ruikelyu/distributed_LLM, 2026.
+[15] Guangdong Power Grid Co., Ltd., “Agency power-purchase prices for
+industrial and commercial users, April 2026,” 2026, in Chinese.
+[16] Epoch AI, “AI data centers,” Dataset, 2026.
+[17] E. Logan, N. Qi, and B. Xu, “Nonparametric kernel regression for
+coordinated energy storage peak shaving with stacked services,” in
+2026 IEEE Power & Energy Society General Meeting (PESGM).
+IEEE, 2026.
+[18] CNESA, “Energy storage bid prices, Sep. 2026,” 2026, in Chinese.
+[19] Datong Ecology and Environment Bureau, “Approval of a data-center
+220-kV grid project,” 2025, in Chinese.
+[20] Alibaba Group, “ESG report, fiscal year 2025,” 2025.

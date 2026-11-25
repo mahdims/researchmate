@@ -1,0 +1,1942 @@
+--- Page 1 ---
+RadonBench: A Benchmark of Classical and Learning-Guided
+Search Techniques for Problems in Combinatorial Geometry
+Xiaoan Xu∗, Jesus A. De Loera†, Ethan X. Fang‡, Junwei Lu§, Luze Xu¶
+Abstract
+Classical optimization and learning-guided search offer complementary approaches to open
+problems in discrete mathematics, but their outputs are difficult to compare when search spaces,
+validity checks, and stopping rules differ. We present RadonBench, a benchmark for constructing
+maximum-cardinality Radon-free lattice configurations: finite subsets of Zd admitting no integral
+Radon partition. It remains open whether Radon-free configurations with 11 points in Z3 or 21
+points in Z4 are possible. If they exist, they would improve the corresponding lower bounds on
+the integer Radon numbers. We compare exhaustive extension, greedy local search, PatternBoost,
+AlphaZero, and AlphaEvolve. All outputs use one success predicate: a convex target-sized
+configuration succeeds exactly when its number of integral Radon points is zero. PatternBoost
+and AlphaZero construct verified Radon-free configurations of sizes 10 and 20, one point short
+of the respective targets; AlphaZero’s best convex target terminals have two integral Radon
+points in both dimensions. Exhaustive extension over fixed seeds and declared finite search boxes
+likewise reaches a minimum of two integral Radon points. Greedy local search and AlphaEvolve
+each produce target-sized near misses with one integral Radon point. No audited run reaches zero.
+These results establish reproducible near-miss baselines over explicitly scoped search domains.
+1
+Introduction
+Mathematical discovery is rapidly changing with tools from AI. Classical enumeration and local
+optimization, neural construction, search with learned policies, and evaluator-guided program
+evolution have all proved useful for combinatorial discovery [Wagner, 2021, Fawzi et al., 2022,
+Charton et al., 2024, Novikov et al., 2025].
+Despite this progress, many basic combinatorial
+quantities, including numerous Ramsey numbers, remain beyond the reach of both conventional
+computation and current AI-assisted methods [Radziszowski, 1994, McKay and Radziszowski, 1995,
+Exoo, 1989]. Here we investigate another equally difficult problem and use it to benchmark modern
+search techniques.
+Radon’s theorem is a fundamental result in convex and discrete geometry: any d + 2 points in
+Rd admit a bipartition whose convex hulls intersect [Bárány, 2021, Barvinok, 2002, Gruber, 2007].
+Motivated by applications in integer programming and combinatorics, researchers have studied
+integer versions of Radon’s theorem [Onn, 1991, Eckhoff, 1993, De Loera et al., 2017, 2019]. Here
+the points have integer coordinates, and the intersection of the two convex hulls must contain a
+lattice point. This gives an integral Radon partition. A finite set in Zd with no such partition is
+∗Department of Electrical and Computer Engineering, Duke University.
+†Department of Mathematics, University of California, Davis.
+‡Department of Biostatistics and Bioinformatics, Duke University.
+§Department of Biostatistics, Harvard T.H. Chan School of Public Health.
+¶Department of Mathematics, The Hong Kong University of Science and Technology.
+1
+arXiv:2610.33259v2  [cs.LG]  1 Nov 2026
+
+
+--- Page 2 ---
+0
+1
+2
+3
+0
+1
+2
+nrp(X) = 0
+0
+3
+6
+x
+0
+4
+8
+y
+0
+1
+2
+z
+A / conv(A)
+B / conv(B)
+sole lattice point p = (3, 2, 0)
+(a) Radon-free set in ℤ2
+(b) Eleven-point near-miss in ℤ3
+Figure 1: The search problem. (a) Onn’s five-point configuration in Z2 is Radon-free [Onn, 1991].
+(b) An 11-point near-miss in Z3 found by the declared local-search experiment. The displayed split
+has the single shared lattice point p = (3, 2, 0), hence nrp = 1; success requires nrp = 0.
+Radon-free, and the integer Radon number r(Zd) is the smallest cardinality for which every lattice
+point configuration has an integral Radon partition. The exact value in the plane is r(Z2) = 6, but it
+remains unknown in higher dimensions [Onn, 1991, Bezdek and Blokhuis, 2003]. We study whether
+there is a Radon-free configuration with 11 points in Z3 or one with 21 points in Z4.
+The search for Radon-free configurations offers a compact comparison setting: candidate verifica-
+tion is practical, yet the configuration space is already too large for naive enumeration at the open
+targets. Prior work established structural bounds and recognition complexity for integral Radon
+partitions [Onn, 1991, Bezdek and Blokhuis, 2003], but those authors did not systematically study
+constructive search near the open lattice frontiers.
+We introduce RadonBench, a benchmark of five method families: exhaustive extension, greedy
+local search, a task-adapted PatternBoost solver, AlphaZero-Radon (our AlphaZero-style solver),
+and AlphaEvolve-style program evolution. These methods instantiate two complementary search
+paradigms. Cardinality constructors grow configurations point by point while maintaining Radon-
+freeness at every proper prefix; PatternBoost and AlphaZero-Radon belong primarily to this group.
+Fixed-target optimizers instead evaluate complete N-point configurations and minimize their number
+of integral Radon points; this group comprises exhaustive extension, greedy local search, and
+AlphaEvolve-style program evolution. AlphaZero-Radon is construction-oriented but also scores
+convex N-point terminals, so it contributes to the fixed-target comparison whenever it reaches the
+horizon. The methods do not search one common finite domain and their computational units are
+not matched. We therefore compare verified outputs rather than claim a ranking of search efficiency.
+In particular, we separate two questions:
+RQ1 Does any declared protocol produce a verifier-accepted configuration at an open target?
+RQ2 If a run is unsuccessful, what does it nevertheless certify: the largest verified Radon-free cardinality
+kmax, or the minimum target-sized Radon-point count rmin(N)?
+This separation prevents a legal (N −1)-point prefix from being treated as a scored N-point candidate.
+Explicit 10-point and 20-point witnesses provide finite-box positive controls immediately below the
+two frontiers; smaller cardinalities need not be benchmarked separately because Radon-freeness is
+2
+
+
+--- Page 3 ---
+hereditary.
+Our contributions are twofold. First, we define a common success predicate, graded score, and
+reporting contract for search methods with different proposal spaces. Second, we give an auditable
+outcome comparison across five classical and learning-guided method families in Z3 and Z4, while
+making each method’s reachable configurations and stopping conditions explicit. Verifier derivations,
+hyperparameter tables, search-space diagnostics, and additional experiments are provided in the
+appendices.
+No audited run reported here resolves either open frontier. All negative observations are limited
+to the candidates or finite domains searched by the declared protocols; they are not non-existence
+results for Z3 or Z4.
+2
+Problem and Evaluation
+Let X ⊂Zd be a finite set of distinct points. An integral Radon partition is a split X = A ⊔B
+into nonempty parts satisfying conv(A) ∩conv(B) ∩Zd̸ = ∅. We call every lattice point in such an
+intersection an integral Radon point and write
+nrp(X) = #{p ∈Zd : p is an integral Radon point of X}.
+Thus X is Radon-free exactly when nrp(X) = 0. Every such configuration is in convex position:
+if x ∈conv(X \ {x}), then {x} ⊔(X \ {x}) already has the shared lattice point x. Known global
+bounds establish the existence of Radon-free sets through sizes 10 in Z3 and 20 in Z4, while N = 11
+and N = 21 are the respective open targets [Onn, 1991, Bezdek and Blokhuis, 2003]. Separate
+explicit witnesses certify those two feasible cardinalities immediately below the open targets.
+Shared verification.
+Every reported output is judged by the same two-stage evaluator: it first
+checks convex position and then enumerates lattice points in conv(X) and tests whether each
+supports an integral Radon partition. A candidate succeeds only if it has the target cardinality, is in
+convex position, and has nrp = 0. The full evaluator and audit procedure appear in Appendix C.1.
+For each lattice point p ∈(conv(X) ∩Zd) \ X, the evaluator tests whether there are weights
+λi ≥0 and binary assignments bi ∈{0, 1} satisfying
+P
+i biλixi = p,
+P
+i(1 −bi)λixi = p,
+P
+i biλi = 1,
+P
+i λi = 2.
+Here bi = 1 assigns xi to one side of the partition and bi = 0 assigns it to the other. The first two
+equalities express the same point p as a convex combination of the two sides. The third equality
+normalizes the first combination; together with P
+i λi = 2, it also makes the coefficients of the second
+combination sum to one. Thus both sides are nonempty, and feasibility holds exactly when p is an
+integral Radon point for some partition. PyNormaliz enumerates the candidate lattice points and
+Gurobi performs these split tests [Bruns and Ichim, 2010, Gurobi Optimization, LLC, 2026]. Each
+feasible p is counted once, irrespective of how many partitions witness it, and their number is nrp.
+The input points are omitted because the preceding convex-position check guarantees that none lies
+in the convex hull of the others.
+Output semantics.
+A single leaderboard would conflate variable-length construction with fixed-
+target repair. For audited outputs O of a declared run, we therefore report
+kmax = max{|X| : X ∈O, X convex, nrp(X) = 0},
+rmin(N) = min{nrp(X) : X ∈O, |X| = N, X convex}.
+3
+
+
+--- Page 4 ---
+Table 1: Open targets, known feasible configurations immediately below them, and the coordinate
+domain used by each method.
+Box dimensions are side lengths.
+“No finite box” means that
+the evaluator accepts arbitrary finite integer coordinates. The method-specific domains are not
+box-matched.
+Instance
+Known feasible configuration
+Method
+Coordinate domain
+Z3, target 11
+10-point Radon-free
+Exhaustive extension
+Added point: 20×20×8 box
+Greedy local search
+All points: 20×20×5 box
+PatternBoost
+All points: 20×20×5 box
+AlphaZero-Radon
+All points: 20×20×5 box
+AlphaEvolve-style
+No finite box
+Z4, target 21
+20-point Radon-free
+Exhaustive extension
+Added point: 20×20×5×5 box
+Greedy local search
+All points: 20×20×5×5 box
+PatternBoost
+All points: 6×6×6×6 box
+AlphaZero-Radon
+All points: 6×6×6×6 box
+AlphaEvolve-style
+No finite box
+The second quantity is undefined if no convex target candidate is emitted. Method-native counts
+and layer profiles describe outputs but are not pooled into cross-method success rates. Search
+boxes, proposal domains, stopping rules, and budgets are stated per method; shared verification
+makes certificates and scores comparable, not search coverage or efficiency. Appendix B.1 gives the
+finite-box witnesses, and Appendix C records the per-method configurations.
+3
+Methods
+All five methods use the target cardinality and verifier from Section 2. For a method with an origin-
+anchored finite coordinate domain of side lengths L = (L1, . . . , Ld), we write Λ(L) = Qd
+j=1{0, . . . , Lj−
+1}. No single box is shared across methods: each protocol has the method-specific coordinate domain
+listed in Table 1, and the program-evolution method has no finite coordinate bound. Box membership
+is part of success only when the method itself enforces it.
+Exhaustive extension and greedy local search are classical methods; PatternBoost, AlphaZero-
+Radon, and AlphaEvolve-style program evolution are learning-guided. By search objective, Pattern-
+Boost and AlphaZero-Radon are primarily cardinality constructors, while exhaustive extension, local
+search, and program evolution optimize complete N-point configurations. AlphaZero-Radon also
+scores the terminal configuration when it reaches N. The methods differ in their one-step proposals
+and reachable states, summarized in Table 2; these restrictions scope every negative result. In
+Table 2, “Starts from” denotes an externally supplied configuration; deterministic protocol anchors
+are specified in the method descriptions.
+4
+
+
+--- Page 5 ---
+Table 2: High-level view of the five methods. Gray bands separate the two search objectives;
+implementation details appear in the subsections below.
+Method
+Starts from
+Core idea
+Cardinality construction: add points while keeping nrp = 0.
+PatternBoost
+No points
+Trains a Transformer ordering prior; keeps only
+convex, Radon-free prefixes.
+AlphaZero-
+Radon
+No points
+Uses a set-attention policy and PUCT to add points;
+scores any convex configuration that reaches N points
+under its evaluator.
+Fixed-target optimization: minimize nrp over N-point configurations.
+Exhaustive
+extension
+A Radon-free set of N −1
+points
+Tries every location for one final point in a finite box.
+Greedy local
+search
+A convex configuration of
+N points
+Moves one point at a time whenever the number of
+integral Radon points decreases.
+AlphaEvolve-
+style program
+evolution
+16 Radon-free examples
+and a starter program
+Uses an LLM to evolve code that proposes complete
+N-point configurations.
+3.1
+Shared interface
+Every method calls the shared convex-position and Radon-point evaluator described in Section 2.
+A proposal may emit a complete configuration or build/edit one sequentially. Reported outputs
+use the same success predicate, and every retained coordinate array is replayed with the reference
+evaluator. The exact implementation and the exhaustive driver’s equivalent convex-position test are
+documented in Sections C.1 and C.2.
+3.2
+Exhaustive add-one-point
+For each of 50 fixed Radon-free (N −1)-point seeds S, this baseline tests every unoccupied position
+q in a declared finite box Bd and retains convex extensions. Its per-seed objective is
+mBd(S) =
+min
+q∈Bd\S:
+S∪{q} in convex position
+nrp(S ∪{q}) .
+(1)
+“Exhaustive” therefore means exhaustive over the final point after fixing S and Bd, not over all seeds
+or all N-point configurations. Exact boxes, coverage counts, and pseudocode are given in Table 1
+and section C.2.
+3.3
+Greedy local search
+This deterministic-after-initialization repair baseline starts from a convex N-point extension of a
+stored Radon-free (N −1)-point configuration. A sweep visits points in stored order and evaluates
+all full-coordinate radius-one moves
+xi + δ,
+δ ∈{−1, 0, 1}d \ {0},
+that remain distinct, convex, and inside the method’s box. It accepts the admissible move with
+the lowest strictly smaller nrp, using a fixed direction order for ties, and stops at nrp = 0, after a
+non-improving sweep, or after 100 sweeps. Because it changes one point at a time and rejects plateaus
+5
+
+
+--- Page 6 ---
+and temporary increases, it cannot make coordinated moves or cross score barriers. Initialization
+and ordering details are in Section C.3.
+3.4
+PatternBoost generation
+Our PatternBoost track is an iterative construction–training loop adapted from Charton et al. [2024].
+Configurations in Λ(L) are encoded as mixed-radix point-token sequences. Generation 0 greedily
+grows empty states by accepting an addition only when the new prefix is convex and has nrp = 0.
+The largest terminal states are retained, symmetry-augmented, and used to train a decoder-only
+Transformer [Vaswani et al., 2017]; sampled sequences seed the next generation and are completed by
+the same greedy legality test. The model is therefore trained as an ordering prior, while the verifier
+enforces every constraint. Here nrp is a gate rather than a graded objective: an illegal addition is
+rejected, and construction stops when no tested point extends the prefix. Tokenization, selection,
+and training details are in Section C.4.
+3.5
+AlphaZero-style construction: AlphaZero-Radon
+AlphaZero-Radon is a task-specific adaptation of the AlphaZero algorithmic template [Silver et al.,
+2018], not a reuse of its chess, shogi, or Go model. It retains policy–value-guided PUCT and an
+iterative search–training loop, but replaces the original game representation and residual convolutional
+network. Our single-agent construction task uses unordered point-set states, a permutation-invariant
+set-attention policy–value network [Lee et al., 2019], lattice-cell actions, and verifier-defined outcomes.
+Each trajectory starts at the fixed origin and adds the remaining points in Λ(L). The network scores
+lattice locations, and Monte Carlo tree search plans with the shaped edge reward
+r(s′) =
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+0
+if s′ is not in convex position,
+CR
+N(1 + nrp(s′))
+if s′ is convex and nrp(s′) > 0,
+CS
+N
+if |s′| = N, s′ is convex, and nrp(s′) = 0,
+Cstep
+N
+if |s′| < N, s′ is convex, and nrp(s′) = 0.
+(2)
+with Cstep = 1, CR = 2, and CS = 25. A non-convex or Radon-positive state terminates the
+simulated branch; convex Radon-positive states receive the displayed graded terminal reward at
+every cardinality. We report fixed-target quality only for convex terminals at the horizon.
+To control branching, each expanded node retains the K = 64 unoccupied actions with the largest
+network probabilities. A child found terminal during search is marked and skipped by subsequent
+tree selections. Each decision uses 500 simulations, after which the trajectory generator samples
+from the root visit distribution at temperature one. Training, architecture, and the exact Plan-D
+search procedure are specified in Section C.6.
+3.6
+AlphaEvolve-style program evolution
+AlphaEvolve [Novikov et al., 2025] treats executable programs, rather than point sets, as the
+population under search. We instantiate this with OpenEvolve [Sharma, 2025]: an LLM proposes
+exact search-and-replace edits to a Python block, a fixed evaluator executes the edited constructor,
+and an island-based MAP-Elites archive [Mouret and Clune, 2015] retains programs by both fitness
+and behavioural features. Thus PatternBoost models a distribution over point sequences, whereas
+the AlphaEvolve-style method evolves the algorithm that constructs or repairs point sets.
+6
+
+
+--- Page 7 ---
+The immutable wrapper gives each program sixteen fixed Radon-free (N −1)-point references
+and the verifier. One evaluation permits at most 1,000 find_rps calls and returns at most 32 integer
+N × d candidates. Only four constructor functions may evolve; the wrapper, resource accounting,
+geometry code, and external evaluator remain fixed. The initial program implements the interface
+but emits no candidate, so it contributes no hand-written search heuristic.
+After the allowance closes, the evaluator validates shapes, finiteness, integrality and distinctness,
+then recomputes convexity and nrp for every returned candidate. Program fitness is the maximum
+score of one candidate; statistics from different candidates are never mixed. A convex target with
+k > 0 Radon points scores 0.50 + 0.49/(1 + k); a convex Radon-free target scores 1. The full fitness,
+evolution loop, and audit fields are given in Section C.5.
+4
+Results
+The five methods share one headline question: did the declared run produce a verifier-accepted
+configuration at the open target? Table 3 therefore reports target recovery first. When a run does
+not recover the target, it keeps two secondary outcomes in separate columns: kmax, the largest fully
+Radon-free configuration emitted at any cardinality, and rmin(N), the smallest verifier score among
+emitted convex target-sized configurations. These quantities describe different output types and are
+not combined into a cross-method ranking.
+Table 3: Verified outcomes at the two open targets. Found denotes a verifier-accepted target-sized
+output; a dash denotes an inapplicable output type.
+Method
+Found?
+kmax ↑
+rmin(N) ↓
+Z3, target N = 11
+PatternBoost
+No
+10
+–
+AlphaZero-Radon
+No
+10
+2
+Exhaustive extension
+No
+–
+2
+Greedy local search
+No
+–
+1
+AlphaEvolve-style
+No
+–
+1
+Z4, target N = 21
+PatternBoost
+No
+20
+–
+AlphaZero-Radon
+No
+20
+2
+Exhaustive extension
+No
+–
+2
+Greedy local search
+No
+–
+1
+AlphaEvolve-style
+No
+–
+1
+RQ1: Did a protocol recover an open-target counterexample?
+No completed PatternBoost
+run, exhaustive add-one-point experiment, AlphaZero-Radon run, 1,000-start greedy-local-search
+run, or AlphaEvolve-style program-evolution run produces a verified open-target counterexample.
+RQ2: What certified output did an unsuccessful run produce?
+PatternBoost reaches
+kmax = 10 in Z3 and 20 in Z4. Across its complete 2,000-iteration runs, AlphaZero-Radon reaches
+kmax = 10 in 3D and 20 in 4D; among its convex target terminals, the minimum score is 2 in both
+dimensions. Exhaustive add-one-point search also attains minimum score 2 in both dimensions after
+covering every extension position in each of its 50 fixed-seed boxes. Greedy local search attains score
+1 in both dimensions (on 27 of 1,000 3D terminals and 25 of 1,000 4D terminals), but never reaches
+zero. The AlphaEvolve-style method likewise attains rmin = 1 in both dimensions: its best programs
+7
+
+
+--- Page 8 ---
+0
+5
+10
+15
+20
+generation
+70%
+80%
+90%
+100%
+Cardinality / target N
+solid: retained mean
+dotted: retained best
+open target
+(a) PatternBoost
+0
+500
+1000
+1500
+2000
+training iteration
+50%
+60%
+70%
+80%
+90%
+100%
+Placements / horizon (N −1)
+50-iteration moving average
+open target
+(b) AlphaZero-Radon
+3D (N = 11)
+4D (N = 21)
+Figure 2: Method-native construction progress. (a) For PatternBoost, solid curves show
+the mean cardinality among the 50 retained configurations and dotted curves show the retained
+maximum at each generation. (b) For AlphaZero-Radon, curves show the mean number of post-
+origin placements per self-play trajectory, smoothed with a 50-iteration moving average. Values
+are normalized by the open target cardinality in (a) and by the post-origin horizon N −1 in (b).
+The dashed line marks target completion. Horizontal axes are method-specific and do not represent
+matched compute; each curve summarizes one complete declared run.
+return convex 11- and 21-point batches whose best individual candidates each have one Radon
+point. The two output types answer different questions: the former certifies a fully valid shorter
+configuration, whereas the latter measures a target-sized near miss. We therefore neither order
+them against one another nor pool method-native candidate counts into a success rate. Figure 2
+shows within-run progress for the two cardinality constructors; Figure 3 gives the complementary
+fixed-target outcomes for exhaustive extension, greedy local search, and AlphaEvolve-style program
+evolution. Both use method-native axes and do not compare computational efficiency. Appendix B.2
+provides representative verified constructions.
+The experiments are not compute- or verifier-query-matched. Method-native run lengths and
+budgets are reported for reproducibility, but Table 3 compares verified outputs rather than search
+efficiency. Appendix A records the completed runs and retained outputs.
+5
+Related Work
+Onn formalized integral Radon partitions in the lattice setting, proved r(Z2) = 6, established general
+bounds, and studied recognition complexity [Onn, 1991]. Bezdek and Blokhuis proved the upper
+bound r(Z3) ≤17 [Bezdek and Blokhuis, 2003]; integral Radon partitions are also integer 2-Tverberg
+partitions [De Loera et al., 2017]. These works motivate the open frontiers but do not provide a
+multi-method empirical study of constructive search.
+Relevant ingredients in machine-assisted mathematical discovery include neural construction [Wag-
+ner, 2021], policy–value-guided tree search from AlphaZero [Silver et al., 2018], its task-specific
+adaptation to algorithm discovery in AlphaTensor [Fawzi et al., 2022], Transformer-guided search
+[Charton et al., 2024], and LLM program evolution [Romera-Paredes et al., 2024, Novikov et al.,
+2025]. A recent comparative precedent studies classical, PatternBoost, and reinforcement-learning
+methods for the no-three-in-line problem [Ramanathan et al., 2025]. RadonBench instead uses a
+lattice-convexity verifier and explicitly separates constructive from fixed-cardinality outputs. Com-
+8
+
+
+--- Page 9 ---
+0
+1
+2
+3
+4
+5
+6
+Per-seed minimum nrp
+0%
+20%
+40%
+60%
+80%
+Fraction of seeds
+(a) Exhaustive
+0
+10
+20
+30
+40
+50
+Radon-point count nrp
+0%
+20%
+40%
+60%
+80%
+100%
+Cumulative fraction
+dashed: initial
+solid: terminal
+(b) Local search
+1
+5
+10
+15
+20
+Completed mutations
+0
+1
+2
+Best-so-far nrp
+target: 0
+(c) AlphaEvolve-style
+3D (N = 11)
+4D (N = 21)
+Figure 3: Fixed-target search outcomes under the current declared protocols. (a) For
+exhaustive extension, bars show the distribution of the minimum nrp obtained after searching the full
+declared box for each of 50 fixed seeds. (b) For greedy local search, curves show empirical CDFs of the
+initial and terminal scores over 1,000 selected starts. (c) For AlphaEvolve-style program evolution,
+curves show the best-so-far score over 20 completed mutations; the first score-one program appears
+at mutation 7 in 3D and 11 in 4D. Colors identify the dimension. Seeds, starts, and mutations are
+protocol-native units and do not represent matched compute.
+plete computational resolutions of combinatorial existence problems require exhaustive search and
+checkable certificates [Heule et al., 2016, Heule, 2018, Brakensiek et al., 2022]; our bounded searches
+do not provide such a non-existence certificate.
+6
+Discussion
+Neither PatternBoost, exhaustive extension, nor AlphaZero-Radon reaches an open target; greedy
+local search likewise finds no target across 1,000 starts per dimension but reaches score-one near
+misses in both. Two explanations remain inseparable: the declared searches may cover too little of
+their method-specific domains, or a Radon-free configuration may not exist at that cardinality. These
+observations support only search-space diagnoses. A constructor’s legal-prefix frontier reflects its
+proposal distribution and cutoff, not a global obstruction. After 20 mutations, the AlphaEvolve-style
+runs in both dimensions reach score-one near misses.
+Reading the results through each search space.
+Exhaustive extension provides a finite-domain
+completeness statement only after fixing a legal (N −1)-point seed and a finite box for the last point.
+The completed experiment visits every position in each declared box, but its negative result concerns
+only those 50 fixed seeds per dimension, not configurations that require changing a seed or adding a
+point outside the box.
+Greedy local search has the opposite search-space design. It can modify every coordinate of every
+point of an N-point configuration over successive sweeps, but each proposal moves only one point by
+Chebyshev radius one, remains inside the fixed box, and must immediately lower the integer-valued
+score. All 2,000 reported runs stall at positive score, including 27 of 1,000 in 3D and 25 of 1,000
+in 4D at score one. A missing path may therefore require coordinated changes, a neutral or uphill
+intermediate state, or leaving the declared box.
+9
+
+
+--- Page 10 ---
+PatternBoost and AlphaZero-Radon both build point sets sequentially. PatternBoost assigns no
+graded score to a failing prefix, whereas AlphaZero-Radon gives a larger terminal reward to a convex
+Radon-positive state with fewer integral Radon points. PatternBoost fits an ordering distribution
+from previously retained configurations and then uses the verifier to accept or skip sampled points.
+AlphaZero-Radon uses its policy to retain a top-K action set at each expanded node and spends
+MCTS simulations only within that restricted support. A frontier at N −1 therefore means that the
+learned proposal mechanism did not produce a verified continuation under the declared run; it is not
+evidence that no continuation exists elsewhere in the box.
+AlphaEvolve-style program evolution has the broadest coordinate interface because an evolved
+program may emit arbitrary finite integer coordinates. Its practical search space is nevertheless the
+set of programs reached by its declared mutation lineage and the bounded batch of candidates each
+program returns. Its 3D and 4D lineages both attain one-Radon-point target configurations, but
+neither returns a Radon-free target. These distinctions are why we keep target recovery, valid-prefix
+cardinality, and target-sized score in separate table columns rather than treating the five methods as
+an efficiency leaderboard.
+What defines a reproducible search-space claim.
+A finite-box exhaustive search must specify
+its fixed seeds and coordinate box; a repair method must specify its initialization, move radius,
+number of points changed together, and acceptance rule. A learned constructor additionally needs
+its action vocabulary, candidate truncation, and terminal handling, while program evolution needs
+its evaluator batch and number of mutations. Omitting any of these choices changes the reachable
+candidates. We expose them so future runs can vary one restriction at a time without changing the
+success predicate. The same accounting explains why a grid position, a repair trajectory, an MCTS
+game, and a program-returned candidate are not interchangeable trials.
+A complete negative result would require more than exhaustive evaluation inside one coordinate
+box. One would need a proved finite representative family, or an invariant coordinate bound, for lower-
+cardinality Radon-free configurations and a proved finite extension region for every representative.
+Affine unimodular transformations preserve Radon-freeness but need not preserve a box, so bounded-
+box exhaustion alone does not cover all equivalence classes. The appendices state the exact scope of
+every filled result.
+Implications for search design.
+The framework suggests three protocol-level choices for future
+runs. First, repair methods should test coordinated moves or permit neutral and uphill transitions
+instead of enlarging the coordinate radius alone. Second, initialization and box constraints deserve
+the same care as the stopping rule because both restrict reachable basins. Third, evaluation should
+retain the objective each algorithm actually optimizes. Constructors should report the largest
+verified legal prefix, whereas fixed-target methods should report the best verified target score; neither
+replaces the common binary target-recovery outcome.
+Limitations.
+The methods use different proposal domains, move sets, and run lengths; hardware
+and verifier calls are not matched. PatternBoost has one 20-generation run per dimension, and
+AlphaZero-Radon has one complete 2,000-iteration cold-start run per dimension. AlphaEvolve-style
+program evolution has one 20-mutation lineage per dimension rather than repeated independent trials.
+The greedy-local-search results are limited to 1,000 fixed starts per dimension, strict single-point
+descent, and dimension-specific fixed boxes. The exhaustive experiment fixes only 50 catalog seeds
+per dimension and cannot exclude extensions of other seeds or points outside its declared boxes.
+Consequently, Table 3 compares verified outputs, not sample or computational efficiency. Although
+10
+
+
+--- Page 11 ---
+the two constructive methods share the 6 × 6 × 6 × 6 box in 4D, their search distributions and
+budgets are not matched.
+7
+Conclusion
+RadonBench organizes five classical and learning-guided searches around a common target-recovery
+criterion while preserving their different output semantics. PatternBoost reaches the known cali-
+bration cardinalities 10 and 20; across its complete 2,000-iteration runs, AlphaZero-Radon reaches
+the same cardinalities and target score 2 in both dimensions, while exhaustive add-one-point search
+obtains target score 2 but no target recovery after completely visiting the declared box for each of
+50 fixed seeds in both dimensions. Full-coordinate greedy local search reaches score 1 but no target
+across 1,000 starts per dimension. AlphaEvolve-style program evolution also reaches score 1 in both
+dimensions after 20 mutations, without recovering either target. These results do not resolve the
+integer Radon numbers, but the success-first reporting scheme provides a reproducible framework
+for adding future searches without conflating solution quality with compute efficiency.
+Acknowledgments
+This work was supported in part by NVIDIA through the NVIDIA Academic Grant Program under
+the project “AI Foundation Models for Reasoning in Polyhedral Geometry.”
+11
+
+
+--- Page 12 ---
+References
+Imre Bárány. Combinatorial Convexity, volume 77 of University Lecture Series. American Mathe-
+matical Society, Providence, RI, 2021.
+Alexander Barvinok.
+A Course in Convexity, volume 54 of Graduate Studies in Mathematics.
+American Mathematical Society, Providence, RI, 2002.
+Károly Bezdek and Aart Blokhuis. The radon number of the three-dimensional integer lattice.
+Discrete & Computational Geometry, 30(2):181–184, 2003.
+Joshua Brakensiek, Marijn Heule, John Mackey, and David Narváez. The resolution of Keller’s
+conjecture. Journal of Automated Reasoning, 66:277–300, 2022.
+Winfried Bruns and Bogdan Ichim. Normaliz: algorithms for affine monoids and rational cones.
+Journal of Algebra, 324(5):1098–1113, 2010.
+François Charton, Jordan S Ellenberg, Adam Zsolt Wagner, and Geordie Williamson. Patternboost:
+Constructions in mathematics with a little help from ai. arXiv preprint arXiv:2411.00566, 2024.
+Jesús A. De Loera, Thomas A. Hogan, Frédéric Meunier, and Nabil H. Mustafa. Tverberg theorems
+over discrete sets of points. arXiv preprint arXiv:1706.01178, 2017.
+Jesús A. De Loera, Xavier Goaoc, Frédéric Meunier, and Nabil H. Mustafa. The discrete yet
+ubiquitous theorems of Carathéodory, Helly, Sperner, Tucker, and Tverberg. Bulletin of the
+American Mathematical Society, 56(3):415–511, 2019. doi: 10.1090/bull/1653.
+Jürgen Eckhoff. Helly, Radon, and Carathéodory type theorems. In P. M. Gruber and J. M. Wills,
+editors, Handbook of Convex Geometry, volume A, pages 389–448. North-Holland, Amsterdam,
+1993.
+Geoffrey Exoo. A lower bound for r(5,5). Journal of Graph Theory, 13(1):97–98, 1989.
+Alhussein Fawzi, Matej Balog, Aja Huang, Thomas Hubert, Bernardino Romera-Paredes, Mo-
+hammadamin Barekatain, Alexander Novikov, Francisco J. R. Ruiz, Julian Schrittwieser, Grze-
+gorz Swirszcz, David Silver, Demis Hassabis, and Pushmeet Kohli. Discovering faster matrix
+multiplication algorithms with reinforcement learning.
+Nature, 610(7930):47–53, 2022.
+doi:
+10.1038/s41586-022-05172-4.
+Peter M. Gruber. Convex and Discrete Geometry, volume 336 of Grundlehren der mathematischen
+Wissenschaften. Springer, Berlin, 2007.
+Gurobi Optimization, LLC. Gurobi Optimizer Reference Manual, 2026. URL https://www.gurobi.
+com.
+Marijn Heule. Schur number five. In Proceedings of the AAAI Conference on Artificial Intelligence,
+volume 32, 2018.
+Marijn J. H. Heule, Oliver Kullmann, and Victor W. Marek. Solving and verifying the boolean
+pythagorean triples problem via cube-and-conquer. In Theory and Applications of Satisfiability
+Testing (SAT), pages 228–245, 2016.
+12
+
+
+--- Page 13 ---
+Juho Lee, Yoonho Lee, Jungtaek Kim, Adam Kosiorek, Seungjin Choi, and Yee Whye Teh. Set
+transformer: A framework for attention-based permutation-invariant neural networks. In Pro-
+ceedings of the 36th International Conference on Machine Learning, volume 97 of Proceedings of
+Machine Learning Research, pages 3744–3753. PMLR, 2019. URL https://proceedings.mlr.
+press/v97/lee19d.html.
+Brendan D. McKay and Stanisław P. Radziszowski. R(4,5) = 25. Journal of Graph Theory, 19(3):
+309–322, 1995.
+Jean-Baptiste Mouret and Jeff Clune. Illuminating search spaces by mapping elites. arXiv preprint
+arXiv:1504.04909, 2015. URL https://arxiv.org/abs/1504.04909.
+Alexander Novikov, Ngân V˜u, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt
+Wagner, Sergey Shirobokov, Borislav Kozlovskii, Francisco JR Ruiz, Abbas Mehrabian, et al. Al-
+phaevolve: A coding agent for scientific and algorithmic discovery. arXiv preprint arXiv:2506.13131,
+2025.
+Shmuel Onn. On the geometry and computational complexity of Radon partitions in the integer
+lattice. SIAM Journal on Discrete Mathematics, 4(3):436–447, 1991. doi: 10.1137/0404039.
+Stanisław P. Radziszowski. Small ramsey numbers. Electronic Journal of Combinatorics, 1(DS1),
+1994. doi: 10.37236/21. Dynamic Survey.
+Pranav Ramanathan, Thomas Prellberg, Matthew Lewis, Prathamesh Dinesh Joshi, Raj Abhijit
+Dandekar, Rajat Dandekar, and Sreedath Panat. Three methods, one problem: Classical and ai
+approaches to no-three-in-line. arXiv preprint arXiv:2512.11469, 2025.
+Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming Wang,
+Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from program search
+with large language models. Nature, 625(7995):468–475, 2024. doi: 10.1038/s41586-023-06924-6.
+Asankhaya Sharma. Openevolve: An open-source evolutionary coding agent, 2025. URL https:
+//github.com/algorithmicsuperintelligence/openevolve.
+David Silver, Thomas Hubert, Julian Schrittwieser, Ioannis Antonoglou, Matthew Lai, Arthur Guez,
+Marc Lanctot, Laurent Sifre, Dharshan Kumaran, Thore Graepel, et al. A general reinforcement
+learning algorithm that masters chess, shogi, and go through self-play.
+Science, 362(6419):
+1140–1144, 2018.
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez,
+Lukasz Kaiser, and Illia Polosukhin. Attention is all you need. In Advances in Neural Information
+Processing Systems, volume 30, pages 5998–6008, 2017. URL https://proceedings.neurips.
+cc/paper/7181-attention-is-all-you-need.
+Adam Zsolt Wagner.
+Constructions in combinatorics via neural networks.
+arXiv preprint
+arXiv:2104.14516, 2021. URL https://arxiv.org/abs/2104.14516.
+13
+
+
+--- Page 14 ---
+Table 4: Coverage of the declared exhaustive add-one-point domains. Tested excludes positions
+occupied by the fixed seed; convex targets are the extensions scored by the verifier.
+Instance
+Seeds
+Tested
+Convex targets
+Z3, N = 11
+50
+159,500
+85,913
+Z4, N = 21
+50
+499,000
+173,355
+A
+Detailed Experimental Outcomes
+All declared runs use the stopping rules and sample counts specified in the method appendix. The
+headline outcomes appear in Table 3; this section records only method-native evidence that is not
+shown there.
+A.1
+Constructive methods
+PatternBoost.
+Both 20-generation loops completed. In the 20 × 20 × 5 box, the largest verified
+Radon-free cardinality is 10; generation 20 retains 47 ten-point and three nine-point states. In the
+6 × 6 × 6 × 6 box, the largest cardinality is 20, reached in generations 12, 13, 15, and 18; generation
+20 retains eight nineteen-point, 19 eighteen-point, and 23 seventeen-point states. Neither run reaches
+its open target.
+AlphaZero-Radon.
+Each 2,000-iteration run generates 200,000 trajectories. In 3D, 157,485
+trajectories reach the 11-point horizon and 8,651 of those terminals are convex; their minimum score
+is rmin(11) = 2. In 4D, 120,973 trajectories reach the 21-point horizon and 2,302 are convex; their
+minimum score is rmin(21) = 2. The largest verified Radon-free prefixes have 10 and 20 points,
+respectively, and neither run reaches its open target.
+A.2
+Fixed-target methods
+Exhaustive extension.
+For each dimension, the experiment fixes 50 Radon-free seeds and tests
+every unoccupied lattice position in the declared box. The 3D run tests 159,500 additions and scores
+85,913 convex targets; the 4D run tests 499,000 additions and scores 173,355 convex targets. The
+minimum score is two in both dimensions. This is exhaustive only for the fixed seed–box pairs.
+Greedy local search.
+Both dimensions use fixed 1,000-start evaluation sets. In 3D, 990 starts
+improve and 27 terminate at score one; the median score falls from 10 to 4. In 4D, 991 starts improve
+and 25 terminate at score one; the median falls from 15 to 4. Neither run reaches zero. The reported
+4D aggregate is fixed to indices 0–999.
+AlphaEvolve-style program evolution.
+Each dimension has one 20-mutation lineage. Every
+completed mutation returns 32 convex target-sized configurations under a shared allowance of 1,000
+internal find_rps calls, for 640 externally scored candidates per dimension. Neither lineage reaches
+zero. The first score-one program appears at mutation 7 in 3D and mutation 11 in 4D.
+B
+Additional Experiment Configurations
+Software.
+Python 3.11.15, NumPy 2.4.6, PyNormaliz 2.23, Gurobi 13.0.2. The structural analyses
+use no GPU; all analysis runs on CPU on a shared machine, so wall-clock figures are indicative
+14
+
+
+--- Page 15 ---
+rather than compute-matched.
+B.1
+Finite-box calibration witnesses
+The following ordered coordinate arrays are finite-box positive controls. The 3D witness has been
+translated so that its coordinate-wise minima are zero; the 4D witness is a verified 20-point prefix
+emitted by the reported AlphaZero-Radon run at iteration 190. The shared verifier confirms row
+distinctness, convex position, and nrp = 0 for both arrays.
+Three-dimensional witness.
+W3 =
+
+
+3
+5
+0
+8
+4
+0
+6
+2
+0
+5
+2
+0
+7
+5
+0
+6
+6
+1
+6
+8
+1
+2
+1
+1
+3
+0
+1
+0
+5
+2
+
+
+⊂Λ(20, 20, 5).
+This array is the Z3 positive-control witness used at n = 10.
+Four-dimensional witness.
+W4 =
+
+
+0
+0
+0
+0
+1
+0
+0
+0
+1
+0
+1
+5
+2
+0
+1
+0
+2
+0
+1
+5
+1
+0
+0
+5
+0
+5
+0
+0
+2
+5
+1
+3
+1
+3
+1
+0
+1
+5
+0
+5
+0
+5
+0
+5
+1
+2
+1
+5
+1
+5
+1
+4
+2
+5
+1
+1
+2
+2
+1
+5
+1
+5
+1
+3
+0
+1
+0
+5
+1
+4
+0
+0
+0
+0
+0
+4
+1
+5
+0
+1
+
+
+⊂Λ(6, 6, 6, 6).
+This array is the Z4 positive-control witness used at n = 20.
+Every subset of a convex-position configuration remains in convex position, and Radon-freeness is
+downward closed under taking subsets. Consequently, auditing the two displayed arrays also certifies
+15
+
+
+--- Page 16 ---
+0
+10
+19
+0
+9
+18
+0
+2
+4
+PB-A
+(0,0,5,5,0)
+0
+8
+16
+2
+10
+19
+0
+2
+4
+PB-B
+(0,5,5,0,0)
+0
+10
+19
+2
+10
+18
+0
+2
+4
+PB-C
+(0,1,4,5,0)
+0
+10
+19
+4
+11
+18
+0
+2
+4
+PB-D
+(0,5,4,0,1)
+0
+1
+x
+0
+4
+9
+y
+0
+2
+4
+z
+AZ-A
+(4,2,0,4,0)
+0
+1
+x
+0
+4
+8
+y
+0
+2
+4
+z
+AZ-B
+(3,3,0,4,0)
+0
+1
+x
+0
+4
+8
+y
+0
+2
+4
+z
+AZ-C
+(4,2,0,1,3)
+0
+1
+x
+0
+4
+9
+y
+0
+2
+4
+AZ-D
+(4,2,1,1,2)
+z = 0
+z = 1
+z = 2
+z = 3
+z = 4
+Figure 4: Representative learning-guided 10-point configurations in 3D. PB-A–PB-D (circles) are
+PatternBoost outputs; AZ-A–AZ-D (squares) are AlphaZero-Radon construction prefixes. Color
+encodes height z, and each heading gives the layer-count vector from z = 0 to z = 4. Gray edges
+and translucent faces show the convex-hull scaffold. To keep both compact AlphaZero-Radon
+configurations and box-spanning PatternBoost configurations legible, panels use their own displayed
+x–y limits, with the true limits shown by the ticks; the z axis is visually expanded. Every panel is a
+distinct Radon-free configuration. The examples illustrate structural diversity rather than empirical
+profile frequencies.
+feasibility at every smaller cardinality in the same boxes. The main experiments nevertheless use
+only n = 10 and n = 20 as positive controls, because smaller subsets add no independent feasibility
+question. The witnesses certify feasibility only; they do not imply that a particular solver can reach
+them from its initialization.
+B.2
+Three-dimensional diversity of learning-guided 10-point configurations
+Figure 4 gives eight verified 10-point configurations in Λ(20, 20, 5). PB-A–PB-D are retained outputs
+from PatternBoost generation 20; AZ-A–AZ-D are retained AlphaZero-Radon construction prefixes
+from iterations 1961, 1962, and 1999. The panel headings report the layer profiles as counts on
+z = 0, . . . , 4. All eight profiles are distinct: (0, 0, 5, 5, 0), (0, 5, 5, 0, 0), (0, 1, 4, 5, 0), (0, 5, 4, 0, 1),
+(4, 2, 0, 4, 0), (3, 3, 0, 4, 0), (4, 2, 0, 1, 3), and (4, 2, 1, 1, 2). The examples were deliberately selected
+to expose different layerwise structures, not to estimate how frequently either method produces a
+profile. The reference verifier independently confirms convex position and nrp = 0 for every displayed
+configuration.
+16
+
+
+--- Page 17 ---
+B.3
+Result aggregation and audit
+For constructive protocols, we replay retained serialized terminal states and take the largest cardinality
+passing convexity and nrp = 0; this produces kmax in Table 3. For fixed-target protocols, we discard
+repeated-row or non-convex arrays and take the minimum nrp among the remaining N-point
+candidates; this produces rmin(N) in Table 3. Ties may be resolved by lexicographic order of the
+sorted integer rows when an exact representative is needed. Each reported result records its source
+run, iteration or generation, verifier output, and artifact path. AlphaZero-Radon aggregation includes
+all 2,000 completed iterations in each dimension.
+C
+Implementation details
+This appendix provides pseudocode for the reference verifier and every evaluated search method.
+The complete algorithmic specifications appear in Algorithms 1 to 7.
+C.1
+Reference verifier
+The benchmark verifier consists of the functions is_conv_position_all() and find_rps(). For
+X = {x1, . . . , xn} ⊂Zd, the first routine performs one leave-one-out linear-program feasibility test
+per input point. For each i, it asks whether coefficients αj ≥0 exist such that
+X
+j̸=i
+αj = 1,
+X
+j̸=i
+αjxj = xi.
+(3)
+Feasibility means xi ∈conv(X \ {xi}) and the candidate is rejected; is_conv_position_all()
+returns True exactly when every leave-one-out model is infeasible.
+The function find_rps() first passes the homogenized polytope to PyNormaliz [Bruns and
+Ichim, 2010] and reads Deg1Elements, which enumerates the lattice points in conv(X). Input vertices
+are removed. For every remaining lattice point p, the verifier asks whether there are λi ≥0 and
+binary bi ∈{0, 1} such that
+X
+i
+biλixi = p,
+X
+i
+(1 −bi)λixi = p,
+X
+i
+biλi = 1,
+X
+i
+λi = 2.
+(4)
+The variable bi assigns xi to the first part when bi = 1 and to the second part when bi = 0; the
+corresponding products select the weights used by each convex combination. The first coefficient sum
+is constrained to one, and the second also sums to one because P
+i(1−bi)λi = P
+i λi−P
+i biλi = 2−1.
+Thus a feasible solution places p in the convex hulls of two nonempty disjoint parts. Conversely, any
+integral Radon partition and an integral Radon point give a feasible assignment. The implementation
+solves this model with Gurobi [Gurobi Optimization, LLC, 2026], sets NonConvex=2 for the binary–
+continuous products, and tests each candidate p. It returns each feasible lattice point once, irrespective
+of the number of partitions that witness it; hence the benchmark score is nrp(X) = |find_rps(X)|.
+A candidate is a verified Radon-free configuration exactly when is_conv_position_all() returns
+True and find_rps() is empty.
+17
+
+
+--- Page 18 ---
+Algorithm 1 Reference convexity and integral-Radon-point evaluator.
+Require: finite set of distinct lattice points X = {x1, . . . , xn} ⊂Zd
+Ensure: convex-position flag c and set R of integral Radon points
+1: for i = 1, . . . , n do
+2:
+if xi ∈conv(X \ {xi}) according to Equation (3) then
+3:
+return (False, ∅)
+4:
+end if
+5: end for
+6: P ←(conv(X) ∩Zd) \ X using PyNormaliz
+7: R ←∅
+8: for p ∈P do
+9:
+if the feasibility system in Equation (4) accepts p then
+10:
+R ←R ∪{p}
+11:
+end if
+12: end for
+13: return (True, R)
+Following the canonical implementation, Infeasible rejects a candidate Radon point and every
+other returned status counts it. All complete Radon-count evaluations use this same rule.
+Cross-track accounting.
+The five tracks are not compute-matched. Method-native stopping
+rules are part of each protocol, but raw verifier-call totals are not used as a common budget or
+efficiency metric. Reported local-search aggregates are computed from retained JSON/NPZ artifacts
+for both the 3D and 4D instances; retained outputs likewise support both dimensional instances of
+the other tracks. A stochastic run is successful only if a serialized candidate passes the common
+verifier.
+The available implementations use the software versions listed below and in Section C.3. Their
+evaluator implementations share the formulation and status rule above. Retained configurations and
+aggregate logs support the reported audits.
+PatternBoost and AlphaZero-Radon environment.
+PatternBoost and AlphaZero-Radon
+use Python 3.11.15, PyTorch 2.12.0 with CUDA 13.0, NumPy 2.4.6, SciPy 1.17.1 (including Qhull),
+PyNormaliz 2.23, and Gurobi 13.0.2. Neural-network training and generation use one NVIDIA
+A100-SXM4 GPU with 80 GB memory; CPU processes execute the geometric oracle. We do not
+request PyTorch’s bitwise-deterministic GPU kernels.
+Local
+and
+exhaustive
+environment.
+These CPU-only searches use Python 3.12.11,
+NumPy 1.26.4, SciPy 1.16.2, PyNormaliz 2.19, and Gurobi 12.0.3; the local-search environment
+also contains PyTorch 2.8.0 and trimesh 4.8.3. They run on an Intel Xeon Gold 5320 node (two
+26-core sockets, SMT2, 503 GiB RAM). Local tasks request 32 CPUs and 64 GB with at most three
+concurrent tasks; exhaustive tasks request 8 CPUs and 24 GB and run one at a time. Neither
+requests a GPU.
+Program-evolution environment.
+OpenEvolve uses Python 3.12.11, OpenEvolve 0.2.27,
+NumPy 1.26.4, SciPy 1.16.2, PyNormaliz 2.19, and Gurobi 12.0.3 on the same CPU node. Each job
+requests four CPUs, 64 GB RAM, and no GPU. The method-specific subsections give the remaining
+seeds, stopping rules, provenance, and run settings.
+18
+
+
+--- Page 19 ---
+Algorithm 2 Exhaustive add-one-point search within a fixed box
+Require: verified Radon-free seed S ⊂Zd with |S| = N −1; bounds (ℓj, uj)d
+j=1
+Ensure: minimum score m, minimizers Q, score histogram H, coverage counts
+1: B ←Qd
+j=1{ℓj, . . . , uj}; m ←+∞; Q ←∅; H ←∅; cconvex ←0
+2: for q ∈B in Cartesian-product order do
+3:
+if q ∈S then
+4:
+continue
+5:
+end if
+6:
+X ←S ∪{q}
+7:
+if X is not in convex position then
+8:
+continue
+9:
+end if
+10:
+cconvex ←cconvex + 1
+11:
+r ←nrp(X); H[r] ←H[r] + 1
+12:
+if r < m then
+13:
+m ←r; Q ←{q}
+14:
+else if r = m then
+15:
+Q ←Q ∪{q}
+16:
+end if
+17: end for
+18: return (m, Q, H, |B| −|S|, cconvex)
+C.2
+Exhaustive add-one-point experiment configuration
+Dimension-general procedure.
+For a fixed seed S ⊂Zd and integer box B = Qd
+j=1{ℓj, . . . , uj},
+the driver visits every q ∈B in deterministic Cartesian-product order. It skips q ∈S, rejects
+extensions outside convex position, and evaluates nrp(S ∪{q}) for every remaining extension. It
+does not stop when a zero or a new minimum is found. Therefore every unoccupied position in B is
+either rejected by the convex-position predicate or assigned a Radon-point count. This is the sense
+in which the search is exhaustive. The seed is never modified, and no claim is made about other
+seeds or positions outside B.
+Frozen seeds and sampling.
+Before evaluation, the experiment fixes 50verified Radon-free seeds
+per dimension using NumPy seed 20260819. The 3D seeds lie in {−10, . . . , 9}2 × {0, . . . , 7}; the
+4D seeds lie in {0, . . . , 19}2 × {0, . . . , 4}2. Seed selection is independent of extension scores, and no
+sampling occurs during a task.
+Boxes and coverage.
+The 3D box is B3 = {−10, . . . , 9} × {−10, . . . , 9} × {0, . . . , 7}, with 3,200
+positions. Each 10-point seed is contained in B3, leaving 3,190 attempted additions per seed and
+159,500 overall. The 4D box is B4 = {0, . . . , 19} × {0, . . . , 19} × {0, . . . , 4}2, with 10,000 positions.
+Each 20-point seed is contained in B4, leaving 9,980 attempted additions per seed and 499,000
+overall.
+Convex-position and Radon tests.
+Before enumeration, the driver checks that the seed is row-
+distinct, in convex position, and has nrp(S) = 0. For each extension X, it constructs the homogenized
+polytope with PyNormaliz and reads ExtremeRays. The extension passes exactly when the returned
+rays equal {(x, 1) : x ∈X}, so every input point is a vertex. This exact rational extreme-ray test
+19
+
+
+--- Page 20 ---
+is mathematically equivalent to the reference leave-one-out convex-position predicate, although
+it is a different implementation. For every passing extension, find_rps_nd() uses PyNormaliz
+Deg1Elements and the same Gurobi partition-feasibility test in Section C.1. Gurobi uses one thread
+per model; up to eight lattice points are tested concurrently within a task.
+The supplementary manifest records the fixed seed coordinates, declared boxes, and coverage
+counts needed to reproduce the reported aggregate.
+C.3
+Greedy local-search experiment configuration
+Dimension-general procedure.
+For an instance (d, N, L), the descent moves all coordinates. Its
+ordered neighbourhood is
+Dd = {−1, 0, 1}d \ {0}.
+For a box Λ(L), proposals outside the box are rejected. The evaluated 3D and 4D neighbourhoods
+contain 26 and 80 offsets, respectively, before boundary and geometry filtering. The method uses
+a strict-improvement rule, stored point order, lexicographic direction order, a 100-sweep cap, and
+early stopping at score zero or after a full non-improving sweep.
+Initial configurations.
+In 3D, initialization adds one uniformly sampled point in {−10, . . . , 9}2 ×
+{0, . . . , 4} to a verified 10-point seed and accepts the first distinct, convex extension within 100
+draws. From the eligible pool, 1,000starts are sampled with NumPy seed 20260819 and translated
+into the 20 × 20 × 5 box. In 4D, one uniformly sampled in-box point is added to each verified
+20-point seed, again requiring distinctness and convex position; the reported set is the fixed first
+1,000starts generated with NumPy seed 20260815. Initialization does not filter or rank candidates
+by nrp. Algorithm 3 gives the subsequent deterministic descent. The point order is the stored array
+order. Directions are the lexicographically ordered Cartesian product {−1, 0, 1}d with the zero vector
+removed. Only strict improvement is admissible, so the first direction attaining a given best score
+wins a tie and equal-score plateaus are never traversed. No anchoring translation occurs during
+descent. All accepted 3D configurations remain inside {0, . . . , 19}2 × {0, . . . , 4}, and all accepted 4D
+configurations remain inside {0, . . . , 19}2 × {0, . . . , 4}2.
+Convexity and score implementation.
+For every candidate, convex position is checked point by
+point. To test point xi, a Gurobi feasibility LP asks whether nonnegative coefficients on X \{xi} sum
+to one and reproduce xi; feasibility rejects the candidate. For the objective, PyNormaliz enumerates
+the degree-one lattice points of the homogenized polytope and the implementation removes the input
+vertices. For each remaining lattice point p, Gurobi solves the feasibility model
+X
+i
+biλixi = p,
+X
+i
+(1 −bi)λixi = p,
+X
+i
+biλi = 1,
+X
+i
+λi = 2,
+with λi ≥0 continuous and bi ∈{0, 1}; the model uses NonConvex=2. The number of feasible p
+is the descent score; any solver status other than Infeasible is treated as feasible. No Gurobi
+feasibility, integrality, or optimality parameters are overridden. Radon points are memoized within
+a configuration after its first score evaluation. The fixed selection manifests identify the 1,000
+reported starts in each dimension, and the retained trajectories reproduce the aggregate outcomes in
+Appendix A. The CPU implementation uses Python 3.12.11, PyNormaliz 2.19, Gurobi 12.0.3, and
+SciPy 1.16.2.
+20
+
+
+--- Page 21 ---
+Algorithm 3 Dimension-general ordered greedy local search.
+Require: ordered convex configuration X = (x1, . . . , xN) ⊂Zd, sweep cap T = 100, ordered
+directions Dd, score nrp
+1: for t = 1, . . . , T do
+2:
+sstart ←nrp(X)
+3:
+for i = 1, . . . , N do
+4:
+s⋆←nrp(X); X⋆←X
+5:
+for δ ∈Dd in lexicographic order do
+6:
+Y ←X with xi ←xi + δ
+7:
+if Y ⊆Λ(L), has distinct points, and is in convex position then
+8:
+s ←nrp(Y )
+9:
+if s < s⋆then
+10:
+(X⋆, s⋆) ←(Y, s)
+11:
+end if
+12:
+if s⋆= 0 then
+13:
+break
+14:
+end if
+15:
+end if
+16:
+end for
+17:
+X ←X⋆
+18:
+end for
+19:
+if nrp(X) = 0 or nrp(X) ≥sstart then
+20:
+break
+21:
+end if
+22: end for
+23: return X
+Table 5: Greedy local-search hyperparameters shared across dimensions.
+Parameter
+Value
+Initialization draw cap
+100 per extension request
+Evaluated starts / seeds
+1,000 per dimension / 3D 20260819, 4D 20260815
+Neighbourhood
+3d −1 full-coordinate radius-1 moves (3D: 26; 4D:
+80)
+Point / direction order
+stored index / lexicographic
+Acceptance / plateaus
+strict nrp decrease / disallowed
+Coordinate bounds during descent
+3D: [0, 19]2 × [0, 4]; 4D: [0, 19]2 × [0, 4]2
+Maximum sweeps / early stop
+100 / full non-improving sweep or nrp = 0
+C.4
+PatternBoost experiment configuration
+For an instance (d, N, L), PatternBoost uses variable-length add-point sequences in Λ(L).
+Its
+vocabulary has 1 + Qd
+j=1 Lj entries: one shared Start/Stop token and one token per lattice point.
+A sequence has the form [0, τL(p1), . . . , τL(pk), 0], where the points are sorted lexicographically
+before supervised training; losses after the first stop token are masked. The reference incremental
+legality test accepts a prefix only when it is in convex position and has no integral Radon point.
+This is stricter than merely filtering complete model outputs: every training configuration and
+every saturated output is legal at each accepted prefix. All dimension-independent architectural,
+21
+
+
+--- Page 22 ---
+optimization, selection, generation, and saturation hyperparameters are shared across dimensions.
+The completed three-dimensional run instantiates L = (20, 20, 5) and N = 11, giving a 2,001-
+token vocabulary. The completed four-dimensional run uses L = (6, 6, 6, 6) and N = 21, giving a
+1,297-token vocabulary.
+Algorithm 4 PatternBoost with verifier-gated incremental saturation.
+Require: box L, maximum size N, generations G, state-batch size B, keep fraction q, target
+retained-set size T, reference predicate Legal(S)
+1: form T/q independent empty seeds; saturate each seed with Legal
+2: retain the top qB terminal states within each batch to obtain D0
+3: for i = 0, . . . , G −1 do
+4:
+split Di by complete symmetry orbit into train/validation sets
+5:
+augment both splits by box-preserving reflections and axis permutations
+6:
+train a next-token Transformer; retain the lowest-validation-loss checkpoint
+7:
+sample T/q unconstrained token sequences from Start
+8:
+decode each sequence in order, skipping a token unless it denotes an unused lattice point
+whose addition satisfies Legal
+9:
+for each decoded seed state S do
+10:
+while |S| < N and untested lattice points remain do
+11:
+traverse the remaining points in a fresh random order
+12:
+append the first p with Legal((S ∪{p})); permanently remove every tested point,
+including p, from the remaining pool
+13:
+stop if no tested point is legal
+14:
+end while
+15:
+end for
+16:
+in each batch of B terminal states, retain the top qB states by cardinality
+17:
+Di+1 ←retained states; save their unaugmented and augmented forms
+18: end for
+Teacher forcing pads every sequence to context length N + 1 (12 in 3D and 22 in 4D). For an
+ordered point-token sequence (τ1, . . . , τk), the input is [0, τ1, . . . , τk] and the target is [τ1, . . . , τk, 0];
+target positions after the first stop are set to −1 and ignored by cross-entropy. Minibatches are
+sampled uniformly with replacement.
+Let mℓbe the multiplicity of side length ℓin L. The augmentation group has
+|H(L)| = 2d Y
+ℓ
+mℓ!
+box-preserving transformations: independent reflections and permutations among axes with equal
+side lengths. All transforms are emitted without deduplicating coincident arrays. For L = (20, 20, 5)
+this gives 16 transforms; for L = (6, 6, 6, 6) it gives 244! = 384. With 50 retained configurations, the
+nominal 45/5 orbit split yields 720/80 augmented train/validation sequences in 3D and 17,280/1,920
+in 4D when all orbits are distinct. Complete symmetry orbits are assigned wholly to one split before
+augmentation. Validation evaluates at most ten batches of 100. Training runs for 500 updates and
+evaluates every 25 updates; the minimum validation-loss checkpoint among steps 25, 50, . . . , 500 is
+used both for generation and to initialize the next round. Exact split sizes and selected steps are
+recorded per generation.
+The Transformer uses learned token and absolute-position embeddings, untied output weights,
+causal self-attention, and PyTorch’s default parameter initialization. Its dropout rate is zero. At
+22
+
+
+--- Page 23 ---
+Table 6: PatternBoost hyperparameters.
+Parameter
+Value
+Transformer architecture
+Causal blocks / attention heads
+4 / 4
+Embedding / FFN width
+128 / 512
+Activation / normalization
+GELU / pre-LN
+Dropout
+0
+Training
+Training rounds
+20
+Retained configurations / round
+50
+Optimizer
+AdamW
+Learning rate / schedule
+5 × 10−4 / fixed
+Weight decay
+0.01
+Adam β1, β2 / ϵ
+(0.9, 0.99) / 10−8
+Maximum updates / round
+500
+Minibatch size
+32
+Validation-orbit fraction
+0.1
+Proposal and saturation
+Generated states / round
+250
+Selection batch / keep fraction
+250 / 0.2
+Saturation workers
+16
+Sampling temperature / top-k
+1 / none
+the start of a new round, model weights come from the preceding round’s selected checkpoint but
+AdamW is reinitialized; optimizer state is restored only when resuming an interruption within the
+same round. AdamW uses the fixed learning rate in Table 6.
+Generation always draws N tokens after the initial Start, without constraining the vocabulary,
+in minibatches of 10. Decoding stops at the first sampled Stop; before that stop, duplicate or illegal
+point tokens are removed from the remaining-point pool and skipped while later tokens are still
+attempted. Saturation repeatedly draws a fresh permutation of the remaining pool, accepts the first
+legal point, and permanently removes all points tested in that pass. The 250 terminal states form
+one selection batch; the largest 20%, namely 50 states, survive. Stable input order breaks cardinality
+ties. Generation and saturation use 16 CPU workers. A master seed of 20260809 initializes Python,
+NumPy, and PyTorch randomness; per-state seeds are assigned before parallel dispatch.
+C.5
+AlphaEvolve-style program-evolution experiment configuration
+Dimension-general task interface.
+For every instance (d, N), the immutable wrapper receives
+the same typed inputs: sixteen cataloged (N −1) × d arrays encoding Radon-free configurations, the
+dimension-independent geometry routines, target size N, output cap, and remaining oracle allowance.
+Returned candidates must have shape N × d. The mutable four-function interface, validation order,
+fitness, oracle allowance, output cap, and MAP-Elites mechanism are shared across dimensions.
+The dimension, target, reference catalog, feature-bin count for best_size, and number of evolution
+mutations are recorded separately below. No lattice side lengths are passed to the evolved program
+or enforced by the evaluator.
+Dimension-specific inputs.
+The 3D run samples eight references from each of two catalogs of
+verified 10-point configurations; the 4D run samples sixteen references from a catalog of verified
+20-point configurations. Both use selection seed 2026, run for 20mutations, and accept arbitrary
+23
+
+
+--- Page 24 ---
+finite integer output coordinates. The completed runs take 4.88 and 47.58 hours in 3D and 4D,
+respectively.
+Each call to generate_candidates installs process-local wrappers around the geometry functions.
+Calls to find_rps while the candidate program is active increment a counter and are limited jointly
+to 1,000; after exhaustion, a further call returns a nonempty sentinel rather than permitting a false
+Radon-free result. Convexity calls are uncharged. The internal allowance closes before the external
+evaluator begins, so rechecking the returned batch neither consumes nor enlarges the program’s
+search budget. Every program receives a newly initialized NumPy default_rng(42) and may return
+at most 32 arrays.
+Candidate validation and fitness.
+The evaluator imports the generated module and invokes
+generate_candidates(N,32); the declared three-dimensional instance instantiates this call with
+N = 11. Exceptions receive score 0 and an error flag. Each returned object is converted to a
+NumPy array and rejected unless it is finite, two-dimensional with d columns, integer-valued, and
+row-distinct. More than 32 objects are truncated; arrays with a row count other than N receive
+candidate score 0. For a target-sized array X = (x1, . . . , xN), let P = (x1, . . . , xN−1) denote its
+ordered prefix. The exact candidate score is
+s(X) =
+
+
+
+
+
+
+
+
+
+
+
+1,
+X is convex and nrp(X) = 0,
+0.50 + 0.49/(1 + nrp(X)),
+X is convex and nrp(X) > 0,
+0.40 + 0.09((N −1)/N),
+X is not convex, but P is convex and nrp(P) = 0,
+0,
+otherwise.
+(5)
+The program fitness combined_score is maxX s(X) over the returned batch. The evaluator records
+the best candidate and summary batch statistics; no metric combines properties from different
+candidates.
+Algorithm 5 Dimension-general AlphaEvolve-style program-evolution search.
+Require: instance (d, N), initial program p0, fixed evaluator E, islands I, number of mutations T,
+target fitness 1
+1: evaluate p0 with E; insert its source, metrics, and features into the database
+2: for t = 1, . . . , T do
+3:
+choose the active island and sample a parent from its population/archive
+4:
+assemble system and user messages from the fixed task prompt, parent source and metrics,
+execution artifacts, lineage, and selected top/diverse programs
+5:
+request an exact SEARCH/REPLACE diff from gpt-5.6-sol
+6:
+apply valid edits only inside the mutable EVOLVE-BLOCK; reject a full rewrite
+7:
+execute the child with a fresh RNG seed 42 and a shared allowance of 1,000 internal find_rps
+calls
+8:
+E independently validates and scores at most 32 returned candidates
+9:
+store source, parent, prompt, response, metrics, features, and candidate artifact
+10:
+update the island and global archive; migrate after every ten island generations
+11:
+checkpoint; stop if combined_score= 1
+12: end for
+24
+
+
+--- Page 25 ---
+Table 7: AlphaEvolve-style program-evolution settings.
+Parameter
+Value
+Output cap
+32 candidates
+Reference seeds
+16 cataloged (N −1)-point records
+Reference-selection seed / program RNG
+2026 / NumPy PCG64 seed 42
+Internal oracle allowance
+1,000 find_rps calls per program
+Convexity calls / evaluator replay
+uncharged / outside internal allowance
+Evolution mutations / target score
+20 per dimension / 1
+Population / archive / islands
+24 / 24 / 3
+Migration interval
+10 island generations
+MAP-Elites features / bins
+best_size: 3D 12, 4D 22; convex_fraction: 10
+Evolution mode
+exact diffs; full rewrites disabled
+LLM / weight
+gpt-5.6-sol / 1.0
+Reasoning effort / output limit
+medium / 8,000 tokens
+Outcomes.
+Each AlphaEvolve-style program-evolution experiment completes 20 mutations.
+Every child in both runs returns 32 convex target configurations, uses exactly 1,000 internal oracle
+calls, and has evaluator error flag zero. Each lineage therefore returns 20 × 32 = 640 candidates.
+Neither returns a Radon-free target. The best 3D program (first seen at mutation 7) and best 4D
+program (first seen at mutation 11) each attain one Radon point and fitness 0.745.
+C.6
+AlphaZero-Radon experiment configuration
+The reported runs use the Plan-D search and training implementation.
+The 3D instance has
+L = (20, 20, 5), N = 11, and 2,000 actions. The 4D instance has L = (6, 6, 6, 6), N = 21, and 1,296
+actions. Both complete 2,000 iterations, comprising 200,000 generated trajectories per dimension; all
+completed iterations enter the reported outcomes. The implementation calls this data-generation
+phase “self-play,” but the adapted task is single-agent and has no opponent.
+States, actions, and terminal outcomes.
+A state is the unordered set of placed lattice points,
+serialized internally by mixed-radix tokens
+a(x) =
+d
+X
+j=1
+xj
+j−1
+Y
+k=1
+Lk,
+so the first axis varies fastest. Every game starts from the fixed origin (0, . . . , 0) and the agent selects
+the remaining N −1 points. The origin is an explicit finite-box anchor, not a without-loss-of-generality
+reduction; it contributes neither a policy target nor an edge reward. At an expanded node, occupied
+actions are zeroed before candidate ranking. Applying an action terminates the branch when the
+new set is non-convex, has positive nrp, or reaches N. Rewards follow Equation (2) and are attached
+to the edge entering the successor. The value head estimates the undiscounted future reward-to-go.
+Plan-D top-K PUCT.
+Let Pθ(· | s) be the full-vocabulary softmax policy. Every newly expanded
+node zeros occupied actions, retains the K = 64 largest remaining probabilities, and renormalizes
+them. Writing the retained support as C(s), the tree prior is
+bP(a | s) = Pθ(a | s)1{a ∈C(s)}
+P
+b∈C(s) Pθ(b | s)
+.
+25
+
+
+--- Page 26 ---
+At the root only, self-play replaces this prior by 0.75 bP + 0.25η, where η ∼Dir(0.11). There is no
+eager root probe: a transition is checked only when tree selection reaches it. Once a child is found
+terminal, Plan D marks that edge and excludes it from later tree selections. Terminal means any
+non-convex or Radon-positive set as well as a target success, so a scored terminal receives one backup
+before it is masked. Search does not stop early upon discovering a success.
+Algorithm 6 AlphaZero-Radon single-agent trajectory-generation and training loop.
+Require: lattice sides L, target N, iterations I, games G, reads M, candidate count K, cpuct,
+Dirichlet parameter α
+1: initialize policy–value parameters θ, Adam state, and FIFO buffer B
+2: for i = 1, . . . , I do
+3:
+Di ←∅
+4:
+for g = 1, . . . , G do
+5:
+initialize s0 = {(0, . . . , 0)} and empty state, policy, and reward lists
+6:
+while st is not terminal do
+7:
+πt ←PUCTSearch(st, θ, M, K, cpuct, α)
+8:
+store (st, πt); sample at ∼πt; apply at
+9:
+append the realized edge reward and continue unless terminal
+10:
+end while
+11:
+compute Gt = PTend−1
+j=t
+rj backwards
+12:
+add all (st, πt, Gt, nfinal
+rp ) to Di
+13:
+end for
+14:
+append Di to B; retain its latest 40 iterations
+15:
+for h = 1, . . . , 10 do
+16:
+sample a set-length bucket proportional to its buffered count
+17:
+draw at most 128 examples from that bucket without replacement
+18:
+update θ with Adam on Equation (6)
+19:
+end for
+20:
+every 10 iterations, save the model weights
+21: end for
+26
+
+
+--- Page 27 ---
+Table 8: AlphaZero-Radon hyperparameters shared across dimensions.
+Parameter
+Value
+Search and trajectory generation
+Self-play worker processes
+32
+Training iterations
+2,000
+Self-play games / iteration
+100
+MCTS reads / move
+500
+PUCT constant cpuct
+1.0
+Candidate-set size K
+64
+Dirichlet α / noise fraction
+0.1 / 0.25
+Self-play temperature T
+1
+Network architecture
+Model width
+256
+Nyquist-safe Fourier bands / axis
+3 in both dimensions
+SAB layers / attention heads
+4 / 4
+Attention activation / normalization
+ReLU / LayerNorm
+Policy/value hidden width
+256 / 256
+Head activation / dropout
+GELU / 0
+Optimization
+Optimizer
+Adam
+Learning rate / schedule
+10−4 / fixed
+Weight decay
+10−4
+Adam β1, β2 / ϵ
+(0.9, 0.999) / 10−8
+Maximum minibatch / updates per iteration
+128 / 10
+Replay-window length
+40 iterations
+Value-loss weight λV
+20
+Discount γ
+1
+Reward shaping
+Step / Radon / success constants
+1 / 2 / 25
+Convexity-break constant
+0
+Algorithm 7 Plan-D fixed-candidate PUCT search used by the reported runs.
+Require: state s, network θ, reads M, candidate count K, cpuct, Dirichlet parameter α
+1: function PUCTSearch(s, θ, M, K, cpuct, α)
+2:
+create a fresh root; retain and renormalize its occupancy-legal policy top-K
+3:
+mix Dirichlet noise over those root candidates
+4:
+for m = 1, . . . , M do
+5:
+descend over unmarked retained edges by maximizing Q(u, a) + cpuctU(u, a)
+6:
+evaluate the selected successor with StepOutcome
+7:
+if terminal then
+8:
+mark its parent edge terminal; back up its edge reward with leaf value 0
+9:
+else
+10:
+retain the policy top-K candidate set at the leaf; set leaf value to Vθ
+11:
+back up intervening edge rewards plus the leaf value
+12:
+end if
+13:
+end for
+14:
+return the normalized full-vocabulary root visit counts π
+15: end function
+27
+
+
+--- Page 28 ---
+PUCT and training targets.
+PUCT uses
+Q(s, a) =
+W(s, a)
+1 + N(s, a),
+U(s, a) = bP(s, a)
+p
+N(s)
+1 + N(s, a).
+The root visit count starts at zero. Each simulation accumulates normalized per-edge rewards
+between the leaf and every ancestor and adds Vθ only at a nonterminal leaf. After 500 simulations,
+the root visit counts are normalized over the full vocabulary and the played action is sampled from
+them with T = 1.
+For a minibatch of size B, define the full-vocabulary policy by
+pθ(a | sb) =
+exp ℓθ(sb, a)
+P
+c∈Λ(L) exp ℓθ(sb, c).
+The loss is
+L = −1
+B
+B
+X
+b=1
+X
+a∈Λ(L)
+πb(a) log pθ(a | sb) + λV
+1
+B
+B
+X
+b=1
+ Vθ(sb) −Gb
+2.
+(6)
+Here λV = 20, πb is the normalized MCTS visit vector, and Gb is the undiscounted reward-to-go.
+Although πb is sparse because search expands top-K actions, the softmax denominator is the full
+action vocabulary.
+Network.
+Each coordinate is normalized as uj = xj/(Lj −1) and mapped to the Fourier feature
+vector
+[sin(2kπuj), cos(2kπuj)]Bd−1
+k=0 ,
+where the Nyquist-safe Bd = 3 in both runs, followed by a learned linear projection to width
+256. Four layer-normalized set-attention blocks with four heads encode the placed-point set. Each
+multihead-attention block uses scaled dot-product attention, a query residual, a ReLU output
+projection with a second residual, and LayerNorm after each residual. Every candidate cell uses
+the same coordinate encoder to form a cross-attention query over the set latents; a 256 →256 →1
+GELU MLP produces its policy logit. The value head mean-pools the set latents and applies an
+independent 256 →256 →1 GELU MLP, whose scalar output is used directly. All linear layers use
+PyTorch defaults, and the dropout rate is zero.
+Replay and optimization.
+One randomly initialized network and one Adam optimizer persist
+across all iterations. At each iteration, every self-play game receives the latest evaluation-mode
+weights, and every move constructs a fresh tree. Deterministic verifier outcomes may be memoized
+within a trajectory; this does not alter transitions, terminal labels, rewards, or the search budget.
+For each decision after the origin, self-play stores the pre-move token set, the normalized visit
+policy, the final Radon count, and the reward-to-go.
+The learner appends the current iteration before training. For each of ten updates, it selects a set-
+length bucket with probability proportional to its buffered sample count and draws min(128, |bucket|)
+examples uniformly without replacement. Thus each iteration makes at most 1,280 replay draws,
+independent of the current FIFO population; samples may reappear in later updates. Adam uses
+the fixed learning rate 10−4, PyTorch defaults for (β1, β2, ϵ), and coupled ℓ2 weight decay 10−4.
+Both jobs run uninterrupted from a clean initialization to iteration 2,000. The global initialization
+seed is 42; per-game and replay-sampling seeds are deterministic functions of the iteration and game
+indices. End-to-end wall times are approximately 85.9 hours in 3D and 561.4 hours in 4D.
+28
+
+
+--- Page 29 ---
+10−2
+10−1
+100
+101
+loss (log scale)
+3D target  (N = 11)
+(a) Losses
+policy CE
+value MSE
+2
+4
+6
+8
+10
+placements per game
+(b) Self-play trajectory
+mean trajectory
+full horizon
+0
+1000
+2000
+training iteration
+10−2
+10−1
+100
+101
+loss (log scale)
+4D target  (N = 21)
+0
+1000
+2000
+training iteration
+5
+10
+15
+20
+placements per game
+Figure 5: Training diagnostics for the complete 2,000-iteration AlphaZero-Radon runs. The top and
+bottom rows show the 3D (N = 11) and 4D (N = 21) instances, respectively. Curves are 50-iteration
+moving averages. The trajectory panels show only the mean trajectory length; the dashed line is the
+full horizon of 10 or 20 policy-selected placements after the fixed origin.
+Aggregation over the complete runs.
+In 3D, 157,485 of 200,000 generated trajectories place
+an eleventh point. Of those terminals, 8,651 are convex and receive a complete Radon count; the
+minimum is 2. In 4D, 120,973 games place a twenty-first point, 2,302 of those terminals are convex,
+and the minimum Radon count is 2; a trajectory with terminal score two first appears at iteration
+702. No target terminal has score zero. The remaining target-cardinality terminals are non-convex
+and are not included in the “target candidates” column. The largest fully verified prefixes have
+sizes 10 and 20, respectively. Figure 5 reports the corresponding optimization and trajectory-length
+diagnostics over the same complete runs.
+29

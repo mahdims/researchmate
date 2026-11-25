@@ -1,0 +1,2445 @@
+--- Page 1 ---
+PREPRINT
+1
+SCORAS-MoE: Joint Compression and
+Resource-Adaptive Deployment of MoE-VLMs in
+LEO Satellite Networks
+Tong Quan, Yuanlong Wan, Huasen He, Member, IEEE, Yunpeng Hou, Shuangwu Chen, Xiaofeng Jiang,
+Jian Yang, Senior Member, IEEE
+Abstract—Deploying large vision–language models (VLMs) on-
+board satellites enables onboard data processing and reduces raw
+data downlink. However, onboard inference faces two resource
+challenges. Limited onboard memory and energy require model
+compression and distributed deployment. Dynamic resource
+availability requires fast deployment decisions as illumination,
+battery levels, and communication conditions change. We present
+SCORAS-MoE, a joint compression and deployment framework
+for mixture-of-experts (MoE) VLMs in low Earth orbit (LEO)
+satellite networks. To address limited resources, SCORAS-MoE
+measures the perturbation of the routed MoE output caused by
+low-rank approximation, assigns higher ranks to more sensitive
+experts, and distributes compressed model shards across satellites
+for cooperative inference. The compressed models yield profiles
+of measured accuracy and inference energy. To adapt to dynamic
+resources, the online scheduler selects profile compositions and
+shard placements in each slot. For each candidate composition,
+it reduces placement to a minimum-cost assignment problem
+solved by the Hungarian algorithm, while enumerating the
+compositions yields the optimal deployment for the current-slot
+objective. Experiments on Qwen3-VL-30B-A3B-Instruct show
+that allocating ranks based on output perturbation is particularly
+effective under aggressive compression, with an absolute gain
+of 3.7% in mean accuracy over uniform rank allocation when
+expert projections retain 30% of their original parameters. The
+fixed-profile scheduler achieves higher throughput with fewer
+service switches and lower battery impact than the evaluated
+proximal policy optimization (PPO) and evolutionary baselines,
+with respective speedups of 8.7× and 183.5×. Adaptive profile
+selection further improves the balance between service quality
+and energy use.
+Index Terms—satellite edge intelligence, mixture-of-experts,
+model compression, resource-adaptive deployment, minimum-
+cost assignment
+I. INTRODUCTION
+S
+ATELLITES continuously collect imagery and other
+multimodal observations. Large vision–language models
+(VLMs) can turn these observations into descriptions and
+answers directly onboard, reducing the need to transmit raw
+data through limited downlink opportunities. Processing obser-
+vations where they are generated also supports timely services
+when ground stations are unavailable [1]. The NAVI-Orbital
+demonstration illustrates this potential: a Gemma 3 VLM
+deployed on a spacecraft in low Earth orbit (LEO) classified
+T. Quan, Y. Wan, H. He, Y. Hou, S. Chen, X. Jiang, and J. Yang are with the
+Department of Automation, University of Science and Technology of China,
+Hefei 230027, China, and also with the Institute of Artificial Intelligence,
+Hefei Comprehensive National Science Center, Hefei 230026, China.
+H. He (hehuasen@ustc.edu.cn) is the corresponding author.
+and described newly captured Earth imagery and supported
+natural-language interaction onboard [2]. Bringing these capa-
+bilities to sustained satellite services requires addressing two
+resource challenges: resources are both limited and dynamic.
+Limited resources require effective compression and dis-
+tributed deployment. Satellites have constrained memory, com-
+puting capacity, and energy supply, making large VLMs
+difficult to deploy. Mixture-of-experts (MoE) architectures,
+including those in the Qwen3-VL family [3], offer high model
+capacity while activating only a subset of experts for each
+token. The complete expert set nevertheless retains a large
+parameter count. Low-rank compression reduces the model’s
+memory and computation requirements, but achieving a small
+target parameter count requires careful rank allocation: experts
+differ in how strongly their approximation affects the model
+output. The central compression question is therefore how to
+distribute a fixed total rank across experts while preserving
+inference quality. Even after compression, the model may
+exceed the capacity of a single satellite, requiring its shards
+to be distributed across multiple satellites for cooperative
+inference.
+Dynamic resources require fast deployment decisions. Or-
+bital motion changes solar-energy availability and communi-
+cation conditions, while inference continuously affects battery
+states. A deployment suited to one slot may be inefficient or
+infeasible in the next. Within this distributed deployment, the
+service must therefore quickly adjust both the selected model
+profiles and shard placement, while accounting for the cost of
+reconfiguration.
+Existing research provides foundations for both challenges.
+MoE compression exploits expert heterogeneity through prun-
+ing, quantization, and low-rank approximation [4]–[6]. Struc-
+tural and routing statistics offer inexpensive allocation signals,
+while output-space distortion provides a functional measure
+of compression sensitivity [7]–[9]. Satellite edge systems
+study adaptive deployment, model partitioning, offloading, and
+energy-aware execution [10]–[14]. Connecting compression to
+online deployment remains essential: the compression choice
+determines inference quality and resource demand, and the
+deployment determines whether that choice can serve requests
+under the current satellite state. An effective framework needs
+both accurate compressed models and a fast way to place them
+as resources change.
+We
+propose
+SCORAS-MoE
+(Sensitivity-Guided
+Compression and Resource-Adaptive Scheduling for MoE),
+arXiv:2609.36763v1  [cs.NI]  29 Sep 2026
+
+
+--- Page 2 ---
+PREPRINT
+2
+a joint compression and deployment framework for LEO
+satellite networks. Offline, it measures the perturbation of the
+routed MoE output caused by low-rank approximation and
+assigns higher ranks to more sensitive experts. Compressing
+and evaluating the model at different parameter retention
+ratios produces a set of accuracy–energy profiles. Online, it
+uses these profiles to adapt deployment to the current resource
+state. For each candidate profile composition, shard placement
+becomes a minimum-cost assignment problem solved by the
+Hungarian algorithm. Comparing the candidate compositions
+gives the optimal current-slot deployment, accounting for
+service quality, unmet demand, battery impact, and switching.
+The main contributions are as follows:
+• We develop a joint compression and deployment frame-
+work for satellite MoE-VLM services. A set of evaluated
+model profiles connects offline compression to online
+profile selection and distributed deployment.
+• We design a rank allocation method based on output
+perturbation for inference under limited resources. A
+forward-only, routing-aware probe guides heterogeneous
+expert compression at specified layer-wise parameter
+retention ratios, improving accuracy retention when the
+parameter retention ratio is low.
+• We formulate resource-adaptive deployment as a se-
+quence of per-slot optimization problems and develop
+a solver based on profile enumeration and minimum-
+cost shard assignment. It achieves the per-slot optimum
+and supports fast updates under changing energy and
+communication conditions.
+• Experiments with Qwen3-VL-30B-A3B-Instruct show
+that SCORAS-MoE achieves a mean accuracy of 69.9%
+at β = 0.3, compared with 66.2% for uniform rank
+allocation. With the common β = 0.4 profile, the deploy-
+ment solver improves high-load throughput by 5.3% over
+Greedy and substantially reduces switching and battery
+impact. It also achieves better scheduling outcomes in
+less time than the evaluated proximal policy optimiza-
+tion (PPO) and evolutionary baselines. Adaptive profile
+selection then demonstrates the benefit of connecting
+compression to deployment.
+II. RELATED WORK
+The two resource challenges motivate two lines of related
+work: MoE compression at low parameter retention ratios, and
+distributed inference and adaptive scheduling under changing
+satellite conditions.
+A. MoE Compression and Compression Sensitivity
+Mixture-of-experts (MoE) compression exploits the sub-
+stantial redundancy and heterogeneous behavior of individual
+experts. Existing methods apply quantization, pruning, expert
+selection, and low-rank approximation at different granular-
+ities. EAC-MoE combines expert-selection calibration with
+frequency-based pruning [4], while automated fine-grained
+quantization assigns different configurations to heterogeneous
+expert channels [5]. MC-MoE uses expert- and token-level
+significance to guide training-free quantization and dynamic
+pruning [15]. MoE-SVD instead exploits the low-rank struc-
+ture and cross-expert redundancy of expert matrices [16].
+Together, these studies motivate heterogeneous compression
+because experts and expert components do not respond uni-
+formly to a common compression configuration.
+Allocating ranks across experts for a given target parameter
+count requires an expert-level allocation signal. Singular-
+value-based criteria characterize matrix compressibility by
+measuring how much spectral energy is concentrated in the
+leading singular values [16], [17], whereas routing statistics
+describe how frequently an expert participates in inference.
+Routing analysis has revealed substantial specialization among
+experts [18], and expert-usage statistics have been used for
+pruning and dynamic execution [4], [7]. Although inexpen-
+sive, neither signal alone directly characterizes the functional
+distortion induced by a particular low-rank approximation.
+Output-space sensitivity has also been explored in MoE
+compression.
+Prior
+expert-pruning
+methods
+evaluate
+the
+change in MoE-layer outputs after removing candidate ex-
+perts [7], while recent mixed-precision quantization meth-
+ods use compression-induced output distortion to characterize
+quantization sensitivity
+[8]. More recent work further in-
+corporates loss-sensitive information into expert-level mixed-
+precision allocation
+[9]. These studies establish functional
+output distortion as a useful signal for MoE compression. Our
+setting differs in both the compression operator and system
+objective: we use a forward-only, routing-aware functional
+probe for heterogeneous low-rank approximation of MoE-
+VLM experts and construct multiple deployable accuracy–
+energy profiles for resource-adaptive distributed inference.
+B. Distributed Inference and Satellite Service Scheduling
+Existing distributed large language model (LLM) serv-
+ing systems improve resource efficiency through inference-
+phase disaggregation, request migration, and heterogeneous
+execution. DistServe and Splitwise separate inference phases
+according to their computation and communication character-
+istics [19], [20], while Llumnix supports live request migra-
+tion [21]. For sparsely activated MoE models, Fiddler coor-
+dinates CPU and GPU execution when accelerator memory
+cannot hold the complete expert set [22].
+In satellite environments, distributed inference must addi-
+tionally account for orbital mobility, intermittent connectivity,
+and limited onboard resources. Existing satellite-edge systems
+have primarily considered task offloading, model partition-
+ing, and satellite–ground collaborative execution. LEOEdge
+jointly addresses adaptive model deployment and inference
+scheduling in large constellations [10], SLICE partitions
+neural-network execution between onboard and terrestrial re-
+sources [12], and learning-based approaches coordinate of-
+floading, computation, and communication decisions [11].
+These studies establish the importance of considering orbital
+mobility and communication availability when placing com-
+putation in LEO satellite networks.
+Beyond task offloading, recent work addresses more
+complex workloads and energy conditions. Grace supports
+satellite–ground VLM inference for remote sensing [1], while
+
+
+--- Page 3 ---
+PREPRINT
+3
+satellite-learning systems jointly optimize model partitioning,
+resource allocation, and data transmission [23]. PHOENIX
+exploits sunlight-aware task placement to reduce battery con-
+sumption [13], and architectures for deploying large models
+decompose and virtualize model components across satellite
+and ground resources [14]. Service migration under orbital
+mobility has also been investigated [24]. These approaches
+capture important communication, computation, energy, and
+mobility constraints, but generally focus on task-level offload-
+ing or the placement of individual model components without
+jointly modeling end-to-end inference pipelines whose shards
+use the same model profile.
+Learning-based policies have been applied to rolling-
+horizon satellite task scheduling, latency–energy-aware of-
+floading, and Earth-observation mission scheduling [25]–[27].
+Such methods show that adaptive policies can respond to
+time-varying satellite states. Nevertheless, their actions and
+objectives remain centered on tasks, missions, or offloading
+decisions rather than the composition and placement of com-
+plete profile-specific inference pipelines.
+SCORAS-MoE connects these two lines of work through
+a set of compressed MoE-VLM profiles. Output perturbation
+guides offline rank allocation, and each evaluated profile
+supplies an accuracy–energy option for deployment. Online,
+profile composition and shard placement are optimized to-
+gether through per-slot minimum-cost assignment, supporting
+fast adaptation to changing energy and communication states.
+III. SYSTEM MODEL AND PROBLEM FORMULATION
+TABLE I
+SUMMARY OF KEY NOTATION.
+Notation
+Definition
+N, N, i
+Satellite set, number, and index
+T , T, t, τ
+Slot set, number, index, and duration
+B, M, b
+Profile set, number, and index
+K, K, k
+Shard set, number, and index
+L, L, m, Em, e
+MoE-layer and expert sets and indices
+d[t]
+Requested number of complete pipelines
+χi[t], N χ[t]
+Feasibility indicator and feasible satellites
+Gb = (βb, αb, εb)
+Parameter retention ratio, accuracy, and
+per-shard energy profile
+xi,k,b[t], ai[t]
+Shard placement and satellite service state
+rb[t]
+Number of complete pipelines using profile
+b
+Ei[t], Emin
+i
+, Emax
+i
+, Li[t]
+Battery state and bounds, and illumination
+Q[t], u[t], D[t], S[t]
+Service quality, unmet demand, battery im-
+pact, and switches
+U[t], ωq, λu, λd, λs
+Per-slot utility and weights
+s(b)
+m,e, r(b)
+m,e
+Functional sensitivity score and allocated
+expert rank
+r, R[t]
+Profile counts and feasible compositions
+J (r), yi,j[t], ci,k,b[t]
+Required instances, assignment, and edge
+cost
+Table I summarizes the principal notation used throughout
+the paper.
+A. SCORAS-MoE Framework
+SCORAS-MoE addresses limited resources through offline
+compression and distributed deployment across satellites. On-
+line scheduling adapts this deployment to dynamic resources.
+The offline stage measures the output perturbation of each
+expert, allocates ranks at several parameter retention ratios,
+and evaluates the resulting complete models. Their measured
+accuracy and inference energy define the profiles available to
+the online stage. At the beginning of each slot, the scheduler
+observes the satellite states and demand, chooses a profile
+composition, and assigns the required model shards to satel-
+lites. The chosen deployment serves the slot workload and
+determines the battery and placement states passed to the next
+slot.
+B. Satellite Network and Resource Dynamics
+We study the deployment of MoE-VLMs in LEO con-
+stellations to provide inference services for both onboard
+sensing applications and ground terminals through satellite–
+ground links. Since the resource demand of a complete model
+may exceed the compute, memory, and energy capacity of
+an individual satellite, inference pipelines are partitioned and
+executed cooperatively across the constellation. We consider
+a Walker-Delta LEO constellation comprising N satellites,
+indexed by N = {1, . . . , N}. The satellites are distributed
+over multiple orbital planes and follow predetermined near-
+circular orbits. Each satellite carries an onboard computing
+platform and a rechargeable battery. As illustrated in Fig. 1,
+processing requests within the constellation reduces reliance
+on continuous access to terrestrial data centers.
+Orbital motion changes the relative satellite geometry,
+ground-station visibility, inter-satellite link (ISL) connectivity,
+and illumination conditions. We divide the operating horizon
+into equal-length scheduling slots T
+= {1, . . . , T}, where
+τ denotes the duration of each slot, following the time-
+slotted abstraction commonly used for dynamic LEO edge
+computing [13]. Satellite positions, link capacities, illumi-
+nation, and battery states are treated as constant within a
+slot. Between consecutive slots, satellite positions are updated
+through orbital propagation, link capacities and illumination
+are recalculated from the updated geometry, and battery en-
+ergy evolves according to (11). Throughout the paper, square
+brackets denote discrete-time indices. Let d[t] denote the
+requested number of concurrent complete inference pipelines.
+Let CSG
+i
+[t] and CISL
+i
+[t] denote the available satellite–ground
+(SG) capacity and aggregate ISL capacity of satellite i in slot
+t, respectively. The corresponding bandwidth requirements per
+concurrent pipeline are ρSG and ρISL. Following capacity-
+constrained service placement in satellite edge networks [28],
+we define the communication-feasibility indicator as
+χi[t] = I
+
+CSG
+i
+[t] ≥ρSGd[t]
+
+I
+
+CISL
+i
+[t] ≥ρISLd[t]
+
+.
+(1)
+The set of satellites that meet both link requirements is
+N χ[t] = {i ∈N | χi[t] = 1} .
+(2)
+Only satellites in N χ[t] may host an inference shard in slot t.
+C. Sharded Pipeline Inference
+Satellite resources vary across scheduling slots. To support
+resource-adaptive deployment, we compress the MoE-VLM
+offline at multiple expert-projection parameter retention ratios,
+
+
+--- Page 4 ---
+PREPRINT
+4
+E1
+Layer 1
+E2
+Em
+Original MoE-VLM
+…
+…
+E1
+Layer k
+E2
+Em
+…
+E1
+Layer 2
+E2
+Em
+…
+Impact Estimation
+Rank Allocation
+E1
+E2
+Em
+…
+Impact
+E1
+E2
+Em
+…
+E1
+E2
+Em
+…
+Satellite Edge Service Scheduling
+β1 
+K1
+β1 
+K2
+β1 
+K3
+β2 
+K1
+β2 
+K2
+β2 
+K3
+Inference flow
+(different colors denote different 
+compression profiles)
+Energy
+Energy
+β 
+K
+Model shard
+β 
+K
+Model shard
+LEO satellite
+LEO satellite
+/
+Sunlit/eclipsed state
+Higher ranks for
+sensitive experts
+Fig. 1.
+System setting of a Walker-Delta LEO satellite constellation supporting cooperative on-orbit inference. Each satellite is equipped with onboard
+computing and storage resources, satellite–ground and inter-satellite communication interfaces, a photovoltaic array, and a rechargeable battery.
+producing a finite set of complete model profiles B. Each
+profile is compressed and evaluated independently and has a
+distinct parameter count, accuracy, and inference-energy cost.
+This profile-based abstraction is consistent with inference serv-
+ing systems that adapt model accuracy to available resources
+[29]. The compression procedure of SCORAS-MoE is detailed
+in Section IV.
+For distributed deployment, we partition the compressed
+model corresponding to each profile at the MoE-layer gran-
+ularity. Each resulting model therefore contains K required
+shards, indexed by K = {1, . . . , K}, whose replicas can
+be distributed across the constellation. Profile b ∈B is
+represented by
+Gb = (βb, αb, εb) ,
+(3)
+where βb is the target parameter retention ratio of expert
+projections, αb is the measured mean accuracy of the model
+compressed at retention ratio βb, and εb is the measured slot-
+level inference energy of a representative shard under profile
+b. Because all shards contain the same number of MoE layers
+with almost identical tensor dimensions, we use εb as the
+common per-shard energy estimate for profile b.
+A request assigned to profile b is processed sequentially by
+one replica of each of its K shards. These replicas form a
+complete inference pipeline, with all shards using the same
+profile. We provision active replicas as complete pipelines,
+assigning one replica of every required shard to each pipeline.
+Each active pipeline processes a fixed workload of F batched
+forward passes per slot.
+Let xi,k,b[t] ∈{0, 1} indicate that satellite i hosts shard k
+from profile b in slot t. Each communication-feasible satellite
+can host at most one active shard instance:
+X
+b∈B
+X
+k∈K
+xi,k,b[t] ≤1,
+∀i ∈N,
+xi,k,b[t] ≤χi[t],
+∀i ∈N, k ∈K, b ∈B.
+(4)
+Let rb[t] denote the number of complete pipelines using profile
+b. Complete-pipeline provisioning requires equal active replica
+counts across its shards:
+X
+i∈N
+xi,k,b[t] = rb[t],
+∀k ∈K, b ∈B.
+(5)
+Therefore, the total number of complete pipelines in slot t
+is P
+b∈B rb[t], corresponding to a capacity of F P
+b∈B rb[t]
+batched forward passes per slot.
+The service state of satellite i is denoted by ai[t], where
+ai[t] = 0 means that the satellite is idle and ai[t] = (k, b)
+means that it hosts shard k under profile b. A service switch
+occurs whenever ai[t]̸ = ai[t−1]. This definition covers activa-
+tion, deactivation, shard replacement, and profile replacement.
+Such transitions may incur overheads such as model transfer,
+state synchronization, or runtime reconfiguration [21], [24].
+D. Energy Model
+Satellite battery evolution is jointly determined by solar
+energy harvested along the orbit and energy consumed by the
+inference service. The inference load depends on whether a
+satellite is idle or active and, if active, on the hosted shard.
+We represent this interaction using a discrete energy-balance
+model for the onboard inference subsystem, following standard
+charging and discharging constraints [30]–[33].
+For satellite i in slot t, let Ei[t] denote the battery energy
+available to its onboard inference subsystem at the beginning
+of the slot, and let Li[t] ∈{0, 1} indicate whether the satellite
+is illuminated. The parameters Emax
+i
+and P solar
+i
+[t] specify the
+battery capacity and harvested solar power allocated to this
+subsystem. Let P idle
+i
+denote its idle power. Given the current
+placement, the profile-dependent inference energy assigned to
+satellite i is
+εinf
+i [t] =
+X
+b∈B
+X
+k∈K
+εbxi,k,b[t].
+(6)
+According to (4), at most one term in this sum is nonzero.
+The subsystem load and allocated solar energy in slot t are
+εload
+i
+[t] = P idle
+i
+τ + εinf
+i [t],
+εsolar
+i
+[t] = Li[t]P solar
+i
+[t]τ.
+(7)
+The resulting energy surplus and deficit are
+ε+
+i [t] =
+
+εsolar
+i
+[t] −εload
+i
+[t]
++ ,
+ε−
+i [t] =
+
+εload
+i
+[t] −εsolar
+i
+[t]
++ ,
+(8)
+
+
+--- Page 5 ---
+PREPRINT
+5
+where [z]+ = max{z, 0}. Subject to the battery capacity
+and maximum charging rate, the energy supplied for charging
+during slot t is
+εch
+i [t] = min
+
+ε+
+i [t], P ch,max
+i
+τ, Emax
+i
+−Ei[t]
+ηc
+
+,
+(9)
+where P ch,max
+i
+is the maximum charging power and ηc is the
+charging efficiency. The load deficit is supplied by the battery.
+A placement is energy feasible only if
+ε−
+i [t] ≤min
+n
+P dis,max
+i
+τ, ηd
+ Ei[t] −Emin
+i
+o
+,
+(10)
+where P dis,max
+i
+and ηd are the maximum discharge power
+and discharge efficiency, respectively. The battery state evolves
+according to
+Ei[t + 1] = Ei[t] + ηcεch
+i [t] −ε−
+i [t]
+ηd
+,
+Emin
+i
+≤Ei[t + 1] ≤Emax
+i
+.
+(11)
+Because ε+
+i [t] and ε−
+i [t] cannot both be positive, charging and
+discharging do not occur in the same slot.
+E. Joint Optimization Formulation
+Existing satellite scheduling studies typically emphasize
+specific aspects of service operation, such as energy-aware
+task placement and service migration [13], [24]. Continuous
+MoE-VLM inference requires balancing service quality, de-
+mand fulfillment, battery impact, and service switching. We
+therefore formulate a joint optimization problem to improve
+throughput and inference accuracy while reducing inference-
+induced battery impact and service switching.
+a) Service quality: The accuracy-weighted service deliv-
+ered in slot t is
+Q[t] =
+X
+b∈B
+αbrb[t],
+(12)
+where rb[t] is the number of complete pipelines using profile
+b, and αb is its measured mean accuracy expressed as a
+percentage. Thus, Q[t] jointly reflects the number and accuracy
+of the delivered inference pipelines.
+b) Unmet demand: The unmet pipeline demand in slot t
+is
+u[t] = d[t] −
+X
+b∈B
+rb[t].
+(13)
+To avoid provisioning more pipelines than required, the ag-
+gregate pipeline capacity is constrained by
+0 ≤
+X
+b∈B
+rb[t] ≤d[t],
+u[t] ≥0.
+(14)
+c) Inference-induced battery impact: Let Ei[t+1] denote
+the next-slot battery energy under the scheduled inference
+load, and let E(0)
+i
+[t + 1] denote the corresponding next-slot
+energy under idle operation. Both states are determined by
+(7)–(11) under the same current battery state and solar input.
+The idle case excludes only active inference energy. The
+normalized marginal battery impact is
+D[t] =
+X
+i∈N
+h
+E(0)
+i
+[t + 1] −Ei[t + 1]
+i+
+Emax
+i
+.
+(15)
+This term accounts for both additional battery discharge and
+charging opportunities forgone because of inference.
+d) Service switching cost: Using the satellite service
+state ai[t], the number of switches is
+S[t] =
+X
+i∈N
+I[ai[t]̸ = ai[t −1]] .
+(16)
+We set S[1] = 0 and count switches only between consecutive
+slots.
+Accordingly, we combine these quantities into the following
+per-slot utility:
+U[t] = ωqQ[t] −λuu[t] −λdD[t] −λsS[t],
+(17)
+where ωq, λu, λd, and λs are nonnegative weights for service
+quality, unmet demand, battery impact, and switching, respec-
+tively.
+Let π denote a causal scheduling policy that maps the
+state observed at the beginning of each slot to profile-specific
+pipeline counts and shard-placement decisions. The resulting
+long-horizon scheduling problem is formulated as
+max
+π
+X
+t∈T
+U[t]
+s.t.
+(4), (5), (10), (11), (14),
+xi,k,b[t] ∈{0, 1},
+rb[t] ∈Z≥0.
+(18)
+Within each slot, profile composition determines accuracy and
+energy demand, while shard placement determines feasibility
+and switching. Across slots, executed deployments update the
+battery and placement states on which subsequent decisions
+depend.
+Even the deterministic offline version of (18) is NP-hard.
+To see this, consider the restricted case with one satellite,
+one shard, unit charging and discharging efficiencies, no solar
+input, zero idle power, and zero battery-impact and switching
+weights. Set the unmet-demand weight to zero and let the
+demand be one pipeline in every slot. Selecting profile b
+then yields value ωqαb and consumes εb from a finite initial
+energy budget, while at most one profile can be selected per
+slot. Maximizing the accumulated value over T slots is the
+cardinality-constrained unbounded knapsack problem, which
+is NP-hard. Since this restricted case is contained in (18),
+the general multi-slot problem is also NP-hard. To respond
+promptly to resource changes, SCORAS-MoE optimizes de-
+ployment at the beginning of each slot using the current state.
+Section V develops the minimum-cost assignment formulation
+and its per-slot solution.
+IV. COMPRESSION GUIDED BY OUTPUT PERTURBATION
+SCORAS-MoE
+allocates
+ranks
+according
+to
+routing-
+weighted output perturbation, assigning higher ranks to more
+sensitive experts and producing model profiles at different
+parameter retention ratios.
+A. MoE Expert Compression
+An MoE layer routes each token to a subset of expert feed-
+forward networks and aggregates their outputs. Sparse activa-
+tion reduces the computation per token, while the parameters
+
+
+--- Page 6 ---
+PREPRINT
+6
+of all experts must still be stored. We compress the expert
+projection matrices using low-rank approximations.
+Let L = {1, . . . , L} index the MoE layers, and let Em
+denote the expert set of layer m ∈L. For token n, the
+router selects a top-q expert subset Etop
+m,n
+⊆Em, where
+|Etop
+m,n| = q, and assigns a normalized routing weight gm,e,n
+to each selected expert e ∈Etop
+m,n. Each expert is implemented
+as a gated feed-forward network. For expert e in layer m,
+let Wgu
+m,e and Wd
+m,e denote the fused gate–up and down
+projection matrices, respectively. Given the token state hm,n,
+the expert computation and routed MoE output are
+am,e,n
+bm,e,n
+
+= Wgu
+m,ehm,n,
+fm,e(hm,n) = Wd
+m,e [SiLU(am,e,n) ⊙bm,e,n] ,
+om,n =
+X
+e∈Etop
+m,n
+gm,e,nfm,e(hm,n).
+(19)
+The fused gate–up projection produces the gate and up
+branches. The down projection maps their gated elementwise
+product back to the hidden dimension.
+To reduce the storage and computational costs of these
+projections, a weight matrix W ∈Rdout×din is approximated
+by two low-rank factors:
+c
+W(r) = BrAr,
+Br ∈Rdout×r,
+Ar ∈Rr×din,
+(20)
+where r is the approximation rank. The factorization reduces
+the parameter count from doutdin to r(dout + din).
+We use activation-aware low-rank approximation [34], [35],
+which minimizes projection-output reconstruction error on
+calibration inputs. For a weight matrix W and calibration input
+matrix Z, the rank-r approximation is
+c
+W(r) = arg
+min
+rank(W′)≤r
+ZWT −ZW′T
+2
+F .
+(21)
+We compute this approximation using regularized activation
+whitening followed by truncated singular value decomposition
+(SVD). The calibration inputs are the routed hidden states
+for the gate–up projection and the nonlinear intermediate
+activations for the down projection. The allocation below
+determines the rank used for each expert.
+B. Routing-Aware Output Perturbation
+Experts differ in their contributions to the routed layer
+output and their response to low-rank approximation. To
+measure these differences, we probe each expert using cached
+calibration activations, expert selections, and routing weights.
+For a target parameter retention ratio βb, the parameter count
+of the two expert projections gives the nominal rank for layer
+m:
+¯rm,b = max
+
+1, round
+
+βb
+3ImHm
+3Im + 2Hm
+
+,
+(22)
+where Hm is the hidden dimension and Im is the intermediate
+dimension of each expert. We use this nominal rank to probe
+all experts in the layer and determine the nominal total rank
+for the layer. To probe expert e, we temporarily replace its
+fused gate–up projection with the rank-¯rm,b approximation
+and denote the resulting output by ef (b)
+m,e(hm,n). The routing-
+weighted output perturbation and its aggregate score are
+∆(b)
+m,e,n = gm,e,n
+h
+fm,e(hm,n) −ef (b)
+m,e(hm,n)
+i
+,
+s(b)
+m,e =
+
+
+X
+n:e∈Etop
+m,n
+∆(b)
+m,e,n
+
+2
+2
+
+
+1/2
+.
+(23)
+When only expert e’s fused gate–up projection is approxi-
+mated and the recorded routing decisions are retained, ∆(b)
+m,e,n
+equals the resulting change in the MoE-layer output. The
+aggregate score s(b)
+m,e measures the routing-weighted approx-
+imation error across calibration tokens. Experts with larger
+scores receive higher ranks.
+C. Rank Allocation and Deployment Profiles
+We normalize the perturbation scores within each layer and
+allocate its total rank among experts. For layer m and profile
+b, the nominal total rank for the layer is
+Rm,b = |Em|¯rm,b,
+(24)
+where |Em| is the number of experts in the layer. Each expert
+first receives a minimum rank, and the remaining total rank is
+distributed according to the normalized probe scores:
+rm,b = max {1, round (η¯rm,b)} ,
+w(b)
+m,e =
+s(b)
+m,e + ζ
+P
+e′∈Em
+
+s(b)
+m,e′ + ζ
+,
+er(b)
+m,e = rm,b +
+ Rm,b −|Em|rm,b
+
+w(b)
+m,e,
+r(b)
+m,e = clip
+
+round
+h
+er(b)
+m,e
+i
+, 1, rmax
+m
+
+.
+(25)
+Here, er(b)
+m,e is the unrounded allocated rank, η controls the
+expert-level rank floor, ζ > 0 ensures positive allocation
+weights, and rmax
+m
+is the maximum feasible rank in layer m.
+The allocated rank r(b)
+m,e is applied to both the gate–up and
+down projections, which are reconstructed using the activation-
+aware approximation in (21).
+Let V denote the evaluation benchmark set and Ab,v the
+accuracy of profile b on benchmark v. Its mean accuracy is
+αb = 1
+|V|
+X
+v∈V
+Ab,v.
+(26)
+Each shard of profile b uses the corresponding measured shard
+energy εb.
+Algorithm 1 details the offline compression procedure. Its
+inputs are the original checkpoint Θ, calibration set Dc, tar-
+get parameter retention ratios {βb}b∈B, rank-floor coefficient
+η, stabilization constant ζ, and evaluation set V. Calibra-
+tion caches projection inputs, expert selections, and routing
+weights. These cached quantities are reused across all target
+retention ratios.
+For each βb, the algorithm copies the original checkpoint
+and computes the nominal rank and nominal total rank for
+each layer. It probes each expert by approximating its gate–
+up projection at the nominal rank, then aggregates routing-
+weighted output differences over calibration tokens routed to
+
+
+--- Page 7 ---
+PREPRINT
+7
+that expert to obtain a perturbation score. After assigning a
+minimum rank to every expert, it distributes the remaining total
+rank according to normalized scores. The resulting ranks are
+rounded and clipped, and both gate–up and down projections
+are reconstructed using activation-aware low-rank approxima-
+tion.
+Finally, the compressed model is evaluated on V to obtain
+mean accuracy αb. We measure the inference energy εb of a
+representative shard under the fixed per-slot workload. This
+training-free procedure returns {Gb = (βb, αb, εb)}b∈B for
+online deployment selection.
+V. FAST RESOURCE-ADAPTIVE DEPLOYMENT
+SCORAS-MoE adapts deployment to changing satellite
+resources by enumerating profile compositions and solving a
+minimum-cost shard assignment problem for each composi-
+tion.
+A. Current-Slot State and Profile Composition
+In slot t, the assignment candidates are all communication-
+feasible satellites defined in (2):
+C[t] = N χ[t].
+(27)
+Battery energy, illumination, and the preceding placement
+determine edge feasibility and cost.
+Let M = |B| be the number of available profiles and
+Ct = |C[t]| the number of communication-feasible satellites.
+The maximum number of pipelines considered in slot t is
+Pt = min{d[t], ⌊Ct/K⌋}. The scheduler enumerates profile-
+count vectors r = (r1, . . . , rM), where rb counts the complete
+pipelines using profile b. The candidate set is
+R[t] =
+(
+r ∈ZM
+≥0 :
+X
+b∈B
+rb ≤Pt
+)
+.
+(28)
+Different pipelines may use different profiles, while all shards
+of an individual pipeline use the same profile.
+For each r ∈R[t], the required shard instances, indexed by
+profile, pipeline, and shard, are
+J (r) = {(b, ℓ, k) : b ∈B, 1 ≤ℓ≤rb, k ∈K} ,
+|J (r)| = K
+X
+b∈B
+rb.
+(29)
+The index ℓdistinguishes pipelines using the same profile. The
+capacity bound in (28) excludes vectors satisfying
+|J (r)| > |C[t]|.
+(30)
+B. Minimum-Cost Shard Assignment
+For a fixed profile-count vector, the service quality and
+unmet demand are determined. Deployment then minimizes
+the battery impact and switching cost of assigning its required
+shards to satellites. For communication-feasible satellite i and
+profile–shard pair (b, k), the battery-state transition during
+inference and its feasibility are first evaluated using (7)–(11).
+Let Φi[t](E, ε) denote the resulting single-slot battery-state
+transition from initial energy E when the active inference
+Algorithm 1 MoE-VLM Compression Guided by Output
+Perturbation
+Require: Original checkpoint Θ, calibration set Dc, set of
+target parameter retention ratios {βb}b∈B, rank-floor co-
+efficient η, stabilization constant ζ, and evaluation set V
+Ensure: Profile set {Gb}b∈B
+1: Zc = Calibrate(Θ, Dc)
+2: c
+W(W, Z, r) = arg
+min
+rank(W′)≤r
+ZWT −ZW′T
+2
+F
+3: for all b ∈B do
+4:
+Θ(b) = Copy(Θ)
+5:
+for all m ∈L do
+6:
+¯rm,b = max
+
+1, round
+
+βb
+3ImHm
+3Im + 2Hm
+
+7:
+Rm,b = |Em|¯rm,b
+8:
+for all e ∈Em do
+9:
+f
+W(gu,b,probe)
+m,e
+= c
+W
+ Wgu
+m,e, Zgu
+m,e, ¯rm,b
+
+10:
+Construct ef (b)
+m,e using f
+W(gu,b,probe)
+m,e
+11:
+∆(b)
+m,e,n = gm,e,n
+h
+fm,e(hm,n) −ef (b)
+m,e(hm,n)
+i
+12:
+s(b)
+m,e =
+
+
+X
+n:e∈Etop
+m,n
+∆(b)
+m,e,n
+
+2
+2
+
+
+1/2
+13:
+end for
+14:
+rm,b = max{1, round(η¯rm,b)}
+15:
+Rrem
+m,b = Rm,b −|Em|rm,b
+16:
+for all e ∈Em do
+17:
+w(b)
+m,e =
+s(b)
+m,e + ζ
+P
+e′∈Em
+
+s(b)
+m,e′ + ζ
+
+18:
+er(b)
+m,e = rm,b + Rrem
+m,bw(b)
+m,e
+19:
+r(b)
+m,e = clip
+
+round
+h
+er(b)
+m,e
+i
+, 1, rmax
+m
+
+20:
+for all p ∈{gu, d} do
+21:
+f
+W(p,b)
+m,e = c
+W
+
+Wp
+m,e, Zp
+m,e, r(b)
+m,e
+
+22:
+Θ(b)
+Wp
+m,e
+
+= f
+W(p,b)
+m,e
+23:
+end for
+24:
+end for
+25:
+end for
+26:
+for all v ∈V do
+27:
+Ab,v = Evaluate
+ Θ(b), v
+
+28:
+end for
+29:
+αb = 1
+|V|
+X
+v∈V
+Ab,v
+30:
+εb = MeasureShardEnergy
+ Θ(b)
+31:
+Gb = (βb, αb, εb)
+32: end for
+33: return {Gb}b∈B
+energy is ε, under the slot-t illumination and solar input. For
+an energy-feasible edge, let
+E(0)
+i
+[t + 1] = Φi[t](Ei[t], 0),
+E(k,b)
+i
+[t + 1] = Φi[t](Ei[t], εb)
+(31)
+denote the idle and active next-slot battery states under the
+same current energy and solar input. The additional normalized
+
+
+--- Page 8 ---
+PREPRINT
+8
+battery impact of the assignment is
+∆Di,k,b[t] =
+h
+E(0)
+i
+[t + 1] −E(k,b)
+i
+[t + 1]
+i+
+Emax
+i
+.
+(32)
+An active edge is admissible only when its load deficit satisfies
+(10).
+We first introduce the constant switching cost associated
+with deactivating all previously active satellites:
+Csw
+0 [t] =
+
+
+
+0,
+t = 1,
+λs
+X
+i∈N
+I[ai[t −1]̸ = 0] ,
+t > 1.
+(33)
+For a candidate assignment of profile–shard pair (b, k) to
+satellite i, the corresponding switching-cost adjustment is
+δsw
+i,k,b[t] =
+
+
+
+
+
+−λs,
+t > 1 and ai[t −1] = (k, b),
++λs,
+t > 1 and ai[t −1] = 0,
+0,
+otherwise.
+(34)
+The first case cancels the assumed deactivation cost when
+the complete profile–shard state is retained. The second case
+charges for activating a previously idle satellite. Assigning
+a different state to an already active satellite requires no
+additional adjustment because its single state transition is
+already included in Csw
+0 [t].
+The assignment-edge cost is
+ci,k,b[t] =
+(
+λd∆Di,k,b[t] + δsw
+i,k,b[t],
+if feasible,
+M∞,
+otherwise.
+(35)
+An energy-infeasible edge is excluded by assigning a suffi-
+ciently large cost M∞. Together, Csw
+0 [t] and δsw
+i,k,b[t] exactly
+account for activation, deactivation, shard replacement, and
+profile replacement in the current-slot assignment.
+Let j = (b, ℓ, k) ∈J (r) denote a required shard instance,
+and let yi,j[t] ∈{0, 1} indicate whether instance j is assigned
+to communication-feasible satellite i. Its assignment cost is
+directly given by ci,k,b[t], which is independent of the pipeline
+index ℓ. For each profile-count vector, SCORAS-MoE solves
+eC⋆[t](r) = min
+y[t]
+X
+i∈C[t]
+X
+j=(b,ℓ,k)
+∈J (r)
+ci,k,b[t]yi,j[t]
+s.t.
+X
+i∈C[t]
+yi,j[t] = 1,
+∀j ∈J (r),
+X
+j∈J (r)
+yi,j[t] ≤1,
+∀i ∈C[t],
+yi,j[t] ∈{0, 1}.
+(36)
+The total assignment cost is C⋆[t](r) = Csw
+0 [t] + eC⋆[t](r).
+The first constraint assigns every required shard instance to
+one satellite, and the second allows each satellite to host at
+most one instance. This is a rectangular linear sum-assignment
+problem, which we solve using the Hungarian algorithm.
+C. Profile Selection and Per-Slot Optimality
+After solving the assignment for each feasible profile-
+count vector, the scheduler compares its service benefit and
+deployment cost:
+bU[t](r) = ωq
+X
+b∈B
+αbrb −λu
+ 
+d[t] −
+X
+b∈B
+rb
+!
+−C⋆[t](r),
+r⋆[t] = arg max
+r∈R[t]
+bU[t](r).
+(37)
+Here,
+bU[t](r) is the current-slot utility achieved by the
+minimum-cost assignment for r.
+a) Per-slot optimality: Every feasible placement in the
+complete-pipeline model corresponds to a vector in R[t] and
+an assignment of its required shards. For a fixed vector, the
+Hungarian algorithm minimizes the placement cost in (36),
+while the service-quality and unmet-demand terms remain
+fixed. Comparing these solutions over R[t] therefore gives the
+global optimum of the single-slot objective for the observed
+state.
+b) Computational cost: For M profiles and a maximum
+of Pt complete pipelines, R[t] contains
+ Pt+M
+M
+
+candidate
+vectors. Each assignment has at most Ct vertices on either
+side and takes at most O(C3
+t ) time. The total matching
+work is therefore bounded by O
+ Pt+M
+M
+
+C3
+t
+
+, with a further
+O
+ Pt+M
+M
+
+M
+
+for profile enumeration and scoring. In prac-
+tice, the number of profiles is small.
+Algorithm 2 details the online procedure for slot t. Its inputs
+are demand d[t], satellite battery and illumination states Ei[t]
+and Li[t], communication-feasibility indicators χi[t], previous
+service states ai[t−1], and the offline profiles {Gb}b∈B. It con-
+structs the communication-feasible satellite set and determines
+the maximum pipeline count from demand and available shard
+capacity.
+Starting with the zero-pipeline deployment and its unmet-
+demand and service-deactivation costs, the scheduler enumer-
+ates nonzero profile-count vectors. For each vector, it creates
+the required shard instances and a cost matrix combining
+incremental battery impact and switching-cost adjustments.
+Energy-infeasible edges receive a prohibitive cost. The Hun-
+garian algorithm computes the minimum-cost assignment, and
+solutions containing infeasible edges are discarded. Each feasi-
+ble assignment is scored using accuracy-weighted throughput,
+unmet demand, and total deployment cost, including the base-
+line switching cost. The scheduler retains the composition and
+assignment with the highest current-slot utility.
+The selected assignment is decoded into a shard placement
+x⋆[t]. The scheduler executes the deployment and updates
+battery states Ei[t + 1] and service states ai[t] for the next
+slot. It returns the shard placement x⋆[t] and the profile-count
+vector r⋆[t].
+VI. PERFORMANCE EVALUATION
+We evaluate compression accuracy, fixed-profile deployment
+performance and decision time, adaptive profile composi-
+tion, and deployment ablations to assess how SCORAS-MoE
+
+
+--- Page 9 ---
+PREPRINT
+9
+Algorithm 2 SCORAS-MoE Per-Slot Profile Selection and
+Shard Assignment
+Require: Current
+demand
+d[t],
+satellite
+states
+{Ei[t], Li[t], χi[t], ai[t −1]}i∈N , and profile set {Gb}b∈B
+Ensure: Profile composition r⋆[t] and profile-aware shard
+placement x⋆[t]
+1: Construct N χ[t] using (2)
+2: C[t] ←N χ[t]
+3: Pt ←min{d[t], ⌊|C[t]|/K⌋}
+4: Set Csw
+0 [t] using (33)
+5: R[t] =
+n
+r ∈Z|B|
+≥0 : P
+b∈B rb ≤Pt
+o
+6: r⋆[t] = 0, y⋆[t] = ∅, x⋆[t] = 0, and bU ⋆[t] = −λud[t] −
+Csw
+0 [t]
+7: for all r ∈R[t] \ {0} do
+8:
+J (r) = {(b, ℓ, k) : b ∈B, 1 ≤ℓ≤rb, k ∈K}
+9:
+if |J (r)| > |C[t]| then
+10:
+continue
+11:
+end if
+12:
+C[t](r) = [ci,k,b[t]]i∈C[t], j=(b,ℓ,k)∈J (r)
+13:
+
+eC⋆[t](r), y⋆(r)
+
+= Hungarian(C[t](r))
+14:
+if the assignment contains an energy-infeasible edge
+then
+15:
+continue
+16:
+end if
+17:
+C⋆[t](r) = Csw
+0 [t] + eC⋆[t](r)
+18:
+bU[t](r) = ωq
+X
+b∈B
+αbrb−λu
+ 
+d[t] −
+X
+b∈B
+rb
+!
+−C⋆[t](r)
+19:
+if bU[t](r) > bU ⋆[t] then
+20:
+bU ⋆[t] = bU[t](r)
+21:
+r⋆[t] = r
+22:
+y⋆[t] = y⋆(r)
+23:
+end if
+24: end for
+25: x⋆[t] = Decode(y⋆[t])
+26: {Ei[t + 1], ai[t]}i∈N
+=
+ExecuteAndUpdate(r⋆[t], x⋆[t])
+27: return r⋆[t], x⋆[t]
+supports inference under limited and time-varying satellite
+resources.
+A. Experimental Setup
+1) Model and Compression Configuration: The model con-
+tains L = 48 MoE layers and is divided into K = 8 balanced
+shards, each containing L/K = 6 consecutive MoE layers. We
+evaluate profiles at four layer-wise parameter retention ratios,
+{βb | b ∈B} = {0.3, 0.4, 0.6, 0.8}.
+We compare three reference allocation methods: Uniform [17]
+assigns the same nominal rank to all experts, Energy [16]
+allocates ranks according to the retained spectral energy of
+the activation-weighted expert matrix, and Frequency [4], [15],
+[36] allocates ranks according to expert activation counts
+during calibration. SCORAS-MoE allocates ranks based on the
+routing-weighted output perturbation measured at the nominal
+rank. All four methods share the calibration inputs, activation-
+aware low-rank factorization, nominal total rank for each layer,
+minimum rank, and procedure for evaluating the full model.
+The comparison therefore measures how the rank allocation
+signal affects accuracy at each parameter retention ratio. Ac-
+curacy is measured on the TextVQA and DocVQA validation
+sets, the AI2D test set, OCRBench, and RealWorldQA. The
+uncompressed model obtains scores of 84.7%, 93.9%, 82.8%,
+68.4%, and 73.6%, respectively, with a mean of 80.7%.
+2) Satellite and Communication Configuration: We con-
+struct a Walker-Delta LEO constellation with N = 60 satellites
+and generate synthetic two-line element sets (TLEs). Satellite
+positions are propagated using the Simplified General Pertur-
+bations 4 (SGP4) model, and illumination is determined using
+the cylindrical Earth-shadow model. The scheduling horizon
+contains T = 24 slots of 300 s. We vary the number of
+requested pipelines over nreq ∈{5, 6, 7, 8, 9}. For each load
+setting, d[t] = nreq for all t ∈T .
+The four SCORAS-MoE profiles have mean accuracies of
+69.9%, 76.1%, 80.7%, and 82.7% for β = 0.3, 0.4, 0.6,
+and 0.8, respectively. The online scheduler uses the corre-
+sponding scores on the 0–100 scale as αb. We measure the
+dynamic inference energy of one representative shard at each
+parameter retention ratio on an NVIDIA GeForce RTX 4060
+Laptop GPU. The resulting per-shard slot energies are 2662.8,
+3146.0, 3922.8, and 4976.8 J for β = 0.3, 0.4, 0.6, and 0.8,
+respectively, and the corresponding value is applied to every
+shard of the same profile.
+Each active shard executes F = 400 forward passes per
+slot, and each modeled onboard inference subsystem con-
+sumes 2 W of idle power. For each satellite, we allocate an
+8 Wh battery-energy budget and up to 25 W of harvested
+solar power to the onboard inference subsystem when the
+satellite is illuminated. These values represent the portions of
+the spacecraft battery capacity and solar-array output made
+available to inference, rather than the capacity and generation
+of the complete satellite. Communication is enforced through
+the hard satellite–ground and inter-satellite link feasibility
+constraints. No separate communication power is added to
+the inference-subsystem energy accounting. We set ωq = 10,
+λu = 300, λd = 30, and λs = 0.01.
+3) Baselines and Metrics: For the deployment comparison,
+all methods use the same SCORAS-MoE profile with fixed
+β = 0.4. We compare SCORAS-MoE against three baselines.
+Greedy sequentially assigns shards to communication-feasible
+satellites by prioritizing sunlight and residual battery energy.
+The (1 + λ) evolutionary algorithm (EA) is initialized from
+the Greedy placement and uses standard parent–offspring
+selection [37]. PPO is initialized from the same placement and
+implemented following the standard framework [38]. EvoX
+is used only as the implementation framework for vectorized
+evaluation of evolutionary candidates [39]. All methods use
+the same workload traces, feasibility rules, and evaluator.
+For
+the
+joint
+compression–deployment
+experiment,
+SCORAS-MoE is compared with Fixed-β = 0.3, Fixed-
+β = 0.4, Fixed-β = 0.6, and Fixed-β = 0.8. These baselines
+use the same communication filtering, energy model, and
+
+
+--- Page 10 ---
+PREPRINT
+10
+0.3
+0.4
+0.6
+0.8
+Retention ratio β
+65
+70
+75
+80
+Mean accuracy (%)
+Uniform
+Energy
+Frequency
+SCORAS-MoE
+Base (uncompressed)
+Fig. 2. Mean accuracy at different parameter retention ratios. The gray dashed
+line denotes the uncompressed base-model mean accuracy of 80.7%.
+assignment method that accounts for switching costs across
+all communication-feasible satellites. They differ in whether
+deployment uses a fixed compression profile or selects its
+profile composition online.
+We report the number of completed pipelines, demand
+fulfillment ratio, inference-induced normalized depth of dis-
+charge (DoD), unmet pipeline demand, the number of ser-
+vice switches, and wall-clock solving time. For profile-
+selection
+experiments,
+we
+additionally
+report
+accuracy-
+weighted throughput, pipeline-weighted mean accuracy, and
+profile counts. We compute accuracy-weighted throughput as
+P
+t∈T
+P
+b∈B(αb/100)rb[t], and pipeline-weighted mean accu-
+racy as P
+t,b αbrb[t]/ P
+t,b rb[t]. A switch is counted whenever
+a satellite’s complete profile–shard state changes between
+consecutive slots. A profile-only change, a shard-only change,
+or a simultaneous profile and shard change is counted once
+for that satellite.
+B. Compression Accuracy at Low Parameter Retention Ratios
+Table II and Fig. 2 show that rank allocation based on output
+perturbation is most beneficial under aggressive compression,
+when the parameter retention ratio is lowest. At β = 0.3,
+SCORAS-MoE achieves a mean accuracy of 69.9%, compared
+with 66.2% for Uniform, 67.4% for Energy, and 66.9% for
+Frequency. At β = 0.4, the corresponding accuracies are
+76.1%, 72.9%, 74.8%, and 74.1%, respectively. Across the
+four retention ratios, SCORAS-MoE achieves the best mean
+score at β = 0.3, β = 0.4, and β = 0.8. At β = 0.6,
+SCORAS-MoE achieves 80.7%, compared with the highest
+mean accuracy of 80.8% achieved by Energy.
+The gains extend across the individual tasks. At β = 0.3,
+SCORAS-MoE achieves the best score on all five benchmarks.
+At β = 0.4, it leads on TextVQA VAL, DocVQA VAL,
+AI2D TEST, and the mean score, while remaining close to
+the best result on OCRBench and RealWorldQA. At β = 0.8,
+the measured mean scores slightly exceed the uncompressed
+model’s mean on this benchmark suite. The larger gains at
+the two lower retention ratios show the benefit of allocating
+ranks according to the output perturbation caused by expert
+compression.
+C. Dynamic Deployment with Fixed β = 0.4
+We evaluate deployment under changing illumination and
+battery states using the same SCORAS-MoE profile at β = 0.4
+for all methods.
+a) Deployment
+performance:
+Figure
+3
+shows
+that
+SCORAS-MoE and Greedy achieve the same throughput at
+nreq = 5 and 6. At nreq = 8 and 9, SCORAS-MoE completes
+160 pipelines versus 152 for Greedy, a 5.3% increase. Across
+the five loads, SCORAS-MoE reduces service switches by
+76.2–82.8% relative to Greedy. At nreq = 9, it also reduces
+inference-induced DoD from 58.68 to 53.88, an 8.2% re-
+duction. The (1 + λ) EA and PPO produce throughput and
+inference-induced DoD close to their Greedy initialization
+across all five loads.
+b) Decision time: We measure the total wall-clock time
+for scheduling over all 24 slots, averaged over the five loads
+nreq = 5–9. Greedy, fixed-profile SCORAS-MoE, the (1 + λ)
+evolutionary algorithm accelerated using EvoX, and PPO take
+0.006, 0.155, 28.517, and 1.352 s, respectively. PPO training
+stops early when it fails to improve the Greedy initialization by
+the required margin within the first five episodes, accounting
+for its short runtime. Fixed-profile SCORAS-MoE is approxi-
+mately 183.5× faster than the evolutionary algorithm and 8.7×
+faster than PPO. Together with the service improvements,
+these results show that the per-slot assignment formulation
+supports rapid deployment decisions as satellite resources
+change.
+D. Joint Benefits of Compression and Adaptive Deployment
+We compare adaptive SCORAS-MoE with four fixed-profile
+baselines using the same placement solver. SCORAS-MoE
+selects among all four profiles in each slot, with a common
+profile used by all eight shards of each complete pipeline.
+Figure
+4
+shows
+that
+adaptive
+composition
+maintains
+accuracy-weighted throughput close to the highest-quality
+fixed profile while substantially reducing inference-induced
+DoD. At nreq = 7, SCORAS-MoE completes 164 pipelines,
+compared with 151 for Fixed-β = 0.8, and reduces unmet de-
+mand from 17 to 4 pipelines. Its accuracy-weighted throughput
+increases by 0.8%, while inference-induced DoD decreases by
+58.9%. At nreq = 5, it retains 97.2% of the accuracy-weighted
+throughput of Fixed-β = 0.8 while reducing DoD by 70.1%.
+The selected composition primarily combines the low-
+energy β = 0.3 profile with the high-quality β = 0.8 profile.
+At nreq = 7, these profiles account for 75 and 86 completed
+pipelines, respectively, with another 3 using β = 0.4. This
+mixture sustains service quality while accommodating energy
+constraints. Beyond this load, completed pipelines, accuracy-
+weighted throughput, and DoD remain unchanged, while un-
+met demand increases to 28 and 52 pipelines at nreq = 8 and
+9, respectively.
+With adaptive profile enumeration enabled, the average total
+solving time is 1.021 s over the same 24-slot horizon and five
+loads. These results show that joint profile selection and shard
+placement support fast deployment decisions.
+
+
+--- Page 11 ---
+PREPRINT
+11
+TABLE II
+COMPRESSION ACCURACY (%) OF QWEN3-VL-30B-A3B-INSTRUCT. THE BEST MEAN ACCURACY AT EACH RETENTION RATIO IS IN BOLD.
+Retention ratio
+Method
+TextVQA VAL
+DocVQA VAL
+AI2D TEST
+OCRBench
+RealWorldQA
+Mean
+Base
+Uncompressed
+84.7
+93.9
+82.8
+68.4
+73.6
+80.7
+0.3
+Uniform
+71.3
+84.0
+53.7
+65.3
+56.9
+66.2
+0.3
+Energy
+73.1
+85.6
+54.1
+68.4
+55.8
+67.4
+0.3
+Frequency
+73.4
+84.8
+50.1
+67.7
+58.4
+66.9
+0.3
+SCORAS-MoE
+77.2
+87.1
+55.1
+69.2
+60.7
+69.9
+0.4
+Uniform
+78.1
+89.1
+65.5
+72.0
+60.0
+72.9
+0.4
+Energy
+78.8
+90.3
+67.1
+76.2
+61.6
+74.8
+0.4
+Frequency
+78.5
+89.8
+63.2
+74.2
+64.6
+74.1
+0.4
+SCORAS-MoE
+80.4
+91.2
+68.3
+76.1
+64.4
+76.1
+0.6
+Uniform
+82.0
+92.8
+80.6
+78.9
+68.6
+80.6
+0.6
+Energy
+82.5
+93.1
+81.1
+79.4
+67.8
+80.8
+0.6
+Frequency
+81.7
+92.8
+74.9
+79.0
+67.6
+79.2
+0.6
+SCORAS-MoE
+83.1
+93.3
+80.4
+79.2
+67.7
+80.7
+0.8
+Uniform
+83.6
+93.4
+83.2
+79.3
+71.8
+82.3
+0.8
+Energy
+83.9
+93.4
+83.4
+79.5
+72.9
+82.6
+0.8
+Frequency
+83.7
+93.2
+81.8
+80.4
+69.9
+81.8
+0.8
+SCORAS-MoE
+83.7
+93.6
+84.4
+80.6
+71.1
+82.7
+5
+6
+7
+8
+9
+nreq
+120
+125
+130
+135
+140
+145
+150
+155
+160
+Completed-pipeline throughput
+Completed-pipeline throughput
+Greedy
+(1+ ) EA
+PPO
+5
+6
+7
+8
+9
+nreq
+20
+30
+40
+50
+60
+Inference-induced DoD
+Inference-induced DoD
+Greedy
+(1+ ) EA
+PPO
+5
+6
+7
+8
+9
+nreq
+100
+200
+300
+400
+500
+600
+700
+800
+Service switches
+Service switches
+Greedy
+(1+ ) EA
+PPO
+SCORAS-MoE
+SCORAS-MoE
+SCORAS-MoE
+Fig. 3.
+Fixed-profile deployment at β = 0.4 for nreq = 5–9. The panels show completed pipelines, inference-induced DoD, and service switches. All
+methods use the same compressed model, workload, satellite states, and feasibility constraints. The (1 + λ) EA uses EvoX.
+5
+6
+7
+8
+9
+nreq
+90
+100
+110
+120
+Fixed- =0.3
+Fixed- =0.4
+Fixed- =0.6
+Fixed- =0.8
+5
+6
+7
+8
+9
+nreq
+20
+40
+60
+80
+100
+Inference-induced DoD
+Inference-induced DoD
+Fixed- =0.3
+Fixed- =0.4
+Fixed- =0.6
+Fixed- =0.8
+5
+6
+7
+8
+9
+nreq
+0
+10
+20
+30
+40
+50
+60
+Unmet requests
+Unmet requests
+Fixed- =0.3
+Fixed- =0.4
+Fixed- =0.6
+Fixed- =0.8
+Adaptive SCORAS-MoE
+Adaptive SCORAS-MoE
+Adaptive SCORAS-MoE
+Accuracy-weighted throughput
+Accuracy-weighted throughput
+Fig. 4. Adaptive SCORAS-MoE profile composition versus four fixed-profile baselines for nreq = 5–9. The panels report accuracy-weighted throughput as
+defined in Section VI, inference-induced DoD, and unmet requests.
+E. Ablation Study
+We ablate three components of SCORAS-MoE: the com-
+munication candidate filter, the service-switching cost in the
+assignment, and the unmet-demand penalty. All variants use
+the measured β = 0.4 profile, K = 8 shards with six MoE
+layers per shard, F = 400 forward passes per active shard per
+
+
+--- Page 12 ---
+PREPRINT
+12
+TABLE III
+ABLATION RESULTS UNDER THE MEASURED β = 0.4 PROFILE WITH
+F = 400 FORWARD PASSES PER ACTIVE SHARD PER SLOT. METRICS ARE
+COMPUTED OVER T = 24 SLOTS. TP DENOTES THE NUMBER OF
+COMPLETED PIPELINES.
+nreq
+Variant
+TP
+Fill (%)
+DoD
+Unmet
+Switches
+5
+Core
+120
+100.00
+14.18
+0
+152
+5
+w/o comm. candidate filter
+110
+91.67
+13.89
+10
+144
+5
+w/o switching cost
+120
+100.00
+14.13
+0
+403
+5
+w/o unmet penalty
+107
+89.17
+0.00
+13
+163
+6
+Core
+144
+100.00
+30.36
+0
+124
+6
+w/o comm. candidate filter
+134
+93.06
+28.58
+10
+118
+6
+w/o switching cost
+144
+100.00
+30.33
+0
+430
+6
+w/o unmet penalty
+111
+77.08
+0.02
+33
+170
+7
+Core
+160
+95.24
+53.88
+8
+178
+7
+w/o comm. candidate filter
+151
+89.88
+54.09
+17
+155
+7
+w/o switching cost
+159
+94.64
+52.05
+9
+595
+7
+w/o unmet penalty
+111
+66.07
+0.02
+57
+170
+8
+Core
+160
+83.33
+53.88
+32
+178
+8
+w/o comm. candidate filter
+151
+78.65
+54.09
+41
+155
+8
+w/o switching cost
+159
+82.81
+52.05
+33
+595
+8
+w/o unmet penalty
+111
+57.81
+0.02
+81
+170
+9
+Core
+160
+74.07
+53.88
+56
+178
+9
+w/o comm. candidate filter
+151
+69.91
+54.09
+65
+155
+9
+w/o switching cost
+159
+73.61
+52.05
+57
+595
+9
+w/o unmet penalty
+111
+51.39
+0.02
+105
+170
+slot, and the same evaluator.
+Table III shows that removing the communication candidate
+filter reduces the number of completed pipelines from 120–160
+to 110–151 and results in 10–65 unmet requests. Without this
+filter, all 60 satellites enter the assignment candidate set even
+when some do not satisfy the communication requirements.
+Removing the service-switching cost from the assignment
+changes throughput by at most one pipeline but increases
+service switches from 124–178 to 403–595, corresponding to
+an increase of 165.1–246.8%. Removing the unmet-demand
+penalty causes the scheduler to conserve battery energy at the
+expense of service: the number of completed pipelines falls to
+107–111, while unmet demand increases to 13–105.
+The ablations identify how the three mechanisms support
+dynamic deployment: communication filtering provides fea-
+sible assignment candidates, the switching cost stabilizes de-
+ployment across slots, and the unmet-demand penalty balances
+energy conservation with service fulfillment.
+VII. CONCLUSION
+Onboard VLM inference reduces raw-data downlink but
+must operate with limited and dynamic resources. SCORAS-
+MoE combines compression with distributed deployment to
+accommodate limited per-satellite capacity, and uses online
+scheduling to adapt to resource changes. Offline rank alloca-
+tion based on output perturbation produces model profiles for
+different parameter retention ratios. Online profile enumeration
+and minimum-cost assignment jointly select the composition
+and shard placement, achieving the per-slot optimum.
+Experiments on Qwen3-VL-30B-A3B-Instruct show that
+this rank allocation is particularly effective under aggressive
+compression. At β = 0.3, SCORAS-MoE achieves a mean
+accuracy of 69.9%, compared with 66.2% for uniform rank
+allocation. The deployment solver increases throughput, re-
+duces battery impact and switching, and requires less compu-
+tation time than the evaluated PPO and evolutionary baselines.
+Adaptive profile selection further improves the quality–energy
+balance over fixed-profile deployment, demonstrating the ben-
+efit of combining compression with fast deployment decisions.
+Future work will extend the framework to heterogeneous
+onboard computing platforms and latency-aware deployment
+in larger constellations.
+REFERENCES
+[1] Z. Li, J. Yang, Y. Zhang, Z. Chen, and Y. Gao, “Enabling near-
+realtime remote sensing via satellite–ground collaboration of large
+vision–language models,” in Proceedings of the 2026 ACM/IEEE
+International Conference on Embedded Artificial Intelligence and
+Sensing Systems, ser. SenSys ’26.
+New York, NY, USA: Association
+for Computing Machinery, 2026, pp. 718–731. [Online]. Available:
+https://doi.org/10.1145/3774906.3800497
+[2] J.
+M.
+D.
+Victoria,
+T.
+C.
+John,
+and
+A.
+W.
+Herson,
+“NAVI-
+Orbital: First in-orbit demonstration of a zero-shot vision-language
+model for autonomous Earth observation,” 2026. [Online]. Available:
+https://arxiv.org/abs/2606.18271
+[3] S. Bai, Y. Cai, R. Chen et al., “Qwen3-VL technical report,” 2025.
+[Online]. Available: https://arxiv.org/abs/2511.21631
+[4] Y. Chen, Y. Shao, P. Wang, and J. Cheng, “EAC-MoE: Expert-selection
+aware compressor for mixture-of-experts large language models,”
+in Proceedings of the 63rd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers), W. Che,
+J. Nabende, E. Shutova, and M. T. Pilehvar, Eds.
+Vienna, Austria:
+Association for Computational Linguistics, Jul. 2025, pp. 12 942–12 963.
+[Online]. Available: https://aclanthology.org/2025.acl-long.633/
+[5] Z. Xie, Y. Ma, X. Zheng et al., “Automated fine-grained mixture-of-
+experts quantization,” in Findings of the Association for Computational
+Linguistics:
+ACL
+2025,
+W.
+Che,
+J.
+Nabende,
+E.
+Shutova,
+and
+M. T. Pilehvar, Eds.
+Vienna, Austria: Association for Computational
+Linguistics, Jul. 2025, pp. 27 024–27 037. [Online]. Available: https:
+//aclanthology.org/2025.findings-acl.1386/
+[6] H. Qi, R. Zhuo, B. Shi et al., “Profiling-free mixed-precision
+quantization
+for
+MoE
+LLMs
+via
+fuzzy
+rule
+interpolation,”
+in
+Proceedings of the 64th Annual Meeting of the Association for
+Computational Linguistics (Volume 1: Long Papers), M. Liakata, V. P.
+Moreira, J. Zhang, and D. Jurgens, Eds.
+San Diego, California, United
+States: Association for Computational Linguistics, Jul. 2026, pp. 21 484–
+21 499. [Online]. Available: https://aclanthology.org/2026.acl-long.982/
+[7] X. Lu, Q. Liu, Y. Xu et al., “Not all experts are equal: Efficient
+expert pruning and skipping for mixture-of-experts large language
+models,” in Proceedings of the 62nd Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Papers), L.-W. Ku,
+A. Martins, and V. Srikumar, Eds.
+Bangkok, Thailand: Association
+for Computational Linguistics, Aug. 2024, pp. 6159–6172. [Online].
+Available: https://aclanthology.org/2024.acl-long.334/
+[8] H. Duanmu, X. Li, Z. Yuan et al., “MxMoE: Mixed-precision
+quantization for MoE with accuracy and performance co-design,” in
+Proceedings of the 42nd International Conference on Machine Learning,
+ser. Proceedings of Machine Learning Research, A. Singh, M. Fazel,
+D. Hsu et al., Eds., vol. 267. PMLR, 13–19 Jul 2025, pp. 14 793–14 806.
+[Online]. Available: https://proceedings.mlr.press/v267/duanmu25a.html
+[9] J. Deng, S. Wang, D. Wang et al., “GEMQ: Global expert-level mixed-
+precision quantization for MoE LLMs,” 2026. [Online]. Available:
+https://arxiv.org/abs/2605.23078
+[10] S. Yao, Y. Lin, M. Wang et al., “LEOEdge: A satellite-ground cooper-
+ation platform for the AI inference in large LEO constellation,” IEEE
+Journal on Selected Areas in Communications, vol. 43, no. 1, pp. 36–50,
+2025.
+[11] W. Fan, Q. Meng, G. Wang, H. Bian, Y. Liu, and Y. Liu, “Satellite
+edge intelligence: DRL-based resource management for task inference in
+LEO-based satellite-ground collaborative networks,” IEEE Transactions
+on Mobile Computing, vol. 24, no. 10, pp. 10 710–10 728, 2025.
+[12] Y. Chen, Q. Zhang, R. Xing et al., “SLICE: Energy-efficient satellite-
+ground co-inference via layer-wise scheduling optimization,” IEEE
+Transactions on Services Computing, vol. 18, no. 4, pp. 2388–2402,
+2025.
+
+
+--- Page 13 ---
+PREPRINT
+13
+[13] W.
+Liu,
+Z.
+Lai,
+Q.
+Wu
+et
+al.,
+“In-orbit
+processing
+or
+not?
+Sunlight-aware
+task
+scheduling
+for
+energy-efficient
+space
+edge
+computing networks,” in IEEE INFOCOM 2024 – IEEE Conference
+on
+Computer
+Communications,
+2024.
+[Online].
+Available:
+https:
+//arxiv.org/abs/2407.07337
+[14] Y. Shi, J. Zhu, C. Jiang, L. Kuang, and K. B. Letaief, “Satellite edge
+artificial intelligence with large models: Architectures and technologies,”
+Science China Information Sciences, vol. 68, p. 170302, 2025.
+[15] W.
+Huang,
+Y.
+Liao,
+J.
+Liu
+et
+al.,
+“Mixture
+compressor
+for
+mixture-of-experts LLMs gains more,” in The Thirteenth International
+Conference on Learning Representations, 2025. [Online]. Available:
+https://openreview.net/forum?id=hheFYjOsWO
+[16] W.
+Li,
+L.
+Li,
+H.
+Gu
+et
+al.,
+“MoE-SVD:
+Structured
+mixture-
+of-experts LLMs compression via singular value decomposition,”
+in Proceedings of the 42nd International Conference on Machine
+Learning,
+ser.
+Proceedings
+of
+Machine
+Learning
+Research,
+vol.
+267.
+PMLR, 2025, pp. 35 209–35 230. [Online]. Available: https:
+//proceedings.mlr.press/v267/li25az.html
+[17] S. Gao, T. Hua, Y.-C. Hsu, Y. Shen, and H. Jin, “Adaptive rank selections
+for low-rank approximation of language models,” in Proceedings of the
+2024 Conference of the North American Chapter of the Association for
+Computational Linguistics: Human Language Technologies (Volume 1:
+Long Papers), K. Duh, H. Gomez, and S. Bethard, Eds.
+Mexico City,
+Mexico: Association for Computational Linguistics, Jun. 2024, pp. 227–
+241. [Online]. Available: https://aclanthology.org/2024.naacl-long.13/
+[18] N.
+Muennighoff,
+L.
+Soldaini,
+D.
+Groeneveld
+et
+al.,
+“OLMoE:
+Open mixture-of-experts language models,” 2025. [Online]. Available:
+https://arxiv.org/abs/2409.02060
+[19] Y. Zhong, S. Liu, J. Chen et al., “DistServe: Disaggregating prefill and
+decoding for goodput-optimized large language model serving,” in 18th
+USENIX Symposium on Operating Systems Design and Implementation
+(OSDI 24).
+Santa Clara, CA: USENIX Association, Jul. 2024,
+pp. 193–210. [Online]. Available: https://www.usenix.org/conference/
+osdi24/presentation/zhong-yinmin
+[20] P. Patel, E. Choukse, C. Zhang et al., “Splitwise: Efficient generative
+LLM inference using phase splitting,” in 2024 ACM/IEEE 51st Annual
+International Symposium on Computer Architecture (ISCA), 2024, pp.
+118–132.
+[21] B. Sun, Z. Huang, H. Zhao et al., “Llumnix: Dynamic scheduling
+for large language model serving,” in 18th USENIX Symposium on
+Operating Systems Design and Implementation (OSDI 24). Santa Clara,
+CA: USENIX Association, Jul. 2024, pp. 173–191. [Online]. Available:
+https://www.usenix.org/conference/osdi24/presentation/sun-biao
+[22] K. Kamahori, T. Tang, Y. Gu, K. Zhu, and B. Kasikci, “Fiddler: CPU-
+GPU orchestration for fast inference of mixture-of-experts models,” in
+International Conference on Learning Representations, Y. Yue, A. Garg,
+N. Peng, F. Sha, and R. Yu, Eds., vol. 2025, 2025, pp. 56 099–56 115.
+[Online]. Available: https://proceedings.iclr.cc/paper files/paper/2025/
+file/8cd1ce03ea58b3d7dfd809e4d42f08ea-Paper-Conference.pdf
+[23] C. Lei, S. Wu, Y. Yang et al., “Joint partitioning, allocation, and trans-
+mission optimization for federated learning in satellite constellations via
+multi-task MARL,” IEEE Transactions on Mobile Computing, vol. 24,
+no. 10, pp. 10 345–10 362, 2025.
+[24] H. Wu, X. Yang, and Z. Bu, “Task offloading with service migration
+for satellite edge computing: A deep reinforcement learning approach,”
+IEEE Access, vol. 12, pp. 25 844–25 856, 2024.
+[25] Z. Li, X. Zhu, C. Liu et al., “Dynamic task scheduling optimization
+by rolling horizon deep reinforcement learning for distributed satellite
+system,” Expert Systems with Applications, vol. 289, p. 128350, 2025.
+[Online]. Available: https://www.sciencedirect.com/science/article/pii/
+S0957417425019694
+[26] J. Zhou, J. Liang, L. Zhao, S. Wan, H. Cai, and F. Xiao, “Latency-
+energy efficient task offloading in the satellite network-assisted edge
+computing via deep reinforcement learning,” IEEE Transactions on
+Mobile Computing, vol. 24, no. 4, pp. 2644–2659, 2025.
+[27] W. Yao, X. Shen, G. Zhang et al., “A spiking neural network based
+proximal policy optimization method for multi-point imaging mission
+scheduling of Earth observation satellite,” Swarm and Evolutionary
+Computation, vol. 94, p. 101867, 2025. [Online]. Available: https:
+//www.sciencedirect.com/science/article/pii/S2210650225000252
+[28] H. Hu, K. Song, C. Zhan, R. Fan, and J. Yang, “Joint service caching and
+resource allocation over different timescales in satellite edge computing
+networks,” IEEE Transactions on Mobile Computing, vol. 24, no. 7, pp.
+5649–5664, 2025.
+[29] S. Ahmad, H. Guan, and R. K. Sitaraman, “Loki: A system for
+serving ML inference pipelines with hardware and accuracy scaling,” in
+Proceedings of the 33rd International Symposium on High-Performance
+Parallel and Distributed Computing, ser. HPDC ’24.
+New York,
+NY, USA: Association for Computing Machinery, 2024, pp. 267–280.
+[Online]. Available: https://doi.org/10.1145/3625549.3658688
+[30] M. B. Elgersma, G. Morales-Espa˜na, K. I. Aardal, N. Helist¨o, J. Kivilu-
+oma, and M. M. de Weerdt, “Tight MIP formulations for optimal oper-
+ation and investment of storage including reserves,” IEEE Transactions
+on Power Systems, vol. 41, no. 4, pp. 2428–2440, 2026.
+[31] N. Razmi, B. Matthiesen, R. Teodorescu, A. Dekorsy, and P. Popovski,
+“Satellite battery lifetime extension via scheduling of onboard comput-
+ing and energy harvesting,” IEEE Access, vol. 14, pp. 13 025–13 040,
+2026.
+[32] W. L. Yen, R. G. Littlefield, D. R. McLean, A. Tuchman, T. A.
+Broseghini, and B. J. Page, “A battery power model for the EUVE
+spacecraft,” in Proceedings of the 9th AIAA Computing in Aerospace
+Conference, 1993, AIAA Paper 93-4638.
+[33] S. Miller, B. T. Klefman, S. Korn, T. Nowden, A. M. Delleur,
+and D. McKissock, “The SPACE computer code for analyzing
+the
+International
+Space
+Station
+electrical
+power
+system:
+Past,
+present,
+and
+future,”
+in
+2018
+International
+Energy
+Conversion
+Engineering Conference.
+Cincinnati, Ohio: American Institute of
+Aeronautics and Astronautics, Jul. 2018. [Online]. Available: https:
+//arc.aiaa.org/doi/10.2514/6.2018-4635
+[34] X. Wang, Y. Zheng, Z. Wan, and M. Zhang, “SVD-LLM: Truncation-
+aware singular value decomposition for large language model compres-
+sion,” in International Conference on Learning Representations, 2025.
+[35] X. Wang, S. Alam, Z. Wan, H. Shen, and M. Zhang, “SVD-LLM
+V2: Optimizing singular value truncation for large language model
+compression,” in Proceedings of the 2025 Conference of the Nations of
+the Americas Chapter of the Association for Computational Linguistics,
+2025, pp. 4287–4296.
+[36] P. Li, Z. Zhang, P. Yadav et al., “Merge, then compress: Demystify
+efficient SMoE with hints from its routing policy,” in International
+Conference on Learning Representations, B. Kim, Y. Yue, S. Chaudhuri,
+K. Fragkiadaki, M. Khan, and Y. Sun, Eds., vol. 2024, 2024, pp. 14 234–
+14 256. [Online]. Available: https://proceedings.iclr.cc/paper files/paper/
+2024/file/3d09a88c3372cdb79401fde592ca4db8-Paper-Conference.pdf
+[37] L. Kazakovtsev, I. Rozhnov, and V. Kazakovtsev, “A (1+ λ) evolutionary
+algorithm with the greedy agglomerative mutation for p-median prob-
+lems,” in AIP Conference Proceedings, vol. 2700, no. 1. AIP Publishing
+LLC, 2023, p. 040003.
+[38] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov,
+“Proximal policy optimization algorithms,” 2017. [Online]. Available:
+https://arxiv.org/abs/1707.06347
+[39] B. Huang, R. Cheng, Z. Li, Y. Jin, and K. C. Tan, “EvoX: A distributed
+GPU-accelerated framework for scalable evolutionary computation,”
+2024. [Online]. Available: https://arxiv.org/abs/2301.12457

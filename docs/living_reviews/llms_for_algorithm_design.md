@@ -1,10 +1,301 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-09-10
+**Last Updated:** 2026-11-24
 
 ---
 
 ## Recent Papers
+
+#### 2026-11-24 — backfill of papers missed 2026-08-30 to 2026-11-10 (36 papers)
+
+### [AutoAssumption: Searching over Assumptions Discovers ML-Systems Algorithms](https://arxiv.org/abs/2611.14844)
+
+**2026-11-10** | MIT CSAIL | M=8 P=7 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* LLM harness that formalizes published algorithms as Lean-checked proof graphs (assumptions/definitions/theorems), then relaxes one assumption at a time, re-derives and re-proves only the impact set, and generates code before benchmarking | *LLM role:* heuristic_generator
+
+> Sadalski et al. formalize 89 ML-systems algorithms as Lean-checked proof graphs with explicit assumptions, then use an LLM harness to relax one assumption at a time, re-derive only the affected proof statements, and generate new code. The results are backed by substantial benchmarking: their discovered variants achieve state-of-the-art RULER-4K scores for KV-cache eviction and lowest WikiText-2 perplexity for weight pruning, and at equal budget the harness scores within 0.4 points of OpenEvolve with much lower variance across repeats. The key insight is that treating assumptions as the searchable unit, rather than raw code edits, makes each design change attributable, reproducible, and checkable via proof, which improves search stability and interpretability. For LLM evolutionary search, this suggests incorporating assumption-level proof graphs as a structured search space could complement or improve code-level evolution, especially where correctness is critical. The work is relevant because it directly competes with AlphaEvolve-style code search and offers a practical blueprint for proof-guided algorithm discovery.
+
+### [SwarmEvolve: Latent Agent Swarms for Evolutionary Discovery and Optimization](https://arxiv.org/abs/2611.08483)
+
+**2026-11-05** | Brown University | M=8 P=9 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Evolutionary program search where 10 swarms of 45 latent-reasoning LLM agents (450/round) reason in embedding space for 40 steps, communicate via concatenated KV caches (RoPE-rotated) to a summarizer that writes programs; greedy farthest-point novelty filter in latent space keeps 30/45 agents | *LLM role:* evolutionary_search
+
+> SwarmEvolve replaces text-based reasoning in LLM-guided evolution with 450 latent agents per round that reason in embedding space and pass KV caches; a latent farthest-point novelty filter selects diverse trajectories, and summarizer agents decode candidate programs. On 21 mathematical discovery and scientific computing problems, it achieves higher mean scores than OpenEvolve, ShinkaEvolve, and CodeEvolve across Qwen3 8B/14B/32B-FP8, reaches their 60-minute best scores in 3-8 minutes, and with Qwen3 8B improves several AlphaEvolve constructions. Results are backed by three seeds per problem, ablations replacing latent steps with text, and exact-constraint re-evaluation. The key transferable insight is that latent reasoning and KV-cache concatenation provide built-in diversity and crossover at much lower cost than text, with novelty filtering done directly on hidden states. This is a significant scalability improvement for LLM evolutionary search.
+
+### [SpecPilot: Autonomous Algorithm Discovery and Systems Optimization for Speculative Decoding](https://arxiv.org/abs/2611.02501)
+
+**2026-11-02** | UC Berkeley, Princeton, Stanford, NVIDIA | M=8 P=7 I=8 **MUST-READ** *discuss*
+
+*Method:* Ceiling-guided agentic optimization loop: cost model decomposes speedup into tau/kernel/overhead factors, parallel sub-agents implement patches per GPU, controller promotes only statistically significant gains, token forcing validates losslessness | *LLM role:* research_agent
+
+> SpecPilot applies an autonomous, ceiling-guided agentic loop to optimize speculative decoding per deployment. It decomposes speedup into token acceptance, kernel, and overhead factors, then parallel sub-agents implement patches, a controller promotes statistically significant gains, and token forcing rejects lossy changes; validated mechanisms persist in structured memory across deployments. Results are backed by paired runs on 4 target models, 3 drafters, 2 GPUs, and 5 benchmarks, raising speedup over AR from stock 4.46x to 10.87x single-request and 1.94x to 3.93x batched, with clear ablation against a single-agent loop. The key transferable insight is ceiling-guided search: explicitly estimate the largest performance gap at each round to redirect evolutionary exploration, and use stock-calibrated token forcing as a robust reward-hacking filter. This matters for LLM evolutionary search and systems optimization because it demonstrates how to scale agentic discovery beyond toy problems with reliable evaluation and memory reuse.
+
+### [Dream-COP: Guiding Algorithm Discovery for Combinatorial Optimization Problems in an Experience World](https://arxiv.org/abs/2610.36618)
+
+**2026-10-27** | Singapore Management University, University of Science and Technology of China, Eindhoven University of Technology, Central South University | M=8 P=8 I=8 *discuss*
+
+*Method:* LLM-based algorithm discovery where a policy agent proposes executable Python search policies (branch/stop/allocation controllers) evaluated by replay over recorded historical search trees (experience world), selecting the policy with best replay reward Q5 - lambda*A | *LLM role:* heuristic_generator
+
+> Dream-COP learns executable search policies by replaying recorded LLM algorithm-discovery trajectories, using a replay objective that balances top-five solution quality against search steps. Reported results show consistent improvements over fixed exploration across five COPs (e.g., OBPP gap 2.112% to 1.199% with 42.5% fewer requests; TSP gap 17.65% to 11.60% with 13.75% fewer requests), and ablations support replay-based selection. The key insight is that historical search trees can act as an experience world where candidate search policies are evaluated cheaply without new program generation or evaluation, making the exploration rule itself an object of discovery. This is directly relevant to sample-efficient LLM evolutionary search and suggests a reusable component for search budget allocation, though no code is released and some transfer/ablation experiments are small.
+
+### [Agentic Algorithm Design: LLMs that Propose, Formalise, and Prove Runtime Bounds for Evolutionary Algorithms in Lean](https://arxiv.org/abs/2610.35595)
+
+**2026-10-27** | University of Birmingham | M=7 P=6 I=6 **MUST-READ** *discuss*
+
+*Method:* Staged LLM pipeline (28 stages) with Lean 4 proof guards: informal design proposals, formalisation of algorithm tuple (Y,init,step,query), potential function design, drift-certificate proofs, and final runtime bound E[TA]<=4/(eps*p) via additive drift theorem | *LLM role:* heuristic_generator
+
+> Lehre presents a staged LLM pipeline that designs black-box optimisation algorithms and proves expected-runtime bounds in Lean, with no empirical evaluation. Across 8 problem classes, 12/15 frontier-model runs completed, yielding e.g. an O(n^2) algorithm for CYCLEUNCOVER where (1+1) EA is exponential, and O(n^2+2c) for integer-valued submodular minimisation. The key insight is that formal proof obligations can act as guards to filter flawed designs and produce guaranteed performance, rather than relying on noisy empirical benchmarks. This matters for LLM algorithm design as a potential new paradigm, though the bounds are loose and the search space is restricted to bitstrings.
+
+### [Improving VLMs on Scientific Chart Analysis via Autonomous Evolution](https://arxiv.org/abs/2610.35077)
+
+**2026-10-26** | UC Santa Cruz, Airbnb | M=7 P=5 I=6 
+
+*Method:* Autonomous evolution (AlphaEvolve/FunSearch-style) over executable Python inference programs: LLM mutator with failure-aware edits, static validator, exact-match evaluator, population pool of 10 with tournament selection and best-by-holdout saving | *LLM role:* code_writer
+
+> This paper evolves the Python inference program around frozen VLMs (system prompt, token budgets, post-processing) using an AlphaEvolve-style loop with an LLM mutator, static validator, exact-match evaluator, and best-by-holdout selection. Across 3 models and 4 chart-QA benchmarks, descriptive exact match improves from 16.6% to 41.3% mean, with the largest gain 55.2 points on Qwen3-VL-2B/ChartQA and a 3.8x throughput increase for the fastest variant. The results are numerically strong but based on single runs per setting with small training windows and no significance tests, and most gains recover formatting/verbosity failures rather than perceptual errors. The key transferable idea is to treat the entire inference program as the evolutionary unit, with cheap static validation before expensive GPU evaluation and best-by-holdout selection to reduce overfitting; this is directly relevant to LLM evolutionary search practitioners optimizing deployed pipelines.
+
+### [TGR-EvoDAG: A DAG-based Multi-Agent Code Evolution Framework for Generative Recommendation on Tencent](https://arxiv.org/abs/2610.32326)
+
+**2026-10-23** | Tencent, Hong Kong Polytechnic University, McGill University | M=7 P=4 I=7 
+
+*Method:* Multi-agent LLM code evolution over a Code DAG with EXPLORE/MUTATE/MERGE operators, stage-aware GPU-hour cost planning, and active downstream co-adaptation | *LLM role:* evolutionary_search
+
+> TGR-EvoDAG evolves a complete generative recommendation pipeline using a Code DAG with EXPLORE/MUTATE/MERGE operators, stage-aware GPU-hour cost planning, and active downstream co-adaptation. It reports up to 37.4% offline metric improvement over APAO and a statistically significant 0.40% online CTR gain in a 14-day A/B test, with strong baselines including AlphaEvolve, Arbor, and Self-EvolveRec. The key insight is that stage-aware cost planning and retaining temporarily regressed upstream edits for later downstream adaptation address structural issues in multi-stage pipeline evolution—potentially useful for LLM evolutionary search over cascaded training or expensive evaluation stages. However, the domain is far from algorithm discovery/OR, and the lack of code release limits direct adoption.
+
+### [Directing to Diversify: Multi-Directional Search for Automatic Heuristic Design](https://arxiv.org/abs/2610.31048)
+
+**2026-10-22** | Singapore Management University, Nanyang Technological University, University of Zurich, ETH Zurich, Eindhoven University of Technology, A*STAR | M=8 P=8 I=7 *discuss*
+
+*Method:* Multi-directional Perturbation-Rewrite Search (PRS): LLM perturbs heuristic idea (expansion/compression/steering), then rewrites parent code into kappa executable offspring, organized in bounded BFS with softmax frontier selection, UCB adaptive operator control, and stagnation-aware elite restart + operator reheating | *LLM role:* heuristic_generator
+
+> Zhu et al. propose PRS, an LLM-based automatic heuristic design method that applies three directional idea-level perturbations—expansion, compression, and steering—before rewriting code, organized in bounded BFS with UCB operator selection and stagnation restart. On CVRP, KP, OBPP, TSP, and FSSP, PRS reduces optimality gaps relative to MCTS-AHD and EoH, e.g., CVRP-50 0.79% vs 1.54%, KP-100 0.02% vs 0.05%, with statistical significance and strong OOD generalization, while using fewer LLM queries than MCTS-AHD. The key insight is that deliberately diversifying heuristic structure at the idea level along complementary semantic directions sustains exploration better than generic EC-style mutation. This directly informs LLM evolutionary search over code: the expansion/compression/steering decomposition is a simple, transferable primitive worth testing in other program-synthesis pipelines.
+
+### [Operator Packages, Proposer Strength, and Construction-Family Plateaus in Office-Scale Verified Search](https://arxiv.org/abs/2609.29636)
+
+**2026-10-22** | Independent researcher | M=7 P=6 I=6 *discuss*
+
+*Method:* Minimal FunSearch-style evolutionary loop (K islands, bounded elites, migration every 3rd generation, sandboxed verifier scoring) with a 2^3 factorial of prompt-side operator packages: schematic notebook memory, named-obstacle agenda, and behavioural repulsion (construction-hash duplicate rejection + forbidden list) | *LLM role:* heuristic_generator
+
+> Ono Filho instruments a minimal FunSearch-style loop with a 2^3 factorial of proposer-side operator packages—schematic notebook memory, obstacle agenda, behavioral repulsion—across nine construction problems. Results are real but modest: the full composition improves gap-closed by +0.196 (nominal p=0.023, but stage-combination p≈0.08), repulsion raises construction-hash diversity in eight of nine problems, and memory+repulsion is the only arm that never collapses; however no per-term effect survives correction at n=9. Key insight: memory and repulsion compose additively, with memory providing collapse insurance rather than superadditive gain, and a frontier proposer reaches similar plateaus with ~20x fewer samples, suggesting proposer strength dominates operator tweaks at office scale. This matters for LLM evolutionary search as a reproducible, pre-registered ablation of operator-level interventions and a caution that gains may be local-proposer phenomena; the released code and data make the findings actionable.
+
+### [ExpEvolve: Structuring and Reusing Experience for Open-Ended Discovery](https://arxiv.org/abs/2610.29303)
+
+**2026-10-21** | MBZUAI, Carnegie Mellon University, Hong Kong Baptist University, The Chinese University of Hong Kong, University of Sydney | M=8 P=8 I=8 *discuss*
+
+*Method:* Evolutionary coding agent (SCS backbone) augmented with LLM-discovered idea factors: pairwise ridge ranker over idea annotations, unexplained-pair-driven factor proposal, soft-UCB multi-armed bandit over ADD/REMOVE/SET idea actions, plateau-triggered background probing and masking | *LLM role:* heuristic_generator
+
+> ExpEvolve augments an SCS-style evolutionary coding agent with LLM-discovered high-level 'idea factors' that explain score differences between programs, then uses a soft-UCB bandit over ADD/REMOVE/SET actions to exploit them while maintaining random and plateau-triggered exploration. Across 11 mathematical discovery tasks and 6 MLS-Bench tasks, it reports better final scores than SCS and ShinkaEvolve, with 1.7-26.2x fewer evaluations on selected tasks, and transfers across four LLMs. The core transferable insight is to structure memory as semantically meaningful binary/categorical factors learned from unexplained pairwise score contrasts, rather than program-level summaries, and to allocate mutation budget via a bandit over those factors. Results are numerically reported but based on 3 seeds with no significance tests or code release, so they are promising rather than definitive. It matters for LLM evolutionary search because it directly addresses sample efficiency and experience reuse, two central bottlenecks in open-ended discovery.
+
+### [FreeEvolve: Learning to Evolve Beyond Fixed Loops](https://arxiv.org/abs/2610.09197)
+
+**2026-10-21** | AWS AI Labs, Georgia Institute of Technology | M=8 P=7 I=8 **MUST-READ** *discuss*
+
+*Method:* Claude Code agent invoked once with an editable markdown 'evolution skill' that autonomously controls the whole improvement campaign (task selection, repetitions, concurrency, timeouts, branching, stopping); the skill itself is meta-evolved by an outer evolver that scores candidate skills by the workers their full campaigns produce | *LLM role:* evolutionary_search
+
+> FREEEVOLVE replaces fixed search loops in LLM-driven agent harness evolution with an evolver that autonomously controls task selection, evaluation repetitions, branching, and stopping, guided by an editable markdown skill; an outer meta-evolver improves that skill by judging it on the workers its full campaigns produce. Across four benchmarks, the meta-evolved skill improves held-out metrics by 2.2 to 13.8 points over the seed and matches or exceeds hand-designed evolvers on six of seven metrics, with ablations and traces supporting adaptive resource allocation and token efficiency. The key transferable idea is treating the evolution campaign policy itself as an evolvable artifact and meta-evolving it via full inner runs, which could be applied to LLM evolutionary search frameworks beyond agent harnesses. Results are credible but based on single search runs with no significance testing and no public code yet, and transfer degrades on dissimilar hardware. For this research area, it is a strong direction-setting preprint rather than an immediate recipe.
+
+### [SpecEvo: Speculative Evolution with Large Language Models for Cost-Efficient Scientific Discovery](https://arxiv.org/abs/2610.28706)
+
+**2026-10-20** | National University of Singapore, Hanoi University of Science and Technology | M=7 P=8 I=7 *discuss*
+
+*Method:* Asynchronous multi-LLM evolutionary search (speculate-then-consolidate): parallel lightweight Speculators with MAP-Elites archive (AST+description PCA descriptors, periodic refit), stagnation-adaptive Zipf parent sampling, six variation prompts, lightweight Advisor producing rolling guidance, and sparse frontier Navigator selecting synthesis/surgical/reframe | *LLM role:* evolutionary_search
+
+> SPECEVO coordinates lightweight parallel Speculators, a lightweight Advisor, and sparse frontier-model Navigator interventions by consolidating trajectory evidence from successes, failures, and saturated niches. Across 176 tasks spanning mathematics, systems optimization, combinatorial optimization, and scientific equation discovery, it matches or outperforms frontier-only and cost-efficient baselines while reducing API cost by 50–80% and improving the strongest CO-Bench baseline by 3.8%. Results are backed by three runs, bootstrap confidence intervals, and matched-budget comparisons. The key transferable idea is using rolling, failure-grounded guidance and a stagnation signal to select among synthesis, surgical repair, and reframing at sparse checkpoints, with stochastic guidance injection to avoid herding. This is directly relevant to improving sample and cost efficiency in LLM evolutionary search.
+
+### [Beyond Experience: Knowledge-Guided Evolution for NPU Kernel Generation](https://arxiv.org/abs/2610.27588)
+
+**2026-10-20** | Shenzhen Loop Area Institute, CUHK-Shenzhen, Shanghai Jiao Tong University, Guangzhou University, Southwestern University of Finance and Economics | M=6 P=5 I=7 *discuss*
+
+*Method:* Knowledge-grounded two-stage evolutionary LLM agent: hierarchical demand-driven retrieval (route/filter/read) over versioned platform KB + per-operator KB, tree-based exploration of M mechanism-distinct lines with planner/coder/debugger/evaluator roles, then mechanism-level crossover with KB compatibility check | *LLM role:* code_writer
+
+> AscendEvolve grounds LLM evolutionary kernel generation in a version-aware external knowledge base (platform docs, headers, vendor libraries) using hierarchical demand-driven retrieval, then evolves mechanism-distinct implementation lines with tree exploration and mechanism-level crossover. On 53 Ascend C operators, it reports 71.39 overall score (+11.6% over Reflexion, +17.2% over OpenEvolve), with ablation showing the knowledge base nearly doubles L3 score; results are real but single-run with no variance and no code release. The key insight is that external knowledge can overcome 'experience closure' in LLM evolutionary search: version-checked retrieval seeds mechanisms beyond what self-generated memory contains and makes more planned strategies survive correctness filtering (5x increase in full-correct strategy survival). This idea is transferable to LLM evolutionary search for algorithm design, where injecting structured domain knowledge could similarly broaden mechanism diversity and reduce wasted samples. The paper matters as a strong application of knowledge-grounded evolution, but not as a fundamental advance in evolution operators or sample efficiency.
+
+### [Hyper Algorithm Design Agent: Evolving Learnable Optimizer from Zero](https://arxiv.org/abs/2609.35328)
+
+**2026-10-19** | South China University of Technology, South China Normal University, Singapore Management University | M=7 P=6 I=7 *discuss*
+
+*Method:* Dual LLM coding-agent framework (Hyper Agent + Task Agent) performing recursive code evolution over a MetaBBO codebase, with tree-based evolution history (AET) and weighted parent sampling | *LLM role:* code_writer
+
+> HADA introduces a dual-agent LLM coding framework where a hyper agent edits a task agent (and itself) to evolve a MetaBBO codebase from a naive DQN-DE template, guided by a tree-based archive and normalized per-problem scores. On COCO-BBOB, the evolved algorithm achieves a 0.967 average score versus 0.894 for the best MetaBBO baseline (GLEET) after 100 evolution steps, but the claimed 121.7% 'leap' is a relative framing and constrained/multi-objective results are only shown as bar charts. The key transferable idea is the explicit separation of a self-modifying hyper agent from a code-editing task agent, coupled with an algorithm evolution tree, which makes open-ended design of learnable optimizers practically implementable. This matters for LLM evolutionary search because it demonstrates a working recursive self-improvement loop over optimization codebases, even though the core mechanisms are borrowed from prior open-endedness systems.
+
+### [PRECOCIAL: Pretraining with Code Curriculums via Iterative Search for Accelerated Learning](https://arxiv.org/abs/2610.24970)
+
+**2026-10-18** | Cornell University, Cisco Research | M=7 P=6 I=7 *discuss*
+
+*Method:* LLM-guided iterative rewriting of a Python data-generating program, scored by pretraining one continually-continued transformer and fine-tuning a copy on downstream data (validation perplexity fitness), with rollback on rejection | *LLM role:* heuristic_generator
+
+> Gu et al. introduce PRECOCIAL, an LLM-guided iterative search that optimizes Python programs generating synthetic pretraining data, scored by fine-tuning a small transformer on the generated data and measuring downstream validation perplexity. The key efficiency idea is to continue pretraining a single network across accepted candidate programs and roll back checkpoints on rejection, rather than training a fresh network for every candidate as FunSearch and AlphaEvolve do. On four language/code datasets and four reasoning tasks, optimized programs beat hand-designed curricula, procedural generators, random mutation, and first-iteration LLM programs, and also outperform FunSearch and AlphaEvolve at matched evaluation budget with about 2.5x fewer pretraining steps; results are supported by paired statistical tests and ablations showing the continued network is the source of the gain. For LLM evolutionary search with training-based fitness, the transferable insight is to reuse a single continuously updated model across candidates with rollback, improving both sample efficiency and final quality. This matters for anyone applying AlphaEvolve-style search to problems where evaluating a candidate requires expensive model training.
+
+### [T-GADE: Thermodynamical Generative-AI-Driven Evolution of LLM Artifacts](https://arxiv.org/abs/2609.12286)
+
+**2026-10-14** | Osaka Metropolitan University | M=7 P=7 I=8 **MUST-READ** *discuss*
+
+*Method:* Thermodynamical GA (TDGA) free-energy selection F=⟨E⟩−TH with log-determinant Gram-matrix diversity, LLM-implemented crossover/mutation operators, and a HoxLM self-repair step | *LLM role:* heuristic_generator
+
+> Ogawa and Mori propose T-GADE, a free-energy selection framework for LLM-driven heuristic evolution that adds temperature-controlled log-determinant diversity, Fermi/Bose occupancy rules, and a per-individual self-repair step (HoxLM). On EoH's online bin-packing task with gpt-oss-20b, the HoxLM-equipped steady-state Fermi-type T=0 configuration beats EoH in 9/10 preregistered seed pairs at 400 total LLM calls (median sealed excess 0.836% vs 3.912%), though equal calls mask ~1.7x tokens per call. Temperature reliably controls population spread in both steady-state Fermi and generational Bose schemes, and a small positive temperature restores diversity in the generational case, but the sealed c100 gain is only descriptive after Holm adjustment. The key transferable idea is the log-determinant Gram-matrix free-energy objective with an explicit selection temperature, which provides a clean mechanism to trade off quality and diversity in LLM evolutionary search; the HoxLM self-repair step is reusable if a domain card is available. This matters for LLM evolutionary search because diversity control and local repair are two concrete instruments beyond standard EoH-style truncation.
+
+### [LLM Evolutionary Search Strategies Should be Compared by Tokens](https://arxiv.org/abs/2610.23977)
+
+**2026-10-13** | IBM Research | M=8 P=8 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Replay of logged LLM evolutionary search runs re-indexed by cumulative tokens; exact order-statistic best-of-k comparison at matched token budgets plus re-execution audit of candidate programs | *LLM role:* heuristic_generator
+
+> The paper replays 600 logged LLM evolutionary search runs across 5 tasks and 3 strategies, re-indexing performance by cumulative tokens instead of proposals. It shows proposal costs vary 16k-39k tokens, giving some methods up to 1.9x more compute in equal-proposal comparisons, and independent sampling is roughly 6x cheaper per attempt. When matched by token budget and after re-execution audits remove scorer exploits, evolution beats sampling by 5% or less on 12 of 15 pairs, with a 23-28% margin only on Heilbronn. The key takeaway is that token-level accounting and program audits should become standard reporting practice for LLM evolutionary search, because the proposal is not a unit of compute. This matters for anyone building or evaluating these systems, as much of the reported evolutionary advantage may be an accounting artifact.
+
+### [DuoDiscover: Scaling Autonomous Discovery Beyond the Evaluation Bottleneck](https://arxiv.org/abs/2610.17184)
+
+**2026-10-12** | Google, UC Berkeley, Stanford University | M=8 P=8 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Fleet of LLM coding agents that co-discover a code target and a cheap proxy evaluator (yardstick), hill-climb the yardstick, with an LLM orchestrator running Kendall-tau fidelity tests and coordinating spawn/terminate/brief/transfer/combine | *LLM role:* heuristic_generator
+
+> DuoDiscover introduces a fleet of LLM coding agents that jointly discover an optimization target and a cheap proxy evaluator (yardstick), then hill-climb the yardstick while an orchestrator validates rank fidelity against true evaluations using Kendall-tau and coordinates agents. The paper reports strong quantitative gains over Claude Code, PerfAgent, and AlphaEvolve-based ArchAgent v2 across repository optimization, GPU/TPU kernels, vLLM, SQLite, and a CPU prefetcher task, including 1.92× on vLLM and 79.74% SOL on SOL-Exec. Key insight: under expensive evaluation, search should co-optimize what to evaluate and how to evaluate it cheaply, with continuous fidelity tests to prevent proxy drift; this is directly transferable to LLM evolutionary search. Results are backed by controlled budgets, baselines, and variance analysis, though no code is released. This matters because it addresses a central bottleneck in scaling LLM-driven discovery to real-world systems.
+
+### [EPOCH: Coverage-Aware Evolution with Experiential Preference Optimization for LLM-based Automated Heuristic Design](https://arxiv.org/abs/2610.17379)
+
+**2026-10-12** | Georgia Institute of Technology | M=8 P=8 I=7 *discuss*
+
+*Method:* Coverage-aware LLM evolutionary search with per-instance gap-vector representation, expert-aware parent selection, adaptive operator bandit, expert-preserving recovery, and online LoRA fine-tuning via DPO with reflective self-distillation (RSD) | *LLM role:* heuristic_generator
+
+> Gungordu et al. propose EPOCH, which fine-tunes an open LLM generator during evolutionary search using a per-instance optimality-gap representation to drive coverage-aware parent selection, operator allocation, and stagnation recovery; teacher reflection is converted into DPO preference pairs plus a reflective self-distillation term. On TSP, online bin packing, and knapsack, EPOCH's ensembles outperform inference-only and CALM baselines, with top-10 TSP gaps 38–40% lower than CALM at the training size and gains persisting out-of-distribution; ablations and significance tests support the main components. The key transferable insight is that replacing scalar fitness with per-instance coverage as the search control signal, while distilling teacher-hinted improvements into the unhinted policy, can substantially improve ensemble quality over long evolutionary runs. This matters for LLM evolutionary algorithm design because it demonstrates a practical way to make fine-tuning and reflection accumulate across search iterations. The paper is under review and code is not released, but the methodology is concrete enough to implement.
+
+### [Evolving in Thought Space: Training a Small Model at Test Time Unlocks Better Discoveries](https://arxiv.org/abs/2610.06269)
+
+**2026-10-12** | MIT, Hong Kong Polytechnic University, ByteDance, NUS, Stanford, University of Washington, UC Berkeley, Tsinghua, SMART | M=8 P=8 I=8 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Test-time RL (entropic group-relative objective with adaptive beta, leave-one-out advantage, centered base-policy correction) training a small guidance LLM (Qwen3-8B/14B, LoRA rank 32) to propose parent-conditioned natural-language changes, executed by a frozen GLM-5.2 executor; PUCT archive search for parent selection | *LLM role:* heuristic_generator
+
+> Guidance-TTT trains a compact guidance model at test time to propose parent-conditioned strategic changes, while a frozen large execution model implements them, using PUCT parent selection and adaptive group-relative RL. On polyomino packing, Lasso, AHC058, and TriMul it reports 1-40% improvements over prior published methods and a ~58% cost reduction versus directly training a 120B executor. The key insight is separating 'what to change' from 'how to implement' so the RL signal concentrates on short high-level decisions and avoids expensive large-model adaptation. It also surfaces two important failure modes: outcome rewards conflate guidance quality with executor failures, and PUCT/policy updates can over-concentrate search in a few lineages. This directly informs sample-efficient and cost-effective designs in LLM-driven algorithm discovery.
+
+### [Multi-Task Evolution for Zero-Shot Cross-Problem Generalization using LLMs](https://arxiv.org/abs/2610.03316)
+
+**2026-10-08** | Southern University of Science and Technology, Shenzhen University | M=8 P=8 I=7 **MUST-READ** *discuss*
+
+*Method:* LLM-driven multi-task evolutionary framework (MECo) with task-conditioned heuristic populations, transfer-gap-guided task pairing, four prompt-based crossover/mutation operators, NSGA-II-style survival with behavioral diversity, and greedy complementary heuristic-set selection | *LLM role:* heuristic_generator
+
+> Xie et al. propose MECo, an LLM multi-task evolutionary framework that evolves task-conditioned heuristic populations on single-constraint source tasks and recombines them into combined tasks, using a population-level transfer gap to choose parent pairs and a complementary set-selection criterion to select four heuristics for zero-shot use. Across 16 VRP and 16 FJSP variants, it achieves lower out-of-domain costs than eight AHD baselines (e.g., VRP OOD 22.11 vs MoH 22.55; FJSP OOD 1474.4 vs MoH 1487.3), and integrating it with EoH, ReEvo, and HSEvo improves their ID/OOD performance. The key insight is that source-only feedback can support robust cross-problem generalization by measuring empirical transfer gaps between task populations and selecting a complementary portfolio across source-task combinations. This is directly relevant to LLM evolutionary heuristic design, though its current scope is specialized to constraint-compositional VRP/FJSP families.
+
+### [Generative Adversarial Loops](https://arxiv.org/abs/2610.11458)
+
+**2026-10-08** | IIT Bombay, UC Berkeley | M=6 P=6 I=7 *discuss*
+
+*Method:* Generator-discriminator loop alternating GEPA-based evolutionary search for adversarial data (discriminator) and Cursor/Claude agent-based code evolution for algorithms (generator) | *LLM role:* evolutionary_search
+
+> GAL alternates a GEPA-based discriminator that generates adversarial evaluation examples with a Cursor/Claude generator that evolves approximation algorithms for KV compression, sparse decoding, sparse video generation, and context extension. On KV compression, evolved algorithms improve Compactor's adversarial-set accuracy from 0.25/0.45 to 0.95/1.00 while adding +0.77 RULER-HARD points; DCA improves from 0.20 to 0.90 on adversarial data and gains +6 ScienceFiction points. The key idea is using the unapproximated model as ground truth to automatically discover failure modes that fixed benchmarks miss, with a 'cost certificate' quantifying difficulty of breaking a method. This is relevant to LLM evolutionary search because it shows how to evolve evaluation goals alongside solution candidates, reducing benchmark saturation and overfitting. The evidence is promising but only two full GAL iterations on two domains and single-run results are reported.
+
+### [AGAR: a reinforcement learning substrate for LLM program evolution](https://arxiv.org/abs/2610.09215)
+
+**2026-10-06** | Baidu, Tsinghua University, University of the Chinese Academy of Sciences, Institute of Automation Chinese Academy of Sciences, Shanghai University | M=7 P=7 I=8 *discuss*
+
+*Method:* MDP formalization of program evolution with action-as-modular-prefix; four RL-derived modules (M1 credit assignment, M2 value estimation, M3 adaptive exploration, M4 experience memory) plus Modular TextGrad policy improvement in text space | *LLM role:* heuristic_generator
+
+> AGAR formalizes LLM program evolution as an MDP whose action is the modular text prefix, letting RL tools (credit assignment, value estimation, adaptive exploration, memory) attach as swappable modules without gradient training; it also introduces a modular TextGrad local-edit operator and characterizes asynchronous staleness. On 19 tasks with two backends and three seeds, AGAR improves normalized scores over OpenEvolve and ShinkaEvolve (e.g. 0.949/0.990 vs 0.855/0.919 on DeepSeek) and shows +14.6% end-to-end over a bare loop, though gains concentrate on competitive-programming tasks and statistical rigor is limited. The key insight is that treating the conditioning prefix, not the emitted program, as the action makes Bellman recursion well-posed and turns each hand-set evolutionary constant into a replaceable estimator, yielding a clean γ=0 reading of prior systems. This matters for LLM evolutionary search because it offers an auditable factorization for RL-infused evolution, but the empirical gains and code remain to be verified.
+
+### [Discovered, Not Designed: Population Evolution for Collaborative and Compute-Intensive Model Discovery](https://arxiv.org/abs/2610.05950)
+
+**2026-10-05** | Meta | M=7 P=7 I=7 *discuss*
+
+*Method:* Population Evolution (PE): hierarchical collaborative evolutionary search where LLM-driven local searches on related instances share a ledger of executable code interventions and cross-instance replay results, with peer screening and promotion to larger scales | *LLM role:* code_writer
+
+> Peng et al. propose Population Evolution (PE), a collaborative, hierarchical framework for LLM-driven model discovery that shares executable interventions and cross-instance replay results across related search instances, and screens candidates on small training subsets before full-target evaluation. Results are backed by concrete numbers: PE improves mean best local gains from 7.01% to 8.97% on ranking and 2.84% to 3.85% on watch-time, raises best larger-scale outcomes in all five task families, and under matched GPU compute yields 2.48% vs 0.92% best LLM gain and 13 vs 0 successful candidates. The key transferable idea is using a shared ledger of weak and successful peer evaluations as proposal context to reuse, modify, or combine mechanisms across instances while keeping local archives separate. This matters for LLM evolutionary search because it shows cross-instance sharing and hierarchical screening can improve both sample efficiency and full-target outcomes on expensive tasks.
+
+### [FrugalEvo: Towards Cost-Aware LLM-Guided Program Evolution](https://arxiv.org/abs/2610.03675)
+
+**2026-10-02** | National University of Singapore, University of Washington, Princeton University, Stanford University | M=7 P=8 I=7 *discuss*
+
+*Method:* Two-model LLM evolutionary program search: high-cost LLM proposes design strategies, low-cost LLM implements/refines code, with cache-efficient prefix-shared prompts and island-based MAP-Elites memory | *LLM role:* heuristic_generator
+
+> FrugalEvo proposes cost-aware LLM evolutionary search: a high-cost LLM generates design strategies, a low-cost LLM implements/refines code, with cache-efficient prompts, evaluated via a new Budget-Aware AUC metric. Across 20 math, systems, and algorithmic tasks, it reports matching or surpassing OpenEvolve, ShinkaEvolve, AdaEvolve, EvoX, and reported AlphaEvolve results while reducing cost per iteration, though significance tests are absent and budgets are small. The key takeaway is decoupling strategy exploration from implementation using strong/weak model pairs and measuring best-so-far score against cumulative cost, which is a practical way to improve sample/cost efficiency in LLM evolutionary search. This matters for the LLM evolutionary search area because cost-aware evaluation and multi-model orchestration are directly actionable for resource-constrained discovery workflows.
+
+### [SEDIMA: Cross-Run Hierarchical Insight Memory for Evolutionary Search Agents](https://arxiv.org/abs/2610.02361)
+
+**2026-10-01** | University of British Columbia, Huawei Technologies Canada | M=7 P=7 I=7 **MUST-READ** *discuss*
+
+*Method:* Persistent three-level hierarchical insight memory (raw traces, LLM-distilled insights, attention-weighted semantic clusters) with semantic-similarity retrieval injected into mutation prompts via write/read hooks | *LLM role:* heuristic_generator
+
+> SEDIMA adds a persistent three-level memory to LLM evolutionary search: raw traces, LLM-distilled insights, and attention-weighted semantic clusters, retrieved by embedding similarity and injected into mutation prompts without changing search operators. Across OpenEvolve and ShinkaEvolve on AlgoTune and ALE-Bench LITE, it improves average final performance by 5.5% and 6.6%, respectively, and reaches baseline-best performance in 32.3% fewer iterations on average; however, main results are single-run and compute overhead is not fully matched. The key takeaway is that cross-run semantic retrieval of distilled optimization insights—rather than lineage-based or prompt-only memory—yields consistent gains and transfers across problem families. This is relevant for any LLM evolutionary search system needing persistent memory and sample efficiency.
+
+### [Self-Evolving Algorithm-Design Agents: Escaping In-Context Evolutionary Stagnation via Population-Curated Policy Optimization](https://arxiv.org/abs/2609.38757)
+
+**2026-09-30** | Nanjing University, Huawei Noah's Ark Lab | M=8 P=8 I=8 **MUST-READ** *discuss*
+
+*Method:* Population-Curated Policy Optimization (PCPO): GRPO-based hybrid policy update combining refreshing on-policy GRPO with periodic regularized off-policy GRPO over a curated global population (AST dedup, semantic twin removal, illegal filtering, intra-bucket reward normalization, policy-level diversity, top-k nonnegative ranking advantage, clipped importance ratios + KL to reference policy) | *LLM role:* code_writer
+
+> Lu et al. propose Population-Curated Policy Optimization (PCPO), which maintains a curated global population of self-generated algorithms and alternates refreshing on-policy GRPO with regularized off-policy updates on top-k elites. On 16 global placement chip cases trained on only 4, PCPO outperforms OpenEvolve and ShinkaEvolve, beats GRPO, and matches GPT-5.5; on 4 GPU kernels it averages 8.27x speedup over PyTorch Eager. Results are backed by benchmark tables and strong baselines, though no significance tests or released code are provided. The key insight is that pure in-context evolutionary search can stagnate by reinforcing misleading self-generated context, and parametric population-curated RL with hybrid updates can internalize domain knowledge and improve sample efficiency. This is relevant for LLM evolutionary search, especially sample-efficiency and RL-infused evolution directions.
+
+### [Toward Quantum Software Automation: A Quantum-Aware Harness for LLM-Guided Evolution](https://arxiv.org/abs/2609.38883)
+
+**2026-09-30** | University of Illinois Urbana-Champaign | M=7 P=4 I=7 *discuss*
+
+*Method:* OpenEvolve LLM-guided evolutionary program search wrapped in a quantum-aware harness: evolution-hardness-guided coreset extraction, proxy (depth/CNOT/relative-balance) scoring, static+snapshot analysis prompting, and task-specific rewards (weighted circuit reward; Pareto-rank + Pearson-correlation policy reward) | *LLM role:* code_writer
+
+> Wan et al. present QSA, a quantum-aware harness that wraps an OpenEvolve-style LLM evolutionary loop with domain-specific verification, prompting, and reward mechanisms, evaluated on IBM QPUs for quantum error mitigation and multiprogramming. Results are hardware-backed: QSA improves QPU utilization by 4.2–9.5% and fidelity by 15.2–19.5% over QOS, while reducing mitigation time by at least 96.8% with comparable fidelity, at a reported LLM API cost of $6.9 over 11.3 hours. The most transferable insight is evolution-hardness-guided coreset extraction: run preliminary evolution on uniformly sampled verification sets, identify the scale where evolved programs perform worst, and focus the compact verification set there, improving full-suite reward from −0.08 to 0.12 compared with random coresets. Also notable is the policy reward combining Pareto rank from non-dominated sorting with Pearson correlation to ground-truth rankings, providing denser guidance for multi-objective runtime policies. While the quantum software problem is outside our core domains, these techniques directly address evaluation cost and reward feedback in LLM evolutionary search and are worth considering for transfer.
+
+### [Evolving Towards Better Codes: LLM-Guided Search for High-Distance Binary Linear Codes](https://arxiv.org/abs/2609.37056)
+
+**2026-09-29** | EPFL | M=7 P=5 I=6 
+
+*Method:* LLM-driven evolutionary program search (ShinkaEvolve/EvoTune) with multi-agent proposal chain (oracle, strategist, implementer), 87-function coding-theory Toolkit, island model, and exact Brouwer-Zimmermann minimum-distance evaluator | *LLM role:* code_writer
+
+> Seddas et al. present an LLM-guided evolutionary program search framework that discovers record-breaking binary linear codes, combining a multi-agent proposal chain (oracle, strategist, implementer) with an 87-function coding-theory toolkit, island-model diversity, and exact Brouwer-Zimmermann distance verification. They improve seven parent codes and 22 CodeTables entries, with all distances verified by exhaustive enumeration and independently checked by the table maintainer, making the results credible. The key insight is the use of exact evaluation with a lexicographic fitness on (minimum distance, negative count of minimum-weight codewords), which turns a coarse discrete search into a smoother optimization signal while preserving rigor. This offers a transferable template for LLM evolutionary search in certification-heavy domains, but it does not fundamentally alter the underlying evolutionary algorithm.
+
+### [HeurEvo: Agentic Evolution of Hybrid Solver-Augmented Heuristics for Time-Critical Mathematical Optimization](https://arxiv.org/abs/2609.36303)
+
+**2026-09-28** | Microsoft Research, Purdue University | M=7 P=7 I=6 *discuss*
+
+*Method:* Island-based LLM evolutionary program search with plan-code-component co-evolution: Planner (plan composition + runtime allocation), Coder/Code Improver (SEARCH/REPLACE code edits), Plan Improver (adaptive plan review on plateau), Component Proposer/Improver (shared component library evolution), Interpreter (execution-trace feedback), Debugger, UCB island selection | *LLM role:* evolutionary_search
+
+> HeurEvo proposes a plan-code-component co-evolution framework that jointly evolves the high-level composition, executable implementation, and shared component library of hybrid solver-augmented heuristics under tight runtime budgets. The empirical results are substantial on synthetic problems, with mean gaps of -2.22% train and -1.45% test relative to Gurobi 48h incumbents, outperforming AdaEvolve, OpenEvolve, and EvoX, though MIPLIB and nonlinear gains are mixed and nonlinear results use AdaEvolve refinement. The key transferable idea is making algorithm structure an explicit evolvable object with per-step subgoals and runtime budgets, plus a shared component pool that accumulates cross-island experience, enabling plan-level and code-level improvements to be separated. This matters for LLM evolutionary search because it addresses the underexplored question of how to allocate computation across heterogeneous solver and heuristic components, an idea that could be adapted to other automated algorithm discovery systems. The lack of released code and limited statistical testing temper the impact, but the approach is worth monitoring.
+
+### [AlgoEvo: Self-Evolving Agentic Search for Automated Algorithm Discovery](https://arxiv.org/abs/2609.15820)
+
+**2026-09-27** | City University of Hong Kong, Huawei Noah's Ark Lab, A*STAR | M=8 P=8 I=7 **MUST-READ** *discuss*
+
+*Method:* Autonomous LLM agent loop (read/edit/diagnose/evaluate) with pluggable design skill hub and MCTS-style hierarchical experience bank with situation-conditioned UCB retrieval | *LLM role:* research_agent
+
+> This paper presents an agentic LLM framework for automated algorithm discovery that replaces fixed evolutionary pipelines with self-directed inspect/diagnose/edit/evaluate operations. It uses a pluggable design skill hub to span single-heuristic, multi-objective, and multi-component design tasks, and a hierarchical experience bank with situation-conditioned UCB retrieval to accumulate reusable algorithmic knowledge. Across six benchmarks (TSP, CVRP, Bi-TSP, Bi-FJSP, CVRP-DR, FJSP 4-Ops), it reports state-of-the-art or near-SOTA quality while using as little as 7% of the standard evaluation budget, with warm-start and cross-task transfer gains. The key transferable idea is decoupling paradigm-specific design knowledge from the search loop and using MCTS-style backpropagation over experience cards to improve sample efficiency. The evidence is based on three seeds, lacks significance tests, and no code release is stated, so the sample-efficiency and memory-transfer claims should be reproduced before strong reliance.
+
+### [LiteEvo: Automated, Cost-Efficient Harness Evolution for Generalization to Unseen Tasks](https://arxiv.org/abs/2609.33146)
+
+**2026-09-27** | Seoul National University | M=7 P=5 I=7 
+
+*Method:* LiteEvo: iterative harness evolution loop with four tool-free LLM meta-agents (analyst, editor, librarian, composer), failure-oriented group sampling, versioned typed component library, and pass@2 accept/hold/revert gate | *LLM role:* evolutionary_search
+
+> Choi et al. present LiteEvo, a lightweight harness-evolution loop built from four tool-free LLM meta-agents (analyst, editor, librarian, composer), a versioned typed component library, failure-oriented group sampling, and a pass@2 accept/hold/revert gate. With a frozen Qwen3.5-9B on five agentic benchmarks, LiteEvo reaches a mean transductive pass@2 of 71.0 versus 67.3 for a HarnessX reproduction at 13.0x lower API cost, and inductive harnesses mostly retain gains on unseen tasks; results are averaged over three test runs but derive from a single evolution run per benchmark. The most transferable idea is the combination of persistent versioned component memory and failure-oriented group sampling (mixed and all-fail groups) as a cheap, informative evolutionary signal, plus a noise-aware pass@2 gate. This is relevant to LLM evolutionary search as evidence that reusable memory and cost-efficient meta-agent design can improve generalization, though cross-benchmark transfer remains unresolved.
+
+### [Hill Sampling for Test-Time Scaling: A Simple and Better Alternative to Repeated Sampling, Evolution, and Training](https://arxiv.org/abs/2609.25510)
+
+**2026-09-25** | Oracle | M=7 P=9 I=7 **MUST-READ** *changes-thinking* *discuss*
+
+*Method:* Hill Sampling: iterative best-so-far conditioned sampling — frozen LLM generates N edits conditioned on incumbent program, incumbent replaced if candidate reward >= best observed reward | *LLM role:* heuristic_generator
+
+> Beck et al. introduce Hill Sampling, a minimal best-so-far conditioned sampling loop that repeatedly edits the current incumbent program with a frozen LLM. On circle packing it sets a new published SOTA (2.6359830849, improving AlphaEvolve and ThetaEvolve) and on Erdős minimum-overlap it beats AlphaEvolve, using only 8 H100 GPUs and hours of compute. Results include extensive ablations showing repeated token sampling outperforms evolution strategies on model weights, and that setting the ES learning rate to zero improves max return over learned ES. The key takeaway is that simple best-so-far conditioning is a strong default before adding archives, diversity, crossover, or test-time training for verifiable program discovery. This is directly relevant to LLM evolutionary search and suggests a cheap baseline every such system should include.
+
+### [Evolution or Illusion? Rethinking Evaluation in LLM Evolutionary Search](https://arxiv.org/abs/2609.19799)
+
+**2026-09-17** | IBM Research | M=7 P=7 I=7 *discuss*
+
+*Method:* Offline replay of logged seed trajectories with exact order statistics to compute expected best-of-k score over a seeds-by-iterations budget grid; bootstrap for ranking-reversion probability | *LLM role:* none
+
+> This paper evaluates three LLM evolutionary search strategies (OpenEvolve, EvoX, AdaEvolve) on five tasks over a full 40-seed by 200-iteration grid, showing that the optimal width-versus-depth split and even the ranking of strategies depend on the strategy, task, and total budget. The results are backed by exact order statistics over logged trajectories, 40 seeds per condition, bootstrap confidence intervals, and sensitivity analyses. The key insight is a practical measurement protocol: replay logged trajectories to compute the expected best score across all (k,t) splits and report the frontier, rather than a single point, at no additional LLM cost. The paper also finds that depth often saturates early and that more seeds uncover benchmark evaluator flaws, stressing the need for sound evaluation when comparing LLM evolutionary search methods.
+
+### [RouteRepair: Instance-Level Failure Diagnosis and Targeted Repair in LLM-Based Automated Heuristic Design for Routing Optimization](https://arxiv.org/abs/2609.11452)
+
+**2026-09-10** | Southeast University | M=7 P=7 I=6 *discuss*
+
+*Method:* Nested evolutionary LLM-based heuristic design with instance-level failure diagnosis and targeted repair: two-expert (Failure Diagnosis Expert + Targeted Repair Expert) pipeline with structured diagnosis report, risk review, matched parent-child validation, and outcome-aware memory | *LLM role:* heuristic_generator
+
+> Jia et al. propose RouteRepair, an instance-level failure diagnosis and targeted repair layer for LLM-based automated heuristic design, evaluated across TSP and CVRP for GLS, constructive, and ACO backbones. The reported improvements are backed by reductions such as mean TSP optimality gap from 1.7476% to 0.7587% versus standard GLS, constructive CVRP cost down 1.91% versus savings, and CVRP-ACO cost down 3.32%, though the paper uses a single controlled seed for ablations and lacks code release. The key idea is to retain parent-specific instance-wise profiles, construct failure/strength/protection sets, and use matched parent-child validation with collateral-degradation thresholds to accept repairs—this evidence-constrained repair loop is transferable to other LLM evolutionary search pipelines where aggregate fitness hides localized failures. The paper matters for LLM evolutionary search in routing because it demonstrates a concrete mechanism for improving strong but locally inconsistent heuristics without discarding them, though it does not uniformly outperform full ReEvo.
+
+### [EvoRank: LLM-Guided Evolution of Multi-Objective Learning-to-Rank Pipelines](https://arxiv.org/abs/2609.22196)
+
+**2026-08-30** | University of Maryland, Independent Researcher | M=7 P=5 I=8 *discuss*
+
+*Method:* LLM-guided evolutionary program search (SkyDiscover/AdaEvolve) over EVOLVE-BLOCK source files with island model, bandit allocation, Pareto archive, and guarded evaluation | *LLM role:* code_writer
+
+> EvoRank applies an AlphaEvolve-family LLM evolutionary loop to discover multi-objective learning-to-rank pipelines on Expedia ICDM 2013. It shows that evolving only training objectives selects noise: selection-fold gains collapse to +0.0002 NDCG@10 on held-out queries, while full-pipeline search transfers (+0.0057 NDCG@10 over Optuna-tuned LambdaMART, top 6% of competition). The key reusable idea is the headroom gate: measure fitness-fold noise and verify with a hand-built candidate that expected effect sizes exceed it before spending LLM budget. The audit stack is directly applicable to LLM evolutionary search and highlights that transfer-audited selection, not fitness-fold progress, should decide success. The paper matters less for LTR itself than for evaluation methodology in program-search loops.
+
 
 #### 2026-09-10 (1 papers)
 
