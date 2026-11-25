@@ -17,6 +17,15 @@ import yaml
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+
+
+def _iso_date(value) -> str:
+    """YYYY-MM-DD from a datetime (Postgres) or an ISO string (SQLite returns TEXT)."""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    return str(value)[:10]
 from pathlib import Path
 
 # === Path bootstrap ===
@@ -161,7 +170,7 @@ def export_papers(db: Database, front_map: dict, front_status_map: dict, bridge_
         p["experiments"] = _json(row.get("experiments"), {})
         p["results"] = _json(row.get("results"), {})
         ad = row.get("analysis_date")
-        p["analysis_date"] = ad.date().isoformat() if ad is not None else ""
+        p["analysis_date"] = _iso_date(ad)
 
         papers.append(p)
 
@@ -427,7 +436,7 @@ def build_snapshot(db: Database, papers: list, fronts: list, bridges: list) -> d
             (cat,),
         )
         ld = row["last_date"] if row else None
-        last_update[cat] = ld.date().isoformat() if ld is not None else ""
+        last_update[cat] = _iso_date(ld)
 
     return {
         "total_papers": len(papers),
