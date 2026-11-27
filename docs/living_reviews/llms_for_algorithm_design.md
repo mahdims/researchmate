@@ -1,10 +1,21 @@
 # Living Review: LLMs for Algorithm Design
 
-**Last Updated:** 2026-11-25
+**Last Updated:** 2026-11-27
 
 ---
 
 ## Recent Papers
+
+#### 2026-11-27 (1 papers)
+
+### [SimpleEvol: An Agent-Loop Framework for LLM-Driven Automated Heuristic Design with Minimal Human Priors](https://arxiv.org/abs/2609.37172)
+
+**2026-11-23** | Singapore Management University, National University of Singapore, Nanjing University of Information Science and Technology | M=7 P=7 I=7 *discuss*
+
+*Method:* Minimal single-trajectory LLM agent loop: iterative code generation of heuristics conditioned on task description, elite heuristic, meta-information feedback (fitness, runtime, errors), and periodically compressed history summaries | *LLM role:* heuristic_generator
+
+> The paper proposes AHI (handcraftedness) and ICE (intelligence conversion efficiency) metrics and introduces SimpleEvol, a minimal single-trajectory agent loop for automated heuristic design that uses periodic history compression, meta-information feedback, and an elite best-so-far heuristic. Across 10 LLMs on TSP, CVRP, and FSSP, SimpleEvol achieves the highest ICE (e.g., 2.19 vs 1.82/1.51/0.82 on TSP and 6.21 vs 5.44/3.66/2.08 on CVRP against FunSearch/EoH/ReEvo) and generally lowest gaps, with leave-one-out and Bayesian-bootstrap robustness checks. The key insight is that less human-designed scaffolding may convert stronger LLM intelligence into heuristic quality more efficiently, suggesting evaluation should focus on scaling with model capability rather than final performance on fixed backbones. The ablation showing best-so-far retention and summarization are essential is worth extracting for lightweight LLM evolutionary search designs. This matters for LLM evolutionary search as it provides a competitive minimal baseline and a metric-based lens for framework complexity.
+
 
 #### 2026-11-25 (2 papers)
 

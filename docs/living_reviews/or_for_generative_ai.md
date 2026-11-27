@@ -1,10 +1,29 @@
 # Living Review: OR for Generative AI
 
-**Last Updated:** 2026-11-25
+**Last Updated:** 2026-11-27
 
 ---
 
 ## Recent Papers
+
+#### 2026-11-27 (2 papers)
+
+### [Routing and Cache Retention for Multi-Turn LLM Inference: Theory and Implementation](https://arxiv.org/abs/2611.34584)
+
+**2026-11-25** | Tsinghua University, University of Colorado Boulder, StepFun, Beijing Institute of Mathematical Sciences and Applications | M=8 P=8 I=7 **MUST-READ** *discuss*
+
+*Method:* Fluid LP approximation with bid-price control (dual shadow prices for compute/memory) plus buffer-reserve policy; practical PARK controller with projected subgradient price updates, one-turn migration lookahead, and Gittins-style value-per-byte-epoch KV retention index | *LLM role:* none
+
+> Miao et al. formulate joint admission, routing, and KV-cache retention for multi-turn LLM inference as a fluid linear program whose dual prices for compute and memory couple with session continuation values, and translate it into PARK, an online subgradient controller with a value-per-byte-epoch retention index. Real 3-hour experiments on 16 and 128 H200 GPUs with SWE and Terminal-Bench workloads show 24.2% and 40.0% output-throughput gains over the strongest baselines, and a single-replica ablation shows retention-index eviction improves throughput by 36.7% over LRU. The key transferable insight is to coordinate routing and eviction through shadow prices plus expected reuse value per byte-epoch, rather than decoupled load-balancing or recency heuristics. This matters for LLM inference resource allocation because it provides both asymptotic guarantees and a production-scale controller that retains high prefix hit rates under multi-turn agent traffic.
+
+### [Scalable Placement for Disaggregated LLM Serving on Heterogeneous Edge Fleets](https://arxiv.org/abs/2611.32881)
+
+**2026-11-24** | University of Oslo, UiT The Arctic University of Norway | M=7 P=8 I=7 *discuss*
+
+*Method:* Type-count candidate enumeration with dominance pruning, closed-form water-filling layer partitioning, and bounded multidimensional knapsack DP (or MILP fallback) over Pareto frontier of (PS, DS) throughputs minimizing fluid tandem-queue congestion W=CP+CD | *LLM role:* none
+
+> SPADE tackles placement of disaggregated prefill/decode LLM serving on heterogeneous edge fleets, using a congestion-aware fluid tandem queue objective, type-count candidate enumeration with dominance pruning, and closed-form water-filling layer partitioning solved via multidimensional knapsack DP/MILP. On 30-device synthetic fleets it finds verified optimum in 441 ms while GA+DP takes 6855s with 19.7% higher congestion, and pruning eliminates 99.6% of candidates without observed loss. The key insight is that device-type symmetry plus dominance can make exact replica selection tractable, and the water-filling closed form replaces expensive layer DP—worth adopting in LLM serving placement optimization. It matters because it turns previously heuristic search into exact, fast optimization for heterogeneous serving.
+
 
 #### 2026-11-25 (3 papers)
 
