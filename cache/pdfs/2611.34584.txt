@@ -1,0 +1,3659 @@
+--- Page 1 ---
+Routing and Cache Retention for Multi-Turn LLM
+Inference: Theory and Implementation
+Sentao Miao∗
+Leeds School of Business, University of Colorado Boulder, Boulder, CO 80309, USA, sentao.miao@colorado.edu
+Tianjiao Nie∗
+Qiuzhen College, Tsinghua University, Beijing 100084, China, nietj21@mails.tsinghua.edu.cn
+Yuan Zhou∗†
+Yau Mathematical Sciences Center & Department of Mathematical Sciences, Tsinghua University, Beijing 100084, China;
+Beijing Institute of Mathematical Sciences and Applications, Beijing 101408, China, yuan-zhou@tsinghua.edu.cn
+Song Yuan
+StepFun Intelligence, Shanghai 200232, China, oliveryuan@stepfun.com
+Yuanwei Lu
+StepFun Intelligence, Shanghai 200232, China, luyuanwei@stepfun.com
+Yibo Zhu
+StepFun Intelligence, Shanghai 200232, China, zhuyibo@stepfun.com
+Multi-turn AI agents execute iterative loops of large language model (LLM) inference and external tool calls,
+transforming cluster serving into a dynamic resource-allocation problem where routing and key–value (KV)
+cache retention jointly govern prefix reuse across inter-turn delays. We formulate a fluid approximation of
+this system and show that optimal admission, routing, and eviction are governed by endpoint-specific shadow
+prices for computation and memory together with session continuation values. Building on this structure,
+we propose an asymptotically optimal buffer-reserve policy that absorbs stochastic fluctuations using a
+vanishing share of capacity. To handle asynchronous arrivals, delayed load reports, and engine-local memory
+management in production clusters, we translate these principles into a practical controller named PARK,
+which pairs online projected subgradient price updates and one-turn migration lookahead with a local KV
+retention index ranked by expected reuse value per byte-epoch. In real GPU cluster experiments serving a
+197-billion-parameter mixture-of-experts model on multi-turn software-engineering agent benchmarks (SWE
+and Terminal-Bench), PARK outperforms all five load-balancing and prefix-aware baselines across contrasting
+traffic regimes. On 16 H200 GPUs, PARK raises output throughput by 24.2% over the strongest baseline
+(336.9% over round robin) on turn-intensive SWE trajectories and by 40.0% over the strongest baseline
+(63.3% over round robin) on generation-intensive Terminal-Bench trajectories. Controlled single-replica
+ablations show that our retention index alone cuts prior-prefix token loss from 13.26% to 2.17% and increases
+throughput by 36.7% over least-recently-used (LRU) eviction, while 128-GPU scale-up experiments sustain
+50,789 to 67,363 output tokens/s across 16 replicas with prefix cache hit rates of 91.3% to 97.4%.
+Keywords: multi-turn LLM inference, KV cache retention, online resource allocation, fluid approximation
+∗The co-first authors contributed equally to this work and are listed in alphabetical order.
+† Corresponding author.
+1
+arXiv:2611.34584v1  [math.OC]  25 Nov 2026
+
+
+--- Page 2 ---
+2
+1. Introduction
+Large language models (LLMs) support a growing range of activities, including customer service,
+writing, software development, and tool-using AI agents. Delivering these benefits requires inference:
+the computation performed by a trained model to generate a response to a user’s request. Whereas
+training develops a model’s capabilities once, inference puts those capabilities to use each time a
+request is served, consuming processing capacity, memory, and energy on graphics processing units
+(GPUs). Inference is therefore a recurring operating requirement with substantial costs: OpenAI
+reportedly spent $8.4 billion on inference in 2025 (Muppidi, 2026), and McKinsey & Company
+(2026) projects that inference will account for about 60% of AI data-center demand by 2030. At
+this scale, modest reductions in the resources required per request can yield substantial operating
+savings or allow existing infrastructure to serve more demand. Realizing these gains poses a natural
+operations research problem: how can a provider complete more useful work with limited resources
+and uncertain demand?
+We study a provider operating multiple inference servers, each of which may contain several GPUs.
+Requests arrive sequentially, and the provider must immediately decide whether to admit each
+request and which server should process it. Admitted requests occupy computation and memory
+resources while their responses are generated, sharing those resources with unfinished work from
+earlier admissions. Memory is particularly important because generating a response requires storing
+intermediate computations whose size grows with the amount of text being processed (Kwon et al.,
+2023).
+This allocation problem is further complicated because many requests belong to multi-turn
+conversations, where each turn consists of a prompt and its response. A later prompt builds on
+the conversation’s earlier text, creating an opportunity to reuse previous computation. The saved
+intermediate computations are called the key–value (KV) cache. Keeping this cache reduces the
+work required for the next turn, but occupies GPU memory while the user reads a response or
+executes external tools. Therefore, the provider must also decide which idle conversations deserve
+continued storage and which caches to evict, meaning remove from memory. Eviction frees capacity
+for other work, at the cost of rebuilding the lost computations if the conversation resumes.
+Crucially, request routing and cache eviction are closely coupled in multi-turn conversations.
+Serving a turn creates an updated cache at the chosen server, while eviction determines whether
+that cache remains available to reduce the cost of subsequent requests. Consider a conversation
+whose cache resides at a busy server while another server has spare capacity. Routing the next
+request to the cache-holding server avoids recomputation but adds to its load; routing it to the other
+server uses spare capacity and establishes an updated cache there, but requires rebuilding the prefix.
+Whether routing elsewhere is preferable depends on how long the destination’s congestion advantage
+
+
+--- Page 3 ---
+3
+persists and how likely the conversation is to continue. The eviction decision, in turn, determines
+which idle caches to retain by weighing the memory freed by eviction against the potential savings
+from future reuse. A retained cache occupies memory that could support other requests and saves
+computation only if the next request arrives before eviction and is routed to the server holding it.
+Existing inference systems demonstrate the practical value of preserving caches across conversation
+turns (Gao et al., 2024) and coordinating distributed routing to balance cache reuse and server
+load (Srivatsa et al., 2025). Related optimization studies develop bid-price admission and routing
+in a single-turn model under resource constraints (Chen et al., 2026) and cache eviction policies for
+stochastic multi-turn conversations (Zhang et al., 2025). These developments motivate a unified
+optimization and analysis of routing and cache retention. As the preceding discussion illustrates,
+the central challenge is to coordinate these decisions while accounting for how each shapes the costs
+and benefits of the other across conversation turns. We therefore ask:
+How should a scheduler jointly optimize admission, routing, and idle-cache retention to
+maximize the throughput under server-specific computation and memory constraints?
+We formulate this problem as a stochastic control model and develop a tractable fluid relaxation
+that links active service, idle waiting, and cache ownership across conversation turns. Resource
+shadow prices and session continuation values provide a common basis for coordinating these
+decisions, yielding structural characterizations of optimal fluid routing and retention. We further
+develop a fluid-based policy with an asymptotic performance guarantee and translate the theoretical
+principles into PARK, a practical controller for multi-turn inference. Our main contributions are as
+follows.
+• A fluid framework for jointly managing service and future cache reuse. We formulate a
+stochastic control model for admission, routing, and cache retention in multi-turn conversations
+that tracks each session’s service status, idle age, and cache location. Because continuous
+relaxations of routing and retention fractions yield nonlinear capacity constraints, we develop
+a fluid approximation expressed through state–action flow volumes. This formulation yields a
+tractable linear program while preserving the link between current service and future cache
+availability.
+• Structural characterization of routing and cache eviction. The fluid solution provides
+a common economic basis for evaluating routing and retention decisions: dual resource prices
+measure the cost of computation and memory, while continuation values capture the conse-
+quences for later turns. Their comparison explains when routing should follow an existing cache
+and when rebuilding it elsewhere is worthwhile. For retention, we derive sufficient conditions
+connecting cache length, storage cost, and the conditional time until the next prompt. These
+conditions show why intermediate-length caches can offer a better trade-off than short caches
+
+
+--- Page 4 ---
+4
+(which are cheap to rebuild) or very long caches (which occupy more memory than their future
+reuse justifies), and characterize how idle age should govern eviction through the session’s
+return prospect and rebuild cost, yielding a mechanism distinct from that of the traditional
+LRU policy.
+• A fluid-based policy with an asymptotic performance guarantee. We turn the fluid
+solution into an online buffer-reserve policy that makes immediate routing decisions and
+periodically updates its admission and cache-retention quotas while reserving capacity buffers
+against stochastic fluctuations. Letting arrival rates and server capacities grow proportionally
+with a scale parameter n, we prove an O(√nlog n) shortfall in expected completed turns
+relative to the fluid benchmark. Thus, the shortfall per unit of scale vanishes, providing a
+performance guarantee in large stochastic systems.
+• A practical controller (PARK) informed by the theory and evaluated at scale. To
+handle asynchronous arrivals, delayed server snapshots, and engine-local memory reclamation
+in production clusters, we translate our routing and retention principles into an event-driven
+controller, PARK (Price-based Admission and Routing with KV-cache Retention). We evaluate
+PARK on two multi-turn software-engineering agent workloads, serving a 197-billion-parameter
+mixture-of-experts model on up to 128 H200 GPUs with a concurrency cap of 4,096 sessions.
+In three-hour evaluations at this scale, PARK sustains approximately 51,000–67,000 output
+tokens/s across the two workloads. PARK outperforms standard routing and caching baselines,
+while controlled single-replica experiments show that its retention index mechanism reduces
+prior-prefix token loss from 13.26% to 2.17%.
+The remainder of the paper is organized as follows. Section 2 reviews the related literature.
+Section 3 introduces the stochastic model. Section 4 develops the fluid formulation and structural
+results. Section 5 presents the policy, its performance guarantee, and its implementation. Section 6
+reports the experiments, and Section 7 concludes. Proofs appear in the electronic companion.
+2. Related Literature
+Our work relates to three streams of research: LLM inference systems and cache management,
+optimization for LLM inference, and dynamic resource allocation.
+LLM inference systems and cache management. Modern serving engines improve GPU
+memory efficiency and reuse earlier computations across calls. PagedAttention reduces KV-cache
+fragmentation and enables memory sharing (Kwon et al., 2023), SGLang reuses shared prompt
+prefixes across calls (Zheng et al., 2024), CachedAttention preserves multi-turn KV caches across
+a storage hierarchy (Gao et al., 2024), and Preble coordinates distributed routing to balance
+cache locality and server load (Srivatsa et al., 2025). While these systems establish the practical
+
+
+--- Page 5 ---
+5
+importance of cache reuse, we provide a unified theoretical framework that jointly prices current
+resource use and future conversation turns, explaining when routing and eviction should depart
+from myopic heuristics.
+Classical caching models also study retention decisions: Dehghan et al. (2016) optimize content-
+specific cache utilities, and Ferragut et al. (2016) link optimal time-to-live timers to inter-request
+time distributions. In multi-turn LLM inference, however, idle caches compete directly with active
+requests for GPU memory, and reuse value depends on whether and where future turns are admitted.
+Our retention comparisons incorporate these service decisions to characterize how cache length, idle
+age, and return timing govern eviction.
+Optimization and stochastic control for LLM inference. Recent work builds mathematical
+foundations for inference scheduling. Mitzenmacher and Shahout (2025) survey connections among
+queueing, service-time predictions, and LLM serving. Dai et al. (2026) establish throughput
+optimality in batched processing networks, including dependent AI-agent workflows. Ao et al.
+(2026) develop fluid-guided admission and scheduling policies accounting for KV-memory growth
+during generation, while Lin et al. (2026) derive asymptotically optimal admission and routing
+policies for competing prompt and generation stages. Related studies examine online batching under
+KV-memory limits (Jaillet et al., 2026), non-clairvoyant scheduling without advance output lengths
+(Feng et al., 2026), and cache-aware preemption for tail latency (Li et al., 2026).
+Two closely related studies address routing and eviction separately: Chen et al. (2026) develop
+online bid-price routing in a single-turn model under concurrent-request and KV-memory limits, and
+Zhang et al. (2025) propose a length-aware variant of least-recently-used eviction that is optimal for
+a tail-latency objective under a stochastic model of multi-turn conversations. Wu et al. (2026) model
+routing–eviction interactions, but their routing algorithm greedily minimizes predicted latency for
+the current request, and their competitive guarantees apply to eviction rather than the combined
+policy. In contrast, our fluid framework jointly optimizes admission, routing, and retention across
+conversation turns: routing determines where future caches reside, while retention governs the
+cost of future routing choices. By accounting for these intertemporal effects, our framework yields
+structural characterizations of the joint decisions and an asymptotic optimality guarantee for our
+buffer-reserve policy.
+Dynamic resource allocation. Methodologically, our approach builds on bid-price control
+(Talluri and van Ryzin, 1998) and fluid reoptimization (Jasin and Kumar, 2012; Bumpensanti and
+Wang, 2020). Reusable-resource models track capacity occupied for stochastic service durations and
+released upon completion (Goyal et al., 2025). Multi-turn inference adds a post-service state effect:
+completing a turn can leave behind a cache that continues to consume memory while reducing
+future execution work, both of which our routing and retention rules price.
+
+
+--- Page 6 ---
+6
+Our state-based LP also connects to weakly coupled Markov decision processes, where local session
+dynamics share global capacity constraints (Adelman and Mersereau, 2008; Bertsimas and Miˇsi´c,
+2016). In this literature, Brown and Zhang (2022) incorporate shared external signals, and Brown
+and Zhang (2025) and Gast et al. (2024) establish finite-horizon asymptotic optimality guarantees
+for fluid reoptimization with heterogeneous components. Building on these ideas, we link session
+states across turns to connect resource shadow prices with cache-ownership values, accommodating
+immediate routing, random service requirements, and post-service retention decisions to achieve an
+O(√nlog n) shortfall from the fluid benchmark.
+3. Model and Decision Problem
+3.1. Sessions, Endpoints, and Cache States
+We consider a discrete-time LLM inference system operating over a finite horizon of H epochs,
+indexed by t = 0,...,H −1, with terminal time H. The system serves conversation sessions across a
+set of endpoints E = {1,...,E}, where each endpoint represents a server housing one or more GPUs
+(processors used for LLM computation) with per-epoch execution capacity Be and memory capacity
+Ge. Upon arrival, each prompt must be immediately assigned to an endpoint or rejected; we write
+E0 = {0} ∪E, where action 0 denotes rejection. After a rejection, the session may depart or remain
+idle without a cache, in which case it may submit a new prompt or retry the rejected one in a later
+epoch.
+We call a submitted prompt a request. Each session consists of a sequence of turns, where a
+turn comprises an admitted request and its generated response. Each completed request therefore
+corresponds to one completed turn. Serving a turn involves processing the prompt and generating
+the response, which may span multiple epochs. A session is active while its admitted turn is
+unfinished and idle while waiting to submit another prompt. After a turn completes, its key–value
+(KV) cache stores intermediate computations that can be reused by a later turn. Retaining an idle
+cache consumes endpoint memory between turns but reduces computation when the session returns.
+Each idle session has at most one retained cache: routing its next prompt to the endpoint holding
+that cache is a warm route, whereas routing elsewhere, or routing without a retained cache, is a
+cold route that requires recomputation.
+Each live session has a state s = (k,a,d,o,x) in a finite set S (departed sessions are excluded),
+where:
+• k records the session type or conversation phase, such as its context length, number of completed
+turns, or idle cache size;
+• a is the idle age (number of epochs elapsed since the previous turn completed), with a = 0 for
+active sessions;
+
+
+--- Page 7 ---
+7
+• d is the attained service (number of epochs spent serving the unfinished turn), with d = 0 for
+idle sessions;
+• o ∈E0 is the endpoint holding an idle session’s retained cache, with o = 0 indicating no retained
+cache;
+• x ∈E0 is the endpoint serving an unfinished turn, with x = 0 for idle sessions.
+Together, these coordinates capture all workload information needed to determine service require-
+ments and return behavior. We partition S = SI ˙∪SA into idle states (SI, where d = x = 0) and
+active states (SA, where a = 0); the cache-location coordinate o is relevant only in SI.
+Finally, let Ms(t) be the number of sessions in state s at the beginning of epoch t, and write
+M(t) = (Ms(t))s∈S. When a turn completes at endpoint e, a continuing session becomes idle with
+its updated cache stored at e. Thus, the current routing decision directly determines where the
+next turn can reuse earlier computations.
+3.2. Decisions and Session Dynamics
+In each epoch t, decisions and state transitions occur in four steps:
+(1) Observe the population. The controller observes M(t), including the serving endpoints of
+active sessions and the cache locations of idle sessions.
+(2) Route each arriving prompt. Each beginning-of-epoch idle session in state s independently
+submits a prompt with probability ps(t), while new sessions may enter with an initial prompt
+and no retained cache. Active sessions submit no prompts, so every session submits at most
+one prompt per epoch. Arrival times and new-session counts follow specified distributions,
+with new-session arrivals bounded per epoch.
+Indexing arrivals by j = 1,...,Jt with session states st,j, the controller immediately chooses
+an action et,j ∈E0 upon each arrival, using all information observed up to that moment
+(including earlier arrivals and routing decisions in epoch t). Assigning et,j ∈E admits the
+prompt to endpoint et,j, where it remains until completion; action 0 rejects it.
+(3) Observe service outcomes at the boundary. Previously active and newly admitted turns
+receive service, yielding pre-retention states esi(t + 1) at the epoch boundary according to three
+state–action transition kernels:
+• QA
+t (s,s′) for an initially active session;
+• QI
+t(s,s′) for an idle session that submits no prompt;
+• P e
+t (s,s′) for an arriving session assigned action e ∈E0.
+Here s′ denotes the pre-retention state, and any probability mass unassigned to live states
+corresponds to session departure. Specifically, an unfinished turn remains active with attained
+service d′ = d + 1; a completed turn either departs or becomes idle at its serving endpoint e
+
+
+--- Page 8 ---
+8
+with (a′,d′,x′,o′) = (0,0,0,e); an unprompted idle session remains idle with age a′ = a + 1; and
+a rejected prompt releases any existing cache without starting service. Conditional on the
+beginning-of-epoch state and arrival sequence, transition and resource outcomes are independent
+across sessions and depend only on each session’s current state and action, though computation,
+memory use, and completion may be correlated within a session.
+(4) Retain caches and update the population. Let eIe(t) be the set of idle sessions with
+a cache available at endpoint e at the boundary (including newly completed turns). After
+observing service outcomes and cache sizes, the controller selects a subset Ie(t) ⊆eIe(t) to retain
+and evicts the rest. Eviction clears only the cache location via E(k,a,0,o,0) = (k,a,0,0,0)
+without altering user conversation behavior. Post-retention states and the next population are
+then
+si(t + 1) =
+
+
+
+E
+ esi(t + 1)
+
+,
+i ∈
+[
+e∈E
+ eIe(t) \ Ie(t)
+
+,
+esi(t + 1),
+otherwise,
+Ms(t + 1) =
+X
+i
+1{si(t + 1) = s},
+s ∈S,
+where the sum ranges over all surviving and newly entering sessions.
+3.3. Capacity Constraints and Optimization
+Let At be the set of active sessions at the beginning of epoch t. During epoch t, an initially active
+session i ∈At incurs execution requirement Lt,i,e at endpoint e (with Lt,i,e = 0 if served elsewhere),
+and arrival j incurs execution requirement Ct,j,e if admitted to endpoint e. We enforce memory
+capacity at epoch boundaries as a discrete-time approximation: an initially active turn and a newly
+admitted turn occupy boundary memory Kact
+t,i,e and Kadm
+t,j,e at endpoint e, respectively (equal to zero
+if the turn completes during the epoch), whereas completed turns consume boundary memory only
+through their retained idle caches of observed size bi(t).
+All per-session execution requirements and active-memory footprints are nonnegative and uni-
+formly bounded. Conditional on the beginning-of-epoch state and arrival sequence, these random
+quantities are independent across sessions and follow known distributions determined by each
+session’s state and action, though their realizations are unknown at the time of routing.
+A nonanticipative policy π specifies the routing actions et,j and retained cache sets Ie(t) using
+only the information observed up to each decision time. Letting N cmp(t) denote the number of turns
+
+
+--- Page 9 ---
+9
+completed during epoch t, our objective from initial state M(0) = M 0 is to maximize expected
+completions:
+V0(M 0) = sup
+π
+Eπ
+"H−1
+X
+t=0
+N cmp(t)
+#
+subject to
+X
+i∈At
+Lt,i,e +
+Jt
+X
+j=1
+Ct,j,e1{et,j = e} ≤Be,
+X
+i∈At
+Kact
+t,i,e +
+Jt
+X
+j=1
+Kadm
+t,j,e1{et,j = e} +
+X
+i∈Ie(t)
+bi(t) ≤Ge,
+(3.1)
+where both constraints must hold almost surely for every e ∈E and t = 0,...,H −1. The first
+constraint bounds computation within epoch t, while the second allocates boundary memory between
+unfinished turns and retained idle caches.
+The objective also admits a useful accounting identity. Define NA(M) = P
+s∈SA Ms as the total
+active population. Because every admitted turn either completes during the epoch or remains active
+at the next boundary,
+N cmp(t) = NA(M(t)) +
+Jt
+X
+j=1
+1{et,j̸ = 0} −NA(M(t + 1)).
+Summing over t = 0,...,H −1 yields
+V0(M 0) = NA(M 0) + sup
+π Eπ
+"H−1
+X
+t=0
+Jt
+X
+j=1
+1{et,j̸ = 0} −NA(M(H))
+#
+.
+Maximizing completions is therefore equivalent to maximizing admissions minus the unfinished
+turns remaining at the terminal time H.
+Solving (3.1) requires trading off immediate service against future cache reuse: routing determines
+where subsequent turns can reuse computations, while retention determines whether those caches
+remain available. Because these decisions interact across sessions through shared computation
+and memory limits, exact dynamic programming is intractable. The next section develops a fluid
+approximation that preserves these intertemporal interactions and leads to a tractable policy.
+Remark 3.1 (Emergency intervention). The formulation in (3.1) describes normal operation. For
+theoretical analysis, we assume that a causal emergency rule can halt admissions and interrupt
+active turns before any endpoint exceeds capacity, with interrupted turns earning no completion
+reward. This rule serves solely to keep the policy well defined on exceptional sample paths and is
+not intended for practical implementation; our policy reserves capacity to make such interventions
+rare, and we bound their impact on performance separately.
+
+
+--- Page 10 ---
+10
+4. The Fluid Approximation and Structural Insights
+We develop a fluid approximation to characterize how anticipated cache reuse should govern current
+admission, routing, and retention decisions. Routing a turn determines where a conversation’s
+history can next be reused, whereas retention determines whether that history survives until the
+conversation returns. Theorem 4.1 couples these decisions through endpoint-specific shadow prices
+for computation and memory together with each conversation’s continuation value.
+For routing, the fluid model favors the endpoint with the highest bid, combining the value
+of serving the current turn, the cost of the resources it consumes, and the resulting change in
+continuation value. When endpoints face similar congestion, keeping a conversation at its cached
+endpoint avoids rebuilding its prefix. By contrast, a persistent congestion imbalance can justify
+migrating a conversation even when doing so makes the current turn more expensive: the rebuild
+penalty is incurred once, whereas lower congestion yields recurring savings over subsequent turns.
+Consequently, two conversations facing the same load imbalance may warrant different routes
+depending on their remaining turn horizons.
+For retention, the fluid model preserves an idle cache whenever the continuation value it protects
+exceeds the one-epoch opportunity cost of the memory it occupies. This trade-off explains why
+intermediate-length prefixes can deserve priority: short prefixes are inexpensive to rebuild, whereas
+very long prefixes may consume more memory than a conversation’s remaining turns can justify.
+Return timing matters as well: when tool execution takes a predictable amount of time, a session
+that has already been idle for several epochs may be the closest to returning.
+These structural insights directly guide the design of the practical algorithm PARK in Section 5.3
+later. Its admission and routing controller updates resource prices online and approximates the
+continuation benefit of migration by comparing the cost of one subsequent warm turn across
+endpoints. Meanwhile, its cache manager ranks idle prefixes by their estimated reuse benefit per
+unit of memory and time, accounting for both prefix length and the effective waiting time per
+successful reuse.
+4.1. The Fluid Linear Program
+Replacing random quantities with their expectations and discrete decisions with continuous fractions
+does not immediately yield a linear program. To see why, let ms(t) denote the fluid population
+in state s (with ms(0) = M 0
+s ), and let αs,e(t) be the fraction of arriving state-s prompts routed
+to endpoint e. The resulting execution load is cs,e(t)
+
+ps(t)ms(t) + νs(t)
+
+αs,e(t), where νs(t) is the
+expected number of new state-s arrivals and cs,e(t) is the conditional mean execution requirement of
+a state-s prompt admitted to e. Because both the future population ms(t) and the routing fraction
+
+
+--- Page 11 ---
+11
+αs,e(t) depend on policy decisions, their product is bilinear. An analogous nonlinearity arises when
+multiplying the post-service idle population by the fraction of caches retained.
+To restore linearity, we instead optimize directly over state–action flow volumes: the total mass
+of prompts routed and caches retained in each state. This reformulation makes both resource
+consumption and population dynamics linear while preserving how current decisions govern future
+cache availability. We first present the resulting linear program, and then use its dual prices to
+derive routing and retention principles that account for a conversation’s future turns.
+Arrival and routing flows. Let ys,e(t) denote the volume of state-s prompts assigned to action
+e ∈E0 in epoch t, where e = 0 represents rejection. Arrival conservation requires
+X
+e∈E0
+ys,e(t) = ps(t)ms(t) + νs(t),
+s ∈SI.
+(4.1)
+Because new sessions enter without a cache, νs(t) = 0 whenever o(s)̸ = 0. The remaining population
+(1 −ps(t))ms(t) consists of idle sessions that submit no prompt during epoch t.
+Population after service. Let ems′(t + 1) be the pre-retention population in live state s′ at the
+end of epoch t, after service and session transitions. Applying the transition kernels from Section 3
+gives
+ems′(t + 1) =
+X
+s∈SA
+ms(t)QA
+t (s,s′) +
+X
+s∈SI
+(1 −ps(t))ms(t)QI
+t(s,s′)
++
+X
+s∈SI
+X
+e∈E0
+ys,e(t)P e
+t (s,s′),
+s′ ∈S.
+(4.2)
+The three sums track transitions from initially active sessions, unprompted idle sessions, and sessions
+with arriving prompts, respectively.
+Cache retention and the next population. For each idle state s ∈SI, let zs,K(t) and zs,D(t)
+denote the flow volumes retained and evicted at the epoch boundary, satisfying
+zs,K(t) + zs,D(t) = ems(t + 1),
+s ∈SI.
+(4.3)
+Cache-free states satisfy zs,K(t) = 0, so all mass is assigned to eviction and remains unchanged.
+Recalling that E(s) maps an idle state s to its cache-free counterpart with o = 0, the post-retention
+population is
+ms′(t + 1) =
+
+
+
+
+
+
+
+ems′(t + 1),
+s′ ∈SA,
+zs′,K(t) +
+X
+s∈SI:
+E(s)=s′
+zs,D(t),
+s′ ∈SI.
+(4.4)
+Retention thus preserves a session’s cache location, whereas eviction shifts its mass into the
+corresponding cache-free state.
+
+
+--- Page 12 ---
+12
+Resource constraints. Let ℓs,e(t) denote the conditional mean execution requirement of an
+initially active state-s session at endpoint e, and recall that cs,e(t) is the conditional mean execution
+requirement of a state-s prompt admitted to e. Per-epoch execution capacity requires
+X
+s∈SA
+ℓs,e(t)ms(t) +
+X
+s∈SI
+cs,e(t)ys,e(t) ≤Be,
+e ∈E.
+(4.5)
+Similarly, let κact
+s,e(t) and κadm
+s,e (t) denote the conditional mean boundary-memory footprints of an
+initially active state-s turn at endpoint e and a state-s prompt admitted to e, respectively (both
+equal zero if the turn completes during the epoch). Letting bs denote the idle cache size recorded in
+state s, boundary memory capacity requires
+X
+s∈SA
+κact
+s,e(t)ms(t) +
+X
+s∈SI
+κadm
+s,e (t)ys,e(t) +
+X
+s∈SI:
+o(s)=e
+bszs,K(t) ≤Ge,
+e ∈E.
+(4.6)
+The three terms account for initially active turns, newly admitted turns, and retained idle caches,
+mirroring the stochastic memory constraint in (3.1).
+The remaining-horizon optimization problem. Consider the remaining-horizon planning
+problem starting at epoch t with population vector M. Applying the completion accounting identity
+from Section 3, we maximize total admissions minus the terminal active population:
+Vt(M) = max
+m, e
+m,y,z
+H−1
+X
+τ=t
+X
+s∈SI
+X
+e∈E
+ys,e(τ) −NA(m(H))
+subject to
+m(t) = M,
+(4.1)–(4.6),
+τ = t,...,H −1,
+zs,K(τ) = 0,
+s ∈SI : o(s) = 0,
+τ = t,...,H −1,
+m, em,y,z ≥0.
+(4.7)
+Total fluid completions equal NA(M) + Vt(M), and setting t = 0 and M = M 0 recovers the initial
+planning problem.
+This linear program links current routing and retention decisions to future service requirements
+through the evolving distribution of cache locations. Its dual shadow prices allow us to weigh the
+immediate resource cost of each action against the continuation value of the session state it creates,
+and we formalize this comparison next to derive routing and retention principles.
+4.2. Bid Prices and the Value of Future Cache Reuse
+Fix a feasible remaining-horizon LP (4.7) starting at epoch t0 with population M, and let
+λe(t),γe(t) ≥0,
+e ∈E,
+t = t0,...,H −1,
+
+
+--- Page 13 ---
+13
+denote its optimal dual shadow prices for execution and memory capacity, respectively. All prices
+and values below refer to this same LP and may vary across epochs.
+At these prices, let vs(t + 1) denote the continuation value of a session in state s at the start of
+epoch t + 1, net of future dual resource charges and inclusive of the terminal penalty for unfinished
+turns in (4.7). Let ws(t) denote its pre-retention value at the end of epoch t; Appendix EC.1.1
+gives the backward recursion defining both value functions. For an idle state s with cache owner e,
+let s0 = E(s) be the corresponding cache-free state. Retaining the cache yields continuation gain
+∆s(t + 1) = vs(t + 1) −vs0(t + 1) at boundary memory cost γe(t)bs, whereas eviction transitions the
+session to s0. Consequently,
+ws(t) = max
+
+vs0(t + 1), vs(t + 1) −γe(t)bs
+	
+.
+(4.8)
+For active and cache-free idle states, ws(t) = vs(t + 1).
+The bid-price characterization. For a state-s prompt routed to endpoint e ∈E, define its
+immediate dual resource cost by
+rs,e(t) = λe(t)cs,e(t) + γe(t)κadm
+s,e (t).
+(4.9)
+The net value of admitting the prompt to endpoint e relative to rejection, termed its bid, is
+Bs,e(t) = 1 −rs,e(t) +
+X
+s′∈S
+
+P e
+t (s,s′) −P 0
+t (s,s′)
+
+ws′(t),
+e ∈E,
+(4.10)
+with Bs,0(t) = 0. The three terms in (4.10) capture the unit admission reward, the immediate dual
+resource cost, and the net change in expected continuation value relative to rejection.
+The next theorem characterizes optimal fluid routing and retention decisions in terms of these
+bids and shadow prices; its proof appears in Appendix EC.1.2.
+Theorem 4.1 (Optimal routing and retention rules). For any optimal fluid solution and the dual
+prices above:
+a. A positive routing flow ys,e(t) > 0 uses an action maximizing Bs,e(t) over E0.
+b. For a cached idle state with positive pre-retention population, its cache is retained if ∆s(t+1) >
+γo(s)(t)bs and evicted if the inequality is reversed.
+At equality, the flow and capacity constraints determine the feasible allocation among tied actions.
+When routing should follow the existing cache. For any two endpoints e1,e2 ∈E, define
+their continuation-value differential by Θs;e1,e2(t) = P
+s′∈S
+
+P e1
+t (s,s′) −P e2
+t (s,s′)
+
+ws′(t). Comparing
+bids via (4.10) gives
+Bs,e1(t) ≥Bs,e2(t)
+⇐⇒
+Θs;e1,e2(t) ≥rs,e1(t) −rs,e2(t).
+(4.11)
+
+
+--- Page 14 ---
+14
+Thus, routing to e1 rather than e2 is optimal whenever its continuation-value advantage outweighs
+any higher immediate resource cost.
+Suppose endpoint e2 holds the session’s cache. When shadow prices and future service conditions
+are similar across endpoints, cache reuse lowers cs,e2(t) and makes e2 cheaper to use, favoring warm
+routing. However, if e2 becomes sufficiently congested, its higher shadow prices raise rs,e2(t) and
+depress future continuation values there, making migration to a less loaded endpoint e1 worthwhile
+despite the upfront cost of rebuilding the cache. This trade-off mirrors the intuition behind SGLang’s
+cache aware routing rule SGLang (2026), which prioritizes cache locality when server loads are
+balanced but switches to the least-loaded endpoint once load imbalance exceeds a threshold.
+Condition (4.11) also highlights the role of remaining conversation length. Serving the current turn
+at e1 establishes a warm cache there for subsequent turns; if e1 is expected to remain less congested,
+those future turns yield recurring savings that amortize the one-time rebuild cost. Migration is
+therefore attractive for a conversation with many turns remaining, whereas it will not pay off for a
+session nearing completion. Consequently, the congestion gap needed to justify rerouting depends
+jointly on expected remaining turns, the persistence of the destination’s cost advantage, and the
+memory price of retaining the newly built cache.
+While routing determines where the next cache is created, retention determines whether it remains
+available for reuse. The next subsection uses Theorem 4.1.b to examine how cache length, idle age,
+and return timing govern which caches should be retained.
+4.3. Which Idle Caches Should Be Retained?
+An idle cache occupies memory now to save computation when the next prompt arrives. Theo-
+rem 4.1.b compares this future benefit against the boundary memory charge: retain the cache
+when ∆s(t + 1) > γo(s)(t)bs, and evict it when the inequality is reversed. We use this comparison to
+examine how cache length, return timing, and idle age govern the value of retaining an idle cache.
+Fix an idle cache at endpoint e at the boundary ending epoch t, with prefix length L > 0 and
+memory footprint bs = βL (β > 0). There are N = H −t −1 ≥1 remaining prompt epochs. Let T
+denote the number of epochs until the next prompt, with T = ∞if the session does not return
+within the horizon. For tractability, suppose the endpoint’s memory shadow price remains constant
+at γ > 0 across waiting boundaries; Appendix EC.1.3 provides exact conditions and extends the
+analysis to time-varying prices.
+The cost of waiting for reuse. Suppose we retain the cache for at most u epochs, evicting it if
+no prompt arrives by then. Over this waiting window, the expected storage duration is E[min(T,u)]
+
+
+--- Page 15 ---
+15
+and the probability of reusing the cache before eviction is P(T ≤u). Define the effective waiting
+time per cached return by
+deff =
+min
+1≤u≤N
+P(T ≤u)>0
+E[min(T,u)]
+P(T ≤u)
+,
+(4.12)
+with deff = ∞when no return is possible (in which case immediate eviction is optimal). Thus,
+deff measures the minimum expected storage time per successful cache reuse across all stopping
+deadlines u. For example, if a prompt arrives deterministically in five epochs, then deff = 5, so
+retaining the cache can be optimal even when an immediate return in the next epoch has probability
+zero. For random return times, deff incorporates the option to abandon waiting early and therefore
+differs from the unconditional mean E[T].
+Conditions for keeping or evicting a cache. For a session with a positive probability of
+return, let R < ∞uniformly bound its expected remaining completions under any admissible policy,
+conditional on the history and chosen route at a cached return or at the first cold admission
+after eviction. Suppose further that, following eviction, the first cold admission incurs an expected
+execution charge of at least
+λ(a1L + a2L2),
+a1 ≥0,
+a2 > 0,
+λ ≥0,
+(4.13)
+where λ lower-bounds the execution shadow price and the linear and quadratic terms capture the
+computation required to rebuild the lost prefix (see, e.g., Vaswani et al. 2017; Hoffmann et al. 2022).
+When the session instead returns with its cache intact, its continuation value equals expected future
+completions minus future execution and memory charges; let ε(L) uniformly bound how far this
+value falls below R across all feasible return dates. A smaller ε(L) thus indicates that retaining the
+cache preserves more of the session’s potential completion value (Appendix EC.1.3.1 formalizes
+ε(L) and provides explicit upper bounds).
+The following proposition establishes sufficient conditions for fluid retention and eviction, showing
+how cache length and return timing jointly govern eviction; its proof appears in Appendix EC.1.3.2.
+Proposition 4.2. Under the preceding setting, the following are sufficient conditions for the fluid
+retention decision.
+• For long cache,
+γbsdeff > R
+=⇒
+evict.
+(4.14)
+• For cache with intermediate length,
+γbsdeff + ε(L) < min{λ(a1L + a2L2),R}
+=⇒
+retain.
+(4.15)
+• For short cache, additionally suppose that, under each fixed routing action, cache reuse changes
+only execution cost, with savings at most ¯λe(a1L + a2L2), where ¯λe ≥0. Then
+¯λe(a1 + a2L) < βγdeff
+=⇒
+evict.
+(4.16)
+
+
+--- Page 16 ---
+16
+Condition (4.15) compares the minimum storage cost per cached return against a lower bound
+on the net value preserved by the cache, whereas (4.14) and (4.16) reverse this comparison using
+upper bounds on that benefit. Proposition 4.2 yields three structural implications.
+Why intermediate lengths can be worth protecting.
+• Short caches save too little computation. When prefix-recomputation savings are primarily
+quadratic in length (a1 ≈0), reuse savings shrink faster than linear storage costs as L decreases.
+Under the additional service assumption, (4.16) implies that sufficiently short caches are
+cheaper to rebuild than to retain, holding return prospects and shadow prices fixed.
+• Very long caches consume too much memory. By (4.14), retaining a cache is subopti-
+mal whenever L > R/(βγdeff). Even a costly rebuild cannot justify storage if the remaining
+conversation offers too few expected completions R to amortize the memory rent.
+• Intermediate-length caches merit highest retention priority. Caches of moderate length
+are expensive enough to rebuild yet compact enough to store profitably. Appendix EC.1.3.3
+derives an explicit interval of protected cache lengths under simple service-cost bounds.
+How waiting for reuse affects retention. Cache value also depends on how long memory
+must be held before the next prompt arrives. Holding cache length, continuation bounds, and
+shadow prices fixed, a larger deff increases the storage cost per return, tightening the retention
+condition (4.15) and relaxing the eviction conditions (4.14)–(4.16). In particular, the maximum
+justifiable cache length R/(βγdeff) shrinks as deff grows, so even a cache that is expensive to rebuild
+should be evicted if capturing its reuse requires excessive waiting.
+When idle age is a useful guide. An older cache is not automatically less valuable; what
+matters is what its idle age reveals about the residual time until the next prompt. For a given
+session class, let U denote the total idle duration (in epochs) from the previous turn’s completion
+to the next prompt, possibly infinite. For a session already idle for a epochs, define its conditional
+return probability (hazard rate) in the next epoch by
+p(a,L) = P(U = a + 1 | U > a,L).
+The following corollary characterizes how the effective waiting time deff(a,L) varies with a session’s
+idle age a under decreasing, increasing, and constant return-probability regimes.
+Corollary 4.3. Compare idle ages at a fixed cache length and remaining horizon. If p(a,L) is
+nonincreasing in a, then
+deff(a,L) = 1/p(a,L),
+with 1/0 = ∞, and deff is nondecreasing in age. If p(a,L) is nondecreasing in a, then deff is
+nonincreasing in age. If p(a,L) is constant in a, then deff is independent of age.
+
+
+--- Page 17 ---
+17
+Because a larger deff favors eviction, Corollary 4.3 explains when least-recently-used (LRU; see,
+e.g., Mattson et al. 1970; Zheng et al. 2024) eviction is effective and when it fails. When the return
+hazard p(a,L) decreases with idle age, meaning longer inactivity signals a less imminent return, deff
+increases with a, making LRU sensible. Conversely, when a prompt is expected after a bounded
+processing or tool-execution delay, the return hazard increases with age: an older session is closer
+to returning, so LRU can prematurely evict a cache that is about to be reused. Combining cache
+length with return-time behavior therefore provides a sharper eviction criterion than recency alone.
+The routing and retention principles developed in this section characterize optimal decisions in the
+deterministic fluid model. Implementing these insights in a stochastic system requires safeguarding
+against random fluctuations in arrivals, service durations, and memory footprints. The next section
+introduces a buffer-reserve policy that translates the fluid solution into online decisions and proves
+that its performance loss relative to the fluid benchmark grows sublinearly with system scale.
+5. A Fluid-Based Policy: Theory and Implementation
+In this section, we first present a buffer-reserve policy that implements the fluid solution and
+establish its asymptotic performance guarantee, and we then adapt its decision rules for practical
+cluster deployment. The buffer-reserve policy inherits the fluid model’s bid-price structure. For
+routing, an endpoint’s bid weighs the value of serving a turn, including future cache reuse, against
+its shadow cost of computation and memory. For retention, an idle cache is kept whenever its
+continuation benefit exceeds the shadow cost of the memory it occupies. Building on this logic, our
+practical algorithm, PARK (described in Section 5.3), approximates these comparisons using online
+resource prices and a one-turn lookahead for admission and routing, alongside an index of expected
+reuse benefit per unit of memory and time for cache retention.
+5.1. The Buffer-Reserve Policy
+The fluid LP plans resource allocation using conditional expectations, whereas actual arrivals,
+execution requirements, and memory footprints fluctuate around their means. Allocating full
+nominal capacity can therefore trigger an overload within the current epoch that re-solving at the
+next epoch cannot undo. Multi-turn service compounds this risk across epochs: unfinished turns
+carry inherited resource commitments into future epochs that cannot be shed by rejecting new
+prompts, while random completions govern when and where idle caches appear. To guard against
+both within-epoch spikes and multi-turn population drift, we pair progressive capacity reserves
+with epoch-by-epoch reoptimization.
+Fix a reserve parameter r > 0. When solving the fluid LP at epoch t, we reduce the available
+capacities at each remaining epoch τ to
+B−,t
+e
+(τ) = Be −(τ −t + 1)r,
+G−,t
+e (τ) = Ge −(τ −t + 1)r,
+τ = t,...,H −1.
+(5.1)
+
+
+--- Page 18 ---
+18
+Algorithm 1 Buffer-reserve fluid policy
+At each epoch t, until an emergency occurs:
+1. Plan. Solve (4.7) from M(t) with capacities (5.1). If infeasible, invoke the emergency rule.
+Otherwise, select an optimal solution via a fixed deterministic tie-breaking rule, and denote its
+current-epoch flows by ys,e(t) and zs,K(t).
+2. Route. Upon arrival j in state st,j, assign et,j = e to the first endpoint e ∈E in a fixed state-
+specific order that has remaining quota:
+j−1
+X
+i=1
+1{st,i = st,j, et,i = e} < ⌊yst,j,e(t)⌋.
+If no such endpoint exists, reject the prompt (et,j = 0). Unused quotas expire at the epoch
+boundary.
+3. Retain. Observe the pre-retention states esi(t + 1), including newly completed sessions. For each
+idle state s with o(s) = e̸ = 0, retain ⌊zs,K(t)⌋caches (or all available caches if fewer exist) in a
+fixed session order, forming Ie(t). Evict all remaining idle caches, update M(t + 1), and proceed
+to epoch t + 1.
+Thus, epoch t holds back r units of each resource, and the buffer grows linearly across future
+epochs. When the LP is re-solved at t + 1 from the observed population M(t + 1), each future
+epoch τ ≥t + 1 regains r units of capacity relative to the previous plan. This released slack ensures
+recourse feasibility when realized populations, particularly ongoing active turns, exceed their fluid
+predictions, while reoptimization adapts routing and retention quotas to realized cache locations.
+Algorithm 1 converts the current-epoch fluid flows into rounded integer quotas, making immediate
+routing decisions upon arrival and boundary retention decisions after service outcomes are observed.
+Whenever a capacity intervention is required or the re-solved LP becomes infeasible, the causal
+emergency rule from Section 3 applies.
+Connection to bid-price control. By Theorem 4.1, positive flows in the buffered LP follow the
+optimal bid-price routing and retention comparisons under the buffered dual prices, while the flow
+magnitudes resolve ties among indifferent actions and enforce capacity limits. Algorithm 1 implements
+these primal–dual decisions through rounded quotas that are refreshed at every reoptimization.
+5.2. Scaling and Performance Guarantee
+To evaluate the policy in large-scale deployments where servers house multiple GPUs and support
+many concurrent sessions, we analyze an asymptotic regime in which demand and capacity grow
+
+
+--- Page 19 ---
+19
+proportionally with a scale parameter n ≥2. Specifically, in system n, endpoint capacities and
+expected new-session arrivals scale as
+B(n)
+e
+= nBe,
+G(n)
+e
+= nGe,
+E[Ξ(n)
+s (τ) | Fτ] = nνs(τ),
+(5.2)
+where Ξ(n)
+s (τ) counts new state-s sessions entering in epoch τ and Fτ denotes the history observed
+up to the start of epoch τ. The set of endpoints E, state space S, horizon H, and all per-session
+resource and transition laws remain fixed, while normalized initial populations lie in a bounded set
+∥m∥1 ≤K0 independent of n.
+The following assumption bounds tail fluctuations in new-session arrivals.
+Assumption 5.1. For every state s, epoch τ, and u ≥0,
+P
+ |Ξ(n)
+s (τ) −nνs(τ)| > u
+Fτ
+
+≤C0 exp
+
+−u2
+C0n
+
+,
+where C0 > 0 is independent of n and the observed history.
+This sub-Gaussian concentration holds, for instance, when arrivals originate from O(n) indepen-
+dent user sources, each generating a bounded number of new sessions per epoch conditional on Fτ,
+in which case Hoeffding’s inequality yields the bound.
+In system n, we set the capacity reserve to
+rn = b
+p
+nlog n,
+(5.3)
+for a fixed constant b > 0, and apply Algorithm 1 with scaled capacities nBe and nGe and reserve
+r = rn in (5.1). Starting at epoch t from population M = nm, let V BR
+t,n (nm) denote the policy’s
+expected completions through horizon H, and let En be the event that an emergency intervention
+occurs at any point over this period (including the terminal boundary). We benchmark performance
+against the unbuffered fluid value
+Wt(m) = NA(m) + Vt(m),
+where Vt(m) is the optimal value of (4.7) under nominal capacities Be,Ge and arrival rates νs(τ)
+without reserves. By linearity, nWt(m) is the fluid benchmark for system n. The following theorem
+shows that the buffer-reserve policy avoids capacity emergencies with high probability and tracks
+this fluid benchmark within eO(√n) completions.
+Theorem 5.2. Under Assumption 5.1, choose b sufficiently large. Then for all sufficiently large n
+and any normalized initial population m for which the initial buffered LP is feasible:
+(i) The policy is nonanticipative, satisfies all resource capacities (with the emergency rule), and
+incurs an emergency intervention with probability at most PBR(En) ≤n−2.
+
+
+--- Page 20 ---
+20
+(ii) Its expected completions satisfy
+nWt(m) −V BR
+t,n (nm) ≤C
+p
+nlog n,
+(5.4)
+where C > 0 is independent of n and m.
+Theorem 5.2 establishes an eO(√n) additive shortfall relative to the fluid benchmark; dividing
+(5.4) by n gives
+Wt(m) −V BR
+t,n (nm)
+n
+≤C
+r
+log n
+n
+,
+so the per-unit performance loss vanishes as n grows. The proof in Appendix EC.2 decomposes the
+performance gap into three components: quota rounding and stochastic fluctuations in arrivals and
+transitions contribute O(√n), the capacity reserve rn sacrifices O(√nlog n), and rare emergency
+interventions contribute O(1/n). Setting rn = b√nlog n balances these effects: it provides enough
+slack at each reoptimization to absorb drift in unfinished work and preserve LP feasibility with
+high probability, while adapting routing and retention quotas to realized cache locations.
+Remark 5.3 (Asymptotic optimality). Theorem 5.2 can also yield an asymptotic optimality guarantee
+when all policies have access to the same emergency rule. For this comparison, we charge each
+policy a fixed penalty per interrupted turn, large enough to cover the benefit of freeing capacity.
+The emergency rule is a theoretical safeguard: the buffer-reserve policy reserves enough capacity
+that it needs to interrupt service only on rare sample paths. Its expected total penalty therefore
+vanishes as the system grows, and its expected completions net of penalties are within O(√nlog n)
+of the best feasible policy. Appendix EC.2 gives the proof.
+5.3. Practical Implementation: Asynchronous Primal–Dual Control and Index Eviction
+The buffer-reserve policy (Algorithm 1) operates in synchronous epochs, observes the full system
+state before each decision, re-solves a multi-epoch linear program at every step, and directly enforces
+both routing and cache eviction. While these abstractions facilitate theoretical analysis, production
+LLM serving clusters differ in three operational respects:
+(i) Asynchronous arrivals and delayed state updates: Prompts arrive continuously between control
+updates, while endpoint utilization snapshots arrive with delay, making it computationally
+prohibitive to re-solve a multi-epoch LP at every arrival.
+(ii) Decoupled admission and dispatch: Because routing decisions precede actual client dispatch,
+the controller must reserve capacity through short-lived admission offers to prevent concurrent
+requests from double-booking resources.
+(iii) Engine-local cache reclamation: In production inference engines (such as vLLM; see, e.g., vLLM
+2026), the central router does not forcibly evict KV blocks; instead, each endpoint’s local
+memory manager reclaims unpinned idle blocks on demand whenever active generation requires
+space.
+
+
+--- Page 21 ---
+21
+Table 1
+The buffer-reserve policy and PARK. Both charge for scarce resources and account for the value of future
+cache reuse.
+Decision
+Buffer-reserve policy (Algorithm 1)
+PARK (Algorithm 2)
+Resource prices
+Re-solving the buffered fluid LP each
+epoch yields shadow prices for computa-
+tion and memory.
+Updated online via projected subgradient
+steps driven by excess desired demand for
+work and active KV memory.
+Routing
+The fluid bid accounts for current
+resource use and the change in continua-
+tion value over the remaining horizon.
+The bid accounts for predicted prefix reuse
+now and the priced cost of one subsequent
+warm turn after a migration.
+Admission
+Use the buffered plan to route arrivals,
+rejecting an arrival when its routes have
+no remaining quota.
+Offer an eligible endpoint with sufficient
+residual capacity; requests without a quali-
+fying offer wait for reconsideration.
+Retention
+At each epoch boundary, weigh the con-
+tinuation value of an idle cache against
+the memory charge for keeping it.
+When active work needs memory, reclaim
+the lowest-priority blocks, where priorities
+reflect reuse value per byte-epoch.
+To bridge these gaps while preserving the economic structure of Theorem 4.1 and Algorithm 1,
+we pair an event-driven admission and routing controller (approximating the bid-price rule in
+Theorem 4.1.a) with an endpoint-local retention index (approximating the retention rule in Theo-
+rem 4.1.b). Rather than re-solving the full fluid LP, the central controller maintains shadow prices
+λe ≥0 for computation and γe ≥0 for active memory at each endpoint e ∈E, uses them to evaluate
+bid scores, and updates them via projected subgradient steps on excess desired demand. Simul-
+taneously, each endpoint ranks reclaimable idle caches using a Gittins-style value-per-byte-epoch
+index derived from Section 4.3. We refer to the resulting integrated policy as PARK (summarized
+in Algorithm 2), with experimental parameter values listed in Table EC.1, and full implementation
+details included in Section EC.3.2, both in the Appendix. Table 1 contrasts how PARK and the
+buffer-reserve policy translate the two bid-price comparisons of Theorem 4.1 into serving decisions.
+Admission and routing. For a ready request i and endpoint e, let wie denote the estimated
+computation work for the uncached prompt and generated reply, and let mie denote the estimated
+active KV-memory footprint. For a returning session, the controller credits expected prefix reuse
+only at its current cache owner oi. It assigns endpoint e the bid score
+sie = 1 + ωi −λewie −γemie + ∆ie.
+(5.5)
+Here, 1 represents the unit reward for serving the turn, ωi is a bounded bonus that increases
+with waiting time prior to admission, and λe and γe price computation work and active memory,
+respectively. For a new session or a return to the current owner, ∆ie = 0. For a migration away from
+the owner, ∆ie = α(Fioi −Fie), where Fie is the priced resource cost of serving one subsequent warm
+turn at endpoint e and α is a lookahead weight. Thus, migrating a session incurs the immediate
+cost of rebuilding its prefix, but earns credit for lower congestion on the next turn.
+
+
+--- Page 22 ---
+22
+The controller restricts eligibility to endpoints with recent status reports. A returning session
+may migrate only when the candidate destination exhibits a sustained load advantage, offers a
+sufficiently higher bid than the current owner, and has elapsed a minimum cooldown since its
+previous endpoint binding. Standard requests are processed in decreasing order of their best eligible
+bid: each receives an offer for its highest-bidding eligible route that has a nonnegative bid and
+sufficient residual capacity after accounting for ongoing work and outstanding offers, while unplaced
+requests remain held in queue. Overdue requests are processed first in arrival order and may bypass
+the bid nonnegativity check, subject to the same capacity limits.
+Updating prices. For each resource j (computation work or active memory), let Cej denote
+the capacity budget at endpoint e and Dej its desired load, comprising ongoing work, outstanding
+offers, and the demand of every ready request whose best eligible bid is nonnegative and selects
+e, which is measured before capacity checks. Writing pej for the unit shadow price (λe or γe) and
+zej = Cejpej for its budget-scaled value, the controller updates prices with step size η > 0 via
+z+
+ej =
+
+zej + η(Dej/Cej −1)
+
++.
+(5.6)
+Measuring desired demand prior to capacity filtering allows an endpoint’s shadow price to keep
+rising even after its admissions are capped.
+KV cache retention and eviction. For an idle prefix of length L and idle age a, let bs = βL
+denote its memory footprint and c
+deff(a,L) the estimated holding time per successful reuse, as
+defined in (4.12). Each endpoint evaluates the retention index
+bI(L,a) =
+bg(L,a)
+bs c
+deff(a,L)
+,
+bg(L,a) = min{ bR, λe(a1L + a2L2)}.
+(5.7)
+The numerator prices the work saved upon reuse at the estimated execution shadow price λe, using
+linear and quadratic rebuild-cost coefficients a1 and a2, and caps the resulting benefit at a fixed
+reference value; the index is set to zero if no useful return is forecast. Because the memory allocator
+reclaims physical KV blocks rather than whole sessions, it quantizes each session’s index into a
+discrete priority and sums those priorities across all sessions sharing a given block. Unpinned,
+reclaimable blocks are bucketed by aggregate priority and evicted from the lowest nonempty bucket
+first, allowing shared prefix blocks to survive eviction even when individual sharing sessions have
+modest standalone priority.
+6. Experimental Results
+We evaluate our framework using real multi-turn AI-agent workloads on large-scale GPU clusters.
+Section 6.1 describes the experimental environment, workload characteristics, benchmark policies,
+and performance metrics. Section 6.2 compares PARK (Algorithm 2) against standard routing
+and caching baselines across 16- and 128-GPU deployments. Finally, Section 6.3 isolates the two
+mechanisms driving these gains: value-aware cache retention and session-affine routing.
+
+
+--- Page 23 ---
+23
+Algorithm 2 PARK (Price-based Admission and Routing with KV-cache Retention)
+Central controller, each control round.
+1. Refresh endpoint loads and outstanding offers, and estimate the work and active memory for each ready
+request at each eligible destination.
+2. Compute route bids using (5.5), and record desired load at each request’s highest-bidding eligible destination
+whenever that bid is nonnegative, prior to capacity filtering.
+3. Process overdue requests in arrival order, followed by standard requests in decreasing order of best eligible
+bid; issue an offer for each request’s highest-bidding qualifying route, reserve its capacity, and hold unplaced
+requests.
+4. Update work and memory prices using (5.6). When a client acts on an offer, recheck eligibility and capacity
+before dispatch, and release unused offers upon expiry.
+Endpoint allocator, whenever active work needs KV blocks. Reclaim unpinned blocks from the lowest nonempty
+priority bucket until sufficient blocks are available or none remain eligible.
+6.1. Experimental Setting, Workloads, and Benchmarks
+Agent execution and cluster architecture. In each experiment, a bounded-concurrency
+client manages a pool of sessions, each corresponding to one execution, or rollout, of an agent task.
+Within each session, the agent alternates between LLM inference calls and external tool execution,
+such as running shell commands or tests in containerized environments. Each admitted inference
+request initiates a turn, and all requests within a session carry the same persistent identifier.
+All cluster experiments serve the same fixed Step 3.7 Flash checkpoint (StepFun, 2026), a mixture-
+of-experts (MoE) model with approximately 197 billion parameters, 45 decoder layers, and hidden
+dimension 4,096 (its 42 MoE layers each activate eight of 288 routed experts per token alongside
+one shared expert). Each serving replica spans eight H200 GPUs using tensor parallelism (TP8).
+Consequently, the 8-, 16-, and 128-GPU deployments provide one, two, and sixteen independently
+routable endpoints, respectively. No model weights are updated during measurement. A central
+CPU router queries the request-scheduler over gRPC for admission and endpoint selection, while
+vLLM manages token-level batching and physical KV blocks locally on each replica. Additional
+telemetry, instrumentation, and hyperparameter details appear in Appendix EC.3.
+Workloads. We evaluate two multi-turn software-engineering benchmarks:
+• SWE: A production mixture of 2,645 software-engineering tasks drawn from SWE-Factory
+(1,632) (Guo et al., 2026), SWE-rebench-v2 (975) (Badertdinov et al., 2026), and Multi-SWE-
+RL (38) (Zan et al., 2025; ByteDance Seed, 2025), spanning 2,641 distinct task identifiers
+across multiple programming languages.
+
+
+--- Page 24 ---
+24
+Statistic
+SWE
+TB
+Total sessions
+2,244
+2,521
+Completed sessions
+1,769
+2,045
+Completed turns
+162,894
+39,667
+Prompt tokens per turn 40,841 / 95,359
+35,373 / 91,361
+Output tokens per turn
+147 / 1,014
+808 / 5,589
+Table 2
+Workload trajectories in the 16-GPU
+PARK runs of Table 4. Paired entries give the
+median / 90th percentile.
+0
+50
+100
+150
+200
+250
+Turns per completed session
+0
+0.25
+0.50
+0.75
+1
+Empirical cumulative fraction
+(a) Model turns
+TB
+SWE
+1
+10
+100
+1k
+10k
+100k
+Output tokens per turn
+(log scale)
+(b) Per-turn output
+TB
+SWE
+Figure 1
+Empirical cumulative distributions of (left) model
+turns per completed session, and (right) output tokens per turn
+on SWE and TB.
+• TB: A corpus of 1,468 distinct hard software-engineering tasks packaged in the Terminal-
+Bench 2.0 task format (Merrill et al., 2026) and run on the Terminus scaffold (Merrill et al.,
+2026, Section 3).
+Table 2 and Figure 1 summarize the two workloads in the three-hour PARK runs used for
+Table 4. Although both workloads accumulate long prompt histories (averaging 43,168 prompt
+tokens per request on SWE and 36,254 on TB), their interaction patterns differ sharply. Completed
+SWE sessions average 71.87 turns with relatively short responses (mean 433.46 output tokens),
+creating frequent opportunities to reuse the conversation’s prefix across rapid tool calls. By contrast,
+completed TB sessions average 16.52 turns with responses approximately 5.3 times as long on average
+(2,290.16 output tokens), placing substantially heavier pressure on active decode concurrency and
+KV-cache capacity per turn.
+Benchmark policies. Table 3 summarizes the six serving policies compared in our cluster
+experiments. All five baseline policies admit every arriving prompt immediately without holding
+and rely on vLLM’s native least-recently-used (LRU) eviction when an endpoint needs KV blocks;
+they differ only in how they select an endpoint. Let Re and We denote running and waiting requests
+at endpoint e, Be its reported pending-prefill tokens, and Ue = P −min{He,P −1} the estimated
+uncached prefill tokens for a prompt of length P given longest witnessed local prefix He. The
+three queue- and prefill-based baselines minimize Re + We (Shortest queue), Re + 4We (Weighted
+queue), and Be (Least prefill), respectively. SGLang routing ports SGLang’s cache aware zmq
+endpoint-selection rule SGLang (2026) into our shared vLLM serving stack: it routes to the endpoint
+with the longest cached prefix match whenever the relative match exceeds 50% and server load
+imbalance remains within configured thresholds, and otherwise selects the least-loaded endpoint. In
+contrast, PARK (Algorithm 2) couples shadow-price admission and routing with priority-bucket
+KV eviction. Exact tie-breaking and staleness rules appear in Appendix EC.3.
+
+
+--- Page 25 ---
+25
+Table 3
+Summary of evaluated policies.
+Policy
+Admission and Routing Rule
+KV Eviction Rule
+Round robin
+cyclic rotation across replicas
+Native LRU
+Shortest queue
+arg mine(Re + We)
+Native LRU
+Weighted queue
+arg mine(Re + 4We)
+Native LRU
+Least prefill
+arg mine Be
+Native LRU
+SGLang routing (port) prefix-match threshold with load fallback
+Native LRU
+PARK (Algorithm 2)
+Bid-price session-affine routing
+Priority-bucket index
+Performance metrics. Our primary serving metric is output throughput (generated tokens/s),
+defined as the aggregate rate at which output tokens are produced across all replicas—computed from
+each replica’s cumulative generated-token counter divided by elapsed wall-clock time, as recorded
+by an independent monitor (Appendix EC.3). Because output throughput tracks continuous token
+generation while requests are decoding, whereas turn throughput (completed turns/min) registers
+only when a turn finishes, the two rates can diverge over a run: synchronized client release rounds
+or short tool-call replies produce sharp early spikes in completed turns/min with modest token/s,
+whereas long generations sustain high token/s at lower turn-completion rates. We therefore report
+output tokens/s alongside completed turns/min and completed sessions.
+6.2. PARK Performance on Real Agent Workloads
+16-GPU policy comparison. Table 4 reports full-window performance across all six policies
+on the two-replica (16-GPU) deployment (three hours of measurement), and Figures 2 and 3 show
+the corresponding time-series trajectories on SWE and TB. On both workloads, PARK achieves
+the highest output throughput, delivering 6,575 tokens/s on SWE and 8,590 tokens/s on TB.
+Table 4
+Full-window performance on 16 H200 GPUs (two TP8 replicas). Each three-hour window starts at the
+first request admission.
+SWE
+TB
+Policy
+Tokens/s vs. Best Base
+Turns/min
+Tokens/s
+vs. Best Base
+Turns/min
+Round robin
+1,505
+−71.6%
+215.8
+5,261
+−14.2%
+136.9
+Shortest queue
+1,551
+−70.7%
+221.7
+6,135
+0.0%
+156.9
+Weighted queue
+1,946
+−63.3%
+290.3
+5,204
+−15.2%
+136.7
+Least prefill
+1,959
+−63.0%
+283.3
+5,920
+−3.5%
+151.1
+SGLang routing (port)
+5,296
+0.0%
+716.9
+5,509
+−10.2%
+140.6
+PARK
+6,575
++24.2%
+905.0
+8,590
++40.0%
+220.4
+Over the full three-hour window (Table 4), PARK outperforms the strongest measured baseline
+on each workload. On SWE, it reaches 6,575 tokens/s, 24.2% above SGLang routing and 336.9%
+above Round robin. On TB, it reaches 8,590 tokens/s, 40.0% above Shortest queue and 63.3% above
+Round robin. The identity of the strongest baseline changes with the workload, consistent with the
+
+
+--- Page 26 ---
+26
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+2,500
+5,000
+7,500
+10,000
+Output throughput (tokens/s)
+A  Output throughput
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+500
+1,000
+1,500
+2,000
+Completed turns/min
+B  Turn throughput
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+25
+50
+75
+100
+KV cache usage (%)
+C  KV cache usage
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+25
+50
+75
+100
+KV prefix hit rate (%)
+D  KV prefix hit rate
+SWE · 16 H200 GPUs
+PARK
+Shortest queue
+Weighted queue
+Least prefill
+SGLang routing (port)
+Round robin
+Figure 2
+Time-series trajectories of output throughput, turn throughput, KV cache occupancy, and KV prefix hit
+rate on SWE (16 GPUs).
+trajectory differences in Table 2. SWE sessions average about 72 turns, with short responses and
+repeated opportunities to reuse a conversation prefix. On SWE, SGLang routing achieves a 97.8%
+prefix hit rate and 5,296 tokens/s, compared with 1,551–1,946 tokens/s for the two queue-based
+policies. On TB, where responses average 2,290 output tokens, Shortest queue leads the baselines at
+6,135 tokens/s, ahead of SGLang routing at 5,509 tokens/s. Across these two regimes, PARK’s joint
+admission and routing policy also achieves the highest turn throughput, completing 905.0 turns/min
+on SWE and 220.4 turns/min on TB.
+128-GPU deployment. To verify that PARK’s centralized primal–dual control and local
+eviction coordinate larger clusters under real agent traffic, we scale the deployment eightfold from
+two to sixteen TP8 replicas (128 GPUs) and increase the maximum number of concurrent sessions
+eightfold from 512 to 4,096 (Table 5). Over a three-hour measurement window, PARK sustains
+approximately 50,789 output tokens/s on SWE, substantially outperforming the baselines (Figure 4).
+The cluster completes 6,473 turns/min with a 97.42% prefix cache hit rate and an average KV
+occupancy of 56.15%, and during this window, 12,295 sessions finished. In a separate three-hour
+evaluation on TB at the same scale, PARK achieves 67,363 output tokens/s and 1,575 turns/min,
+with 13,563 completed sessions, while maintaining a 91.32% prefix cache hit rate at an average KV
+occupancy of 41.04%.
+
+
+--- Page 27 ---
+27
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+4,000
+8,000
+12,000
+16,000
+Output throughput (tokens/s)
+A  Output throughput
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+250
+500
+750
+1,000
+Completed turns/min
+B  Turn throughput
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+25
+50
+75
+100
+KV cache usage (%)
+C  KV cache usage
+0
+30
+60
+90
+120
+150
+180
+Minutes since first request admission
+0
+25
+50
+75
+100
+KV prefix hit rate (%)
+D  KV prefix hit rate
+TB · 16 H200 GPUs
+PARK
+Shortest queue
+Weighted queue
+Least prefill
+SGLang routing (port)
+Round robin
+Figure 3
+Time-series trajectories of output throughput, turn throughput, KV cache occupancy, and KV prefix hit
+rate on TB (16 GPUs).
+Table 5
+Cluster configurations for the PARK scale-up evaluation.
+16-GPU Deployment
+128-GPU Deployment
+Inference GPUs
+16
+128
+Routable TP8 replicas
+2
+16
+GPUs per replica
+8
+8
+Maximum pending sessions
+512
+4,096
+Permitted sessions per replica
+256
+256
+6.3. Cache Retention and Routing Behavior
+Single-replica cache-retention ablation. To isolate the impact of index-based eviction from
+routing, we evaluate a single eight-GPU replica (E = 1) on SWE with fixed round-robin dispatch and
+a maximum of 256 pending sessions (five-minute warmup followed by 30 minutes of measurement).
+Both arms use identical vLLM asynchronous scheduling and chunked prefill; only the selection of
+reclaimable idle KV blocks differs between native LRU and our priority-bucket retention index
+(Section 5.3).
+Table 6 traces the causal chain from cache survival to serving throughput:
+1. Reduced prior-prefix loss: By prioritizing intermediate-length prefixes with high expected
+reuse value per byte-epoch rather than evicting purely by recency, the retention index cuts
+prior-prefix token loss—the token-weighted share of previously verified prefix tokens missing
+
+
+--- Page 28 ---
+28
+0
+30
+60
+90
+120
+150
+180
+Elapsed observation time (min)
+0
+15,000
+30,000
+45,000
+60,000
+Output throughput (tokens/s)
+A  Output throughput
+0
+30
+60
+90
+120
+150
+180
+Elapsed observation time (min)
+0
+4,000
+8,000
+12,000
+16,000
+Completed turns/min
+B  Turn throughput
+0
+30
+60
+90
+120
+150
+180
+Elapsed observation time (min)
+0
+25
+50
+75
+100
+KV cache usage (%)
+C  KV cache usage
+0
+30
+60
+90
+120
+150
+180
+Elapsed observation time (min)
+0
+25
+50
+75
+100
+KV prefix hit rate (%)
+D  KV prefix hit rate
+SWE · 128 H200 GPUs
+PARK
+Shortest queue
+Weighted queue
+Least prefill
+SGLang routing (port)
+Round robin
+Figure 4
+Time-series trajectories of output throughput, turn throughput, KV cache occupancy, and KV prefix hit
+rate on SWE (128 GPUs).
+Table 6
+Single-replica (8-GPU) cache-retention ablation on SWE (30-minute measurement window).
+Metric
+Native LRU
+Retention Index
+Cache preservation
+Prior-prefix token loss (%)
+13.26
+2.17
+Returning turns experiencing prefix loss (%)
+9.48
+2.72
+Verified prefix rebuild (M tokens)
+30.77
+6.62
+Prefill computation
+Total scheduled prefill (M tokens)
+55.52
+29.70
+Local prefill tokens per output token
+13.26
+5.19
+Throughput and latency
+Output throughput (tokens/s)
+2,326
+3,179
+Completed model turns/min
+275.6
+373.5
+Mean TTFT (s)
+25.56
+16.49
+Mean ITL (ms)
+50.54
+39.90
+Mean request latency (s)
+48.09
+36.00
+when a session returns—from 13.26% to 2.17%, reducing verified prefix recomputation from
+30.77M to 6.62M tokens.
+2. Lower prefill overhead: Preserving resident prefixes cuts total scheduled prefill nearly in half
+(from 55.52M to 29.70M tokens), reducing prefill tokens processed per generated output token
+from 13.26 to 5.19.
+
+
+--- Page 29 ---
+29
+3. Higher throughput and lower latency: Freeing compute capacity from redundant prefill raises
+output throughput by 36.7% (from 2,326 to 3,179 tokens/s) and reduces mean time-to-first-
+token (TTFT) by 35.5% (from 25.56 s to 16.49 s).
+Multi-replica endpoint affinity and cache thrashing. In multi-replica clusters, routing
+and retention reinforce one another: returning a session to its cache owner creates an opportunity
+for prefix reuse, which generates savings only if the prefix survives the inter-turn tool delay. In
+the three-hour, 16-GPU SWE runs, PARK switched replicas on 0.14% of returning requests
+(222 of 161,218), compared with 50.14% for Round robin (19,310 of 38,515). Panels C and D of
+Figures 2 and 3 illustrate the operational consequence across time: baselines such as Shortest queue
+accumulate high KV occupancy (Panel C) while suffering near-zero prefix hit rates (Panel D)
+because cross-replica switching and recency eviction continually thrash cached prefixes, whereas
+PARK maintains moderate KV occupancy (≈50% on SWE) alongside a ≈98% prefix hit rate.
+7. Conclusion
+Multi-turn AI agents transform LLM serving from stateless request dispatch into a dynamic resource-
+allocation problem with endogenous state: routing determines where a conversation’s prefix can
+next be reused, whereas cache retention determines whether that prefix survives inter-turn delays.
+By formulating a fluid approximation of this joint system, we characterized optimal admission,
+routing, and eviction through endpoint-specific shadow prices for computation and memory coupled
+with session continuation values (Theorem 4.1). Building on this decomposition, we developed a
+synchronous buffer-reserve policy (Algorithm 1) and proved that setting aside a capacity reserve of
+order √nlog n keeps emergency interventions rare and achieves an O(√nlog n) completion shortfall
+relative to the fluid benchmark (Theorem 5.2).
+To bring these structural principles to production clusters characterized by asynchronous arrivals,
+delayed load reports, and engine-local memory management, we designed PARK (Algorithm 2).
+PARK pairs projected subgradient price updates and one-turn migration lookahead at a central
+controller with a priority-bucket KV retention index based on reuse value per byte-epoch at each
+endpoint. Across 16- and 128-GPU deployments serving multi-turn software-engineering workloads
+(Section 6), PARK outperforms both load-balancing and prefix-aware baselines across contrasting
+interaction regimes, adapting between long-horizon, short-reply trajectories (SWE) and memory-
+intensive, long-generation trajectories (TB). The single-replica ablation demonstrates the benefit
+of value-aware cache retention, while the multi-replica measurements document PARK’s high
+prefix-reuse rates.
+
+
+--- Page 30 ---
+30
+References
+Adelman D, Mersereau AJ (2008) Relaxations of weakly coupled stochastic dynamic programs.
+Operations Research 56(3):712–727, URL http://dx.doi.org/10.1287/opre.1070.0445.
+Ao R, Luo G, Simchi-Levi D, Wang X (2026) Optimizing LLM inference: Fluid-guided online schedul-
+ing with memory constraints. URL https://arxiv.org/abs/2504.11320v4, arXiv:2504.11320,
+version 4. First circulated in 2025.
+Badertdinov I, Nekrashevich M, Shevtsov A, Golubev A (2026) SWE-rebench V2: Language-agnostic
+SWE task collection at scale. Proceedings of the International Conference on Machine Learning
+(ICML), URL https://arxiv.org/abs/2602.23866, arXiv:2602.23866.
+Bertsimas D, Miˇsi´c VV (2016) Decomposable Markov decision processes: A fluid optimization
+approach. Operations Research 64(6):1537–1555, URL http://dx.doi.org/10.1287/opre.2016.
+1531.
+Brown DB, Zhang J (2022) Dynamic programs with shared resources and signals: Dynamic
+fluid policies and asymptotic optimality. Operations Research 70(5):3015–3033, URL http:
+//dx.doi.org/10.1287/opre.2021.2181.
+Brown DB, Zhang J (2025) Fluid policies, reoptimization, and performance guarantees in dynamic
+resource allocation. Operations Research 73(2):1029–1045, URL http://dx.doi.org/10.1287/
+opre.2022.0601.
+Bumpensanti P, Wang H (2020) A re-solving heuristic with uniformly bounded loss for network rev-
+enue management. Management Science 66(7):2993–3009, URL http://dx.doi.org/10.1287/
+mnsc.2019.3365.
+ByteDance Seed (2025) Multi-SWE-RL: An open-source community dataset for reinforcement learn-
+ing on issue-resolving tasks. Hugging Face Datasets, URL https://huggingface.co/datasets/
+ByteDance-Seed/Multi-SWE-RL.
+Chen Z, Ye Y, Zhou Z (2026) Online linear programming for multi-objective routing in LLM serving.
+Proceedings of the 43rd International Conference on Machine Learning, volume 306 of Proceedings
+of Machine Learning Research, 17892–17912 (PMLR), URL https://proceedings.mlr.press/
+v306/chen26ft.html.
+Dai JG, Deng T, Li Y, Peng T (2026) Throughput-optimal scheduling algorithms for LLM inference
+and AI agents. URL https://arxiv.org/abs/2504.07347v3, arXiv:2504.07347, version 3. First
+circulated in 2025.
+Dehghan M, Massouli´e L, Towsley D, Menasch´e D, Tay YC (2016) A utility optimization approach
+to network cache design. IEEE INFOCOM 2016—The 35th Annual IEEE International Con-
+ference on Computer Communications, 1–9, URL http://dx.doi.org/10.1109/INFOCOM.2016.
+7524445.
+
+
+--- Page 31 ---
+31
+Feng Y, Liu S, Yang Z, Zhang Y (2026) General non-clairvoyant KV-cache scheduling via regime-
+aware routing. URL https://arxiv.org/abs/2607.09248, arXiv:2607.09248.
+Ferragut A, Rodr´ıguez I, Paganini F (2016) Optimizing TTL caches under heavy-tailed demands.
+Proceedings of the 2016 ACM SIGMETRICS International Conference on Measurement and
+Modeling of Computer Science (Association for Computing Machinery), URL http://dx.doi.
+org/10.1145/2896377.2901459.
+Gao B, He Z, Sharma P, Kang Q, Jevdjic D, Deng J, Yang X, Yu Z, Zuo P (2024) Cost-efficient
+large language model serving for multi-turn conversations with CachedAttention. 2024 USENIX
+Annual Technical Conference (USENIX ATC 24), 111–126 (USENIX Association), URL https:
+//www.usenix.org/conference/atc24/presentation/gao-bin-cost.
+Gast N, Gaujal B, Yan C (2024) Reoptimization nearly solves weakly coupled Markov decision
+processes. URL https://arxiv.org/abs/2211.01961v2, arXiv:2211.01961, version 2. First cir-
+culated in 2022.
+Goyal V, Iyengar G, Udwani R (2025) Asymptotically optimal competitive ratio for online allocation
+of reusable resources. Operations Research 73(4):1897–1915, URL http://dx.doi.org/10.1287/
+opre.2021.0695.
+Guo L, Wang Y, Li C, Tao W, Yang P, Chen J, Song H, Tang D, Zheng Z (2026) SWE-Factory:
+Your automated factory for issue resolution training data and evaluation benchmarks. Proceedings
+of the ACM International Conference on the Foundations of Software Engineering (FSE), URL
+https://arxiv.org/abs/2506.10954, to appear. arXiv:2506.10954.
+Hoffmann J, Borgeaud S, Mensch A, Buchatskaya E, Cai T, Rutherford E, de Las Casas D,
+Hendricks LA, Welbl J, Clark A, Hennigan T, Noland E, Millican K, van den Driessche G,
+Damoc B, Guy A, Osindero S, Simonyan K, Elsen E, Rae JW, Vinyals O, Sifre L (2022) Training
+compute-optimal large language models. Advances in Neural Information Processing Systems,
+volume 35, 30016–30030, URL https://arxiv.org/abs/2203.15556.
+Hugging Face (2026) Caching. Transformers documentation, URL https://huggingface.co/docs/
+transformers/cache_explanation, accessed September 27, 2026.
+Jaillet P, Jiang J, Mellou K, Molinaro M, Podimata C, Zhou Z (2026) Online scheduling
+for LLM inference with KV cache constraints. URL https://arxiv.org/abs/2502.07115v5,
+arXiv:2502.07115, version 5. First circulated in 2025.
+Jasin S, Kumar S (2012) A re-solving heuristic with bounded revenue loss for network revenue
+management with customer choice. Mathematics of Operations Research 37(2):313–345, URL
+http://dx.doi.org/10.1287/moor.1120.0537.
+Kwon W, Li Z, Zhuang S, Sheng Y, Zheng L, Yu CH, Gonzalez JE, Zhang H, Stoica I (2023)
+Efficient memory management for large language model serving with PagedAttention. Proceedings
+
+
+--- Page 32 ---
+32
+of the 29th Symposium on Operating Systems Principles (Association for Computing Machinery),
+URL https://arxiv.org/abs/2309.06180.
+Li Y, Chen Y, Chen J, Choukse E, Qiu H, Suh GE, Fonseca R, Scully Z, Gupta U (2026)
+Beyond prediction: Tail-aware scheduling for LLM inference. Proceedings of the 43rd International
+Conference on Machine Learning, volume 306 of Proceedings of Machine Learning Research,
+66188–66203 (PMLR), URL https://proceedings.mlr.press/v306/li26n.html.
+Lin R, Ding Z, Han Z, Zhang J (2026) Large-scale LLM inference with heterogeneous workloads:
+Prefill-decode contention and asymptotically optimal control. URL https://arxiv.org/abs/
+2602.02987v2, arXiv:2602.02987, version 2.
+Mattson RL, Gecsei J, Slutz DR, Traiger IL (1970) Evaluation techniques for storage hierarchies.
+IBM Systems Journal 9(2):78–117, URL http://dx.doi.org/10.1147/sj.92.0078.
+McKinsey & Company (2026) Scaling AI inference. URL https://www.mckinsey.com/industries/
+semiconductors/our-insights/scaling-ai-inference, published October 5, 2026.
+Merrill MA, Shaw AG, Carlini N, Li B, Raj H, Bercovich I, Shi L, et al. (2026) Terminal-
+Bench: Benchmarking agents on hard, realistic tasks in command line interfaces. arXiv preprint
+arXiv:2601.11868 URL https://arxiv.org/abs/2601.11868.
+Mitzenmacher M, Shahout R (2025) Queueing, predictions, and large language models: Challenges
+and open problems. Stochastic Systems 15(3):195–219, URL http://dx.doi.org/10.1287/stsy.
+2025.0106.
+Muppidi
+S
+(2026)
+Why
+OpenAI,
+Anthropic
+missed
+their
+own
+gross
+margin
+forecasts.
+The
+Information
+URL
+https://www.theinformation.com/articles/
+openai-anthropic-missed-gross-margin-forecasts.
+SGLang (2026) Cache-aware load balancing router. https://github.com/sgl-project/sglang/
+blob/main/sgl-model-gateway/src/policies/cache_aware.rs, accessed October 8, 2026.
+Srivatsa V, He Z, Abhyankar R, Li D, Zhang Y (2025) Preble: Efficient distributed prompt scheduling
+for LLM serving. The Thirteenth International Conference on Learning Representations, URL
+https://openreview.net/forum?id=meKEKDhdnx.
+StepFun (2026) Step 3.7 flash. Hugging Face model card, URL https://huggingface.co/
+stepfun-ai/Step-3.7-Flash, apache-2.0. Accessed 2026-11-23.
+Talluri K, van Ryzin G (1998) An analysis of bid-price controls for network revenue management.
+Management Science 44(11-part-1):1577–1593, URL http://dx.doi.org/10.1287/mnsc.44.11.
+1577.
+Vaswani A, Shazeer N, Parmar N, Uszkoreit J, Jones L, Gomez AN, Kaiser L, Polosukhin I (2017)
+Attention is all you need. Advances in Neural Information Processing Systems, volume 30, URL
+https://arxiv.org/abs/1706.03762.
+
+
+--- Page 33 ---
+33
+vLLM (2026) Automatic prefix caching: Eviction (LRU). Design documentation, URL https:
+//docs.vllm.ai/en/stable/design/prefix_caching/, accessed September 27, 2026.
+Wu F, Silwal S, Zhang QR (2026) Randomization boosts KV caching, learning balances query
+load: A joint perspective. International Conference on Learning Representations, volume 2026,
+85754–85780.
+Zan D, Huang Z, Liu W, Chen H, Zhang L, Xin S, Chen L, Liu Q, Zhong X, Li A, Liu S,
+Xiao Y, Chen L, Zhang Y, Su J, Liu T, Long R, Shen K, Xiang L (2025) Multi-SWE-bench:
+A multilingual benchmark for issue resolving. arXiv preprint arXiv:2504.02605 URL https:
+//arxiv.org/abs/2504.02605.
+Zhang W, Li Y, Moallemi CC, Peng T (2025) Tail-optimized caching for LLM inference. Advances
+in Neural Information Processing Systems, volume 38, URL http://dx.doi.org/10.52202/
+085713-5483.
+Zheng L, Yin L, Xie Z, Sun C, Huang J, Yu CH, Cao S, Kozyrakis C, Stoica I, Gonzalez JE,
+Barrett C, Sheng Y (2024) SGLang: Efficient execution of structured language model programs.
+Advances in Neural Information Processing Systems, volume 37, URL http://dx.doi.org/10.
+52202/079017-2000.
+
+
+--- Page 34 ---
+e-companion
+ec1
+Electronic Companion
+EC.1. Proofs for bid-price control and retention
+EC.1.1. Single-session values and optimal resource prices
+Fix a feasible remaining-horizon LP (4.7), starting at epoch t0 with population m0. Write x =
+(m, em,y,z) for its flows and F(x) for its objective. All state sums below are over the finite live state
+space. The transition kernels are sub-stochastic, with missing mass representing departure.
+The flow equations imply
+∥m(τ + 1)∥1 = ∥em(τ + 1)∥1 ≤∥m(τ)∥1 +
+X
+s∈SI
+νs(τ).
+Thus the feasible set is compact, the optimum is finite and attained, and LP strong duality gives
+an attained dual optimum.
+For any fixed nonnegative dual prices (λ,γ), define the session values backward from vs(H) =
+−1{s ∈SA} at the terminal. At each epoch τ, set ws(τ) according to (4.8) for cached idle states,
+and set ws(τ) = vs(τ + 1) for active and cache-free idle states. Put rs,0(τ) = 0 and use (4.9) for real
+endpoints. The value of action e for an arriving prompt is
+As,e(τ) = 1{e̸ = 0} −rs,e(τ) +
+X
+s′∈S
+P e
+τ (s,s′)ws′(τ),
+s ∈SI,
+e ∈E0.
+(EC.1.1)
+Its maximum ηs(τ) is conditional on a prompt arriving. The beginning-of-epoch values are
+ηs(τ) = max
+e∈E0 As,e(τ),
+s ∈SI,
+vs(τ) = ps(τ)ηs(τ) + (1 −ps(τ))
+X
+s′
+QI
+τ(s,s′)ws′(τ),
+s ∈SI,
+(EC.1.2)
+vs(τ) = −
+X
+e
+
+λe(τ)ℓs,e(τ) + γe(τ)κact
+s,e(τ)
+	
++
+X
+s′
+QA
+τ (s,s′)ws′(τ),
+s ∈SA.
+(EC.1.3)
+These equations define values at every state, including states with zero flow in an optimal solution.
+The following lemma expresses the dual objective of the fluid linear program (4.7) in terms of the
+execution and KV-memory shadow prices (λ,γ), establishes strong duality, and decomposes the
+optimality gap D(λ,γ) −F(x) of any feasible flow into nonnegative capacity-slack and reduced-cost
+terms.
+Lemma EC.1.1. The dual objective at t0 with initial population m0 has value
+D(λ,γ) =
+H−1
+X
+τ=t0
+X
+e
+{λe(τ)Be + γe(τ)Ge} +
+X
+s
+m0
+svs(t0) +
+H−1
+X
+τ=t0
+X
+s∈SI
+νs(τ)ηs(τ).
+(EC.1.4)
+
+
+--- Page 35 ---
+ec2
+e-companion
+At optimal dual variable (λ,γ), strong duality holds, i.e., D(λ,γ) = Vt0(m0). Moreover, for every
+feasible primal flow x and nonnegative dual (λ,γ), we have
+D(λ,γ) −F(x) =
+X
+τ,e
+λe(τ){Be −Φexe
+e (τ;x)} +
+X
+τ,e
+γe(τ){Ge −ΦKV
+e
+(τ;x)}
++
+X
+τ,s∈SI,a∈E0
+ys,a(τ){ηs(τ) −As,a(τ)}
++
+X
+τ,s∈SI:o(s)̸=0
+zs,K(τ){ws(τ) −vs(τ + 1) + γo(s)(τ)bs}
++
+X
+τ,s∈SI
+zs,D(τ){ws(τ) −vE(s)(τ + 1)}.
+(EC.1.5)
+Here Φexe,ΦKV are the resource left-hand sides in (4.7). Every summand is nonnegative so D(λ,γ) ≥
+F(x).
+Proof. Fix nonnegative dual prices (λ,γ) and the associated backward values. Let X contain the
+nonnegative flows satisfying the initial condition and all flow equations, with resource constraints
+removed. We first derive the gap identity (EC.1.5) using only these equations, and then use it to
+identify the dual function.
+1. Account for one epoch. Fix τ, suppress current-epoch arguments, and write m+
+s = ms(τ +1),
+ems = ems(τ + 1), and v+
+s = vs(τ + 1). Define the nonnegative differences between the best action
+value and each available action’s value:
+ϵs,a = ηs −As,a,
+s ∈SI,
+a ∈E0,
+ϵs,K = ws −v+
+s + γo(s)bs,
+s ∈SI,
+o(s)̸ = 0,
+ϵs,D = ws −v+
+E(s),
+s ∈SI.
+Let Rτ be admissions, Cτ the total resource charge, and Iτ its idle-memory part:
+Rτ =
+X
+s∈SI,e∈E
+ys,e,
+Cτ =
+X
+e
+{λeΦexe
+e
++ γeΦKV
+e
+},
+Iτ =
+X
+s∈SI:
+o(s)̸=0
+γo(s)bszs,K.
+Routing and service. Arrival conservation (4.1) and the definition of As,a (EC.1.1) give
+X
+s∈SI
+(psms + νs)ηs =
+X
+s∈SI,a∈E0
+ys,a(As,a + ϵs,a)
+= Rτ −
+X
+s∈SI,e∈E
+rs,eys,e +
+X
+r
+
+
+X
+s∈SI,a∈E0
+ys,aP a
+τ (s,r)
+
+wr +
+X
+s∈SI,a∈E0
+ys,aϵs,a.
+
+
+--- Page 36 ---
+e-companion
+ec3
+Meanwhile, weighting the idle and active value recursions by their populations (i.e., multiplying
+(EC.1.2) and (EC.1.3) with ms and νs) yields
+X
+s
+msvs +
+X
+s∈SI
+νsηs =
+X
+s∈SI
+(psms + νs)ηs −
+X
+s∈SA
+ms
+X
+e
+{λeℓs,e + γeκact
+s,e}
++
+X
+r
+
+X
+s∈SA
+msQA
+τ (s,r) +
+X
+s∈SI
+(1 −ps)msQI
+τ(s,r)
+
+wr.
+Substitute the first display into the second. The coefficient of wr becomes the pre-retention inflow
+emr. Since rs,e = λecs,e + γeκadm
+s,e , the resource terms sum to −Cτ + Iτ: they include execution and
+unfinished-turn memory, with idle-memory charges still excluded. Hence
+X
+s
+msvs +
+X
+s∈SI
+νsηs = Rτ −Cτ + Iτ +
+X
+r
+emrwr +
+X
+s∈SI,a∈E0
+ys,aϵs,a.
+(EC.1.6)
+Boundary retention. For a cached idle state, retention conservation (4.3) gives
+emsws = zs,K(v+
+s −γo(s)bs + ϵs,K) + zs,D(v+
+E(s) + ϵs,D).
+For a cache-free state, KEEP is zero and this equality holds with only the DROP term, whose slack
+is zero. The post-retention equation groups each DROP flow at its destination E(s), so
+X
+r∈SI
+m+
+r v+
+r =
+X
+r∈SI
+
+zr,K +
+X
+s∈SI:
+E(s)=r
+zs,D
+
+v+
+r =
+X
+s∈SI
+{zs,Kv+
+s + zs,Dv+
+E(s)}.
+Active states satisfy ems = m+
+s and ws = v+
+s . Summing their contributions and the idle-state identities
+gives
+X
+r
+emrwr =
+X
+r
+m+
+r v+
+r −Iτ +
+X
+s∈SI:
+o(s)̸=0
+zs,Kϵs,K +
+X
+s∈SI
+zs,Dϵs,D.
+(EC.1.7)
+2. Sum over the horizon. Let Eτ collect the routing and retention value losses in this epoch:
+Eτ =
+X
+s∈SI,a∈E0
+ys,aϵs,a +
+X
+s∈SI:
+o(s)̸=0
+zs,Kϵs,K +
+X
+s∈SI
+zs,Dϵs,D.
+Combining (EC.1.6) and (EC.1.7) cancels Iτ:
+X
+s
+ms(τ)vs(τ) +
+X
+s∈SI
+νs(τ)ηs(τ) −
+X
+s
+ms(τ + 1)vs(τ + 1) = Rτ −Cτ + Eτ.
+Summing over τ = t0,...,H −1 cancels the intermediate population values. Using m(t0) = m0,
+vs(H) = −1{s ∈SA}, and F(x) = P
+τ Rτ −P
+s∈SA ms(H) gives
+X
+s
+m0
+svs(t0) +
+X
+τ,s∈SI
+νs(τ)ηs(τ) = F(x) −
+X
+τ
+Cτ +
+X
+τ
+Eτ.
+
+
+--- Page 37 ---
+ec4
+e-companion
+Adding the capacity-price constants and rearranging yields
+D(λ,γ) −F(x) =
+X
+τ,e
+
+λe(τ)[Be −Φexe
+e (τ;x)] + γe(τ)[Ge −ΦKV
+e
+(τ;x)]
+	
++
+X
+τ
+Eτ.
+Expanding Eτ is exactly (EC.1.5). For a capacity-feasible flow, every term is nonnegative: resource
+slacks, prices, flows, and action-value differences are all nonnegative.
+3. Identify the dual function and its optimum. Define the resource Lagrangian by
+L(x;λ,γ) = F(x) +
+X
+τ,e
+
+λe(τ)[Be −Φexe
+e (τ;x)] + γe(τ)[Ge −ΦKV
+e
+(τ;x)]
+	
+.
+The calculation above used only flow equations. It therefore applies to every x ∈X, and gives
+D(λ,γ) −L(x;λ,γ) =
+X
+τ
+Eτ ≥0.
+(EC.1.8)
+This bound is attained. Starting from m0, at every epoch send each state’s available arrival mass
+to an action maximizing As,a. Propagate the resulting flows through the transition equations,
+and assign each pre-retention idle population to a maximizing KEEP or DROP action. Continue
+through the finite horizon. The resulting nonnegative flows satisfy every equation defining X.
+Every positive routing or retention flow has zero slack, so Eτ = 0 at every epoch. Consequently,
+maxx∈X L(x;λ,γ) = D(λ,γ).
+Finally, take an optimal full LP dual solution with resource prices (λ⋆,γ⋆) and flow-equation
+multipliers bd. Write the flow equations as Ax = b. By full dual feasibility and strong duality,
+L(x;λ⋆,γ⋆) + bdT(b −Ax) ≤Vt0(m0),
+x ≥0.
+Indeed, the left side has nonpositive variable coefficients and constant term equal to that dual’s
+objective. For x ∈X, b −Ax = 0; maximizing therefore gives D(λ⋆,γ⋆) ≤Vt0(m0). Conversely, any
+optimal capacity-feasible flow x⋆has nonnegative resource slacks, so
+Vt0(m0) = F(x⋆) ≤L(x⋆;λ⋆,γ⋆) ≤D(λ⋆,γ⋆).
+Thus equality holds. In particular, pairing optimal prices with any optimal primal flow makes every
+term in (EC.1.5) zero, as used in the bid-price theorem.
+EC.1.2. Proof of the bid-price characterization
+Proof of Theorem 4.1. According to (EC.1.5) in Lemma EC.1.1, complementary slackness for a
+routing variable gives ys,e(t){ηs(t)−As,e(t)} = 0. A positive flow therefore uses an action maximizing
+As,e(t). Since
+As,e(t) −As,0(t) = Bs,e(t)
+(e ∈E0),
+
+
+--- Page 38 ---
+e-companion
+ec5
+subtracting the common rejection value preserves the action ordering and proves part (a).
+For an owned idle state, complementary slackness gives
+zs,K(t){ws(t) −vs(t + 1) + γo(s)(t)bs} = 0,
+zs,D(t){ws(t) −vE(s)(t + 1)} = 0.
+Write g = ∆s(t + 1) −γo(s)(t)bs, the KEEP value minus the DROP value. If g > 0, the boundary
+maximum is KEEP, and the DROP slack equals g. Hence zs,D(t) = 0, and retention conservation
+implies zs,K(t) = ems(t + 1). If g < 0, the maximum is DROP, and the KEEP slack is −g. Thus
+zs,K(t) = 0 and zs,D(t) = ems(t + 1). If g = 0, both slacks vanish. Tied routing actions likewise have
+zero slack, leaving their allocation to the flow and capacity constraints. This proves part (b) and
+the tie statement.
+EC.1.3. Cache length, return time, and retention
+EC.1.3.1. The value available at the next prompt
+Suppose a finite return has positive
+probability. A policy π starts with the cache available at that return, observes the date and prompt
+information, and is nonanticipative thereafter. Let N π count its completions through H and let
+Cπ contain its execution, active-memory, and subsequent idle-memory charges. Pre-return waiting
+charges are excluded. Define
+ε(L) = inf
+π
+max
+1≤h≤N
+P(T =h)>0
+{R −Eπ[N π −Cπ | T = h]}.
+(EC.1.9)
+This is the smallest worst-date shortfall from R; each date’s value averages over its prompt and
+subsequent service.
+Let sh denote the observed cached state at a return in epoch t + h. Starting from idle, admitted
+turns minus the terminal active indicator equals completed turns on every sample path. The
+admission rewards and terminal values in the backward recursion therefore make ηsh(t + h) the
+optimal expected completions minus resource charges. Backward induction selects a maximizing
+action at every state and date, including every boundary-retention decision. The resulting policy is
+optimal from every return state simultaneously. Every other policy has weakly smaller value at
+each state and hence at each return date. It follows that
+ε(L) =
+max
+1≤h≤N
+P(T =h)>0
+
+R −E[ηsh(t + h) | T = h]
+	
+.
+(EC.1.10)
+The bound R and nonnegative charges give an upper value bound of R. Rejecting every prompt
+and dropping every cache gives value zero. Consequently 0 ≤ε(L) ≤R and
+R −ε(L) ≤E[ηsh(t + h) | T = h] ≤R
+(EC.1.11)
+for every possible return date.
+
+
+--- Page 39 ---
+ec6
+e-companion
+EC.1.3.2. Proof of the retention and eviction conditions
+Proof of Proposition 4.2. Let us first briefly talk about the proof idea. We first bound the additional
+value of having the cache when the next prompt arrives. We then express retention as choosing how
+long to wait for that prompt, and subtract the storage charge from the expected benefit. Retention is
+optimal if some waiting deadline has positive gain; eviction is optimal if every positive deadline has
+negative gain. The quantity deff allows us to obtain the stated conditions from these comparisons.
+Fix the current cached state s and write s0 = E(s). All probabilities below condition on the
+current information, and all values use the same fixed dual prices. If N = 0 or no return is possible,
+keeping the cache pays γbs > 0 without providing future value, so eviction is optimal. Henceforth a
+finite return has positive probability. For brevity, put
+C = λ(a1L + a2L2),
+D = ¯λe(a1L + a2L2),
+where C bounds the first cold turn’s expected execution charge from below, and D bounds reuse
+savings from above under the additional assumption for the short-cache comparison.
+Step 1: Bound the benefit at the next prompt. For each h with P(T = h) > 0, let sh be the
+cached state observed when the prompt arrives in epoch t + h, and let s0
+h = E(sh) be its cache-free
+counterpart. Define
+gh = E[ηsh(t + h) −ηs0
+h(t + h) | T = h].
+(EC.1.12)
+Thus, gh is the extra optimal continuation value provided by the cache at return. It includes later
+routing and retention decisions, but excludes the storage charges paid before that return.
+We first show that the cache-free value is at most [R −C]+. Consider any continuation policy µ
+starting without the cache at this return. Let N µ count its completed turns through H, and let Cµ
+be all its resource charges from the return through H. Define the first admission epoch by
+σ = inf{τ ∈{t + h,...,H −1} : µ admits a prompt of this session at τ},
+inf ∅= ∞,
+and put Aτ = {σ = τ}.
+On Aτ, suppose the first admitted turn belongs to session i, is arrival j in epoch τ, and is assigned
+to endpoint f. Using the execution requirements from Section 3, define
+Cfirst
+τ
+= λf(τ)Cτ,j,f +
+X
+u=τ+1,...,H−1: this turn is active at the start of u
+λf(u)Lu,i,f.
+(EC.1.13)
+This is the total execution charge of that first admitted turn within the horizon. The sum stops
+when that turn completes; it does not include later turns of the same session. Set Cfirst
+τ
+= 0 outside
+Aτ.
+
+
+--- Page 40 ---
+e-companion
+ec7
+Let Hτ denote the information observed at the routing decision, including the chosen action. On
+Aτ, there are no earlier completions, and the conditional bounds on completions and cold execution
+charges give
+Eµ[N µ | Hτ] ≤R,
+Eµ[Cfirst
+τ
+| Hτ] ≥C.
+The first-admission event Aτ is known at this decision, as is the earlier return event {T = h}.
+Therefore, the law of iterated expectations yields
+Eµ[1Aτ (N µ −Cfirst
+τ
+) | T = h] = Eµ
+1Aτ Eµ[N µ −Cfirst
+τ
+| Hτ]
+T = h
+
+≤Pµ(Aτ | T = h)(R −C).
+On Aτ, total charges satisfy Cµ ≥Cfirst
+τ
+. If σ = ∞, no turn completes and the value is zero. The
+events Aτ are disjoint, so summing gives
+Eµ[N µ −Cµ | T = h] ≤
+H−1
+X
+τ=t+h
+Pµ(Aτ | T = h)(R −C) = Pµ(σ < ∞| T = h)(R −C) ≤[R −C]+.
+Optimizing over µ, and observing that rejection of every prompt gives value zero, proves
+0 ≤E[ηs0
+h(t + h) | T = h] ≤[R −C]+.
+(EC.1.14)
+The cached value lies between R −ε(L) and R by (EC.1.11). Subtracting the two value bounds
+gives
+min{C,R} −ε(L) ≤gh ≤R,
+(EC.1.15)
+where the lower bound uses R −ε(L) −[R −C]+ = min{C,R} −ε(L).
+For the short-cache comparison, we can sharpen the upper bound. For each real route f, define
+its execution saving by
+δh,f = λf(t + h)
+ cs0
+h,f(t + h) −csh,f(t + h)
+
+,
+δh,0 = 0.
+Under the additional assumption, 0 ≤δh,f ≤D. For the same action, cached and cache-free states
+have equal admission rewards, memory charges, and successor values. Consequently, (EC.1.1) gives
+Ash,f(t + h) = As0
+h,f(t + h) + δh,f, and hence
+ηs0
+h(t + h) ≤max
+f {As0
+h,f(t + h) + δh,f} = ηsh(t + h) ≤ηs0
+h(t + h) + D.
+Taking conditional expectations and using (EC.1.15) yields
+0 ≤gh ≤min{R,D}.
+(EC.1.16)
+
+
+--- Page 41 ---
+ec8
+e-companion
+Step 2: Calculate the value of a waiting deadline. Before the next prompt, a deterministic
+policy observes only continued nonarrival and the resulting idle age. Along this no-return history, it
+has a first eviction date, which defines a deadline u ∈{0,...,N}. Deadline u = 0 means immediate
+eviction. A positive deadline keeps the cache available for prompt epochs t + 1,...,t + u, and evicts
+it at the boundary ending t + u if no prompt has arrived. Waiting beyond the final prompt epoch
+provides no terminal value.
+Write ph = P(T = h) and omit terms with ph = 0. For u ≥1, define
+F(u) = P(T ≤u) =
+u
+X
+h=1
+ph,
+W(u) = E[min(T,u)] =
+u
+X
+h=1
+P(T ≥h).
+Here F(u) is the probability of reuse before eviction, and W(u) is the expected number of charged
+waiting boundaries.
+Let Uu denote the expected completions minus all resource charges from the current boundary
+through H, when the controller uses deadline u and acts optimally after the next prompt. Immediate
+eviction has value U0 = PN
+h=1 phE[ηs0
+h(t + h) | T = h] = vs0(t + 1). Under a positive deadline, the
+return state is cached when h ≤u and cache-free when h > u. Thus
+Uu = −γbsW(u) +
+u
+X
+h=1
+phE[ηsh(t + h) | T = h]
++
+N
+X
+h=u+1
+phE[ηs0
+h(t + h) | T = h].
+Subtracting U0 cancels the terms for h > u and leaves
+Bu := Uu −U0 =
+u
+X
+h=1
+phgh −γbsW(u).
+(EC.1.17)
+Thus, Bu is the gain over immediate eviction with deadline u: the expected benefit of returning
+before the deadline, less the storage charge paid while waiting.
+Step 3: Recover the theorem’s retention comparison. Every deterministic waiting policy
+corresponds to a deadline. Fixing a randomized policy’s independent random choices also produces
+a deadline; averaging over these choices cannot exceed the best deadline value. The optimal
+continuation used in Uu is attainable at every return state by the backward recursion. Therefore,
+the best value conditional on KEEP now is max1≤u≤N Uu, while DROP has value U0. The boundary
+recursion expresses these same two values as
+max
+1≤u≤N Uu = vs(t + 1) −γbs,
+U0 = vs0(t + 1),
+
+
+--- Page 42 ---
+e-companion
+ec9
+where the first equation is because keeping the cache at the current boundary incurs γbs and
+leaves the session in state s at the beginning of epoch t + 1 Subtracting and recalling ∆s(t + 1) =
+vs(t + 1) −vs0(t + 1) gives
+∆s(t + 1) −γbs = max
+1≤u≤N Bu,
+ws(t) −vs0(t + 1) = max
+0≤u≤N Bu.
+(EC.1.18)
+In particular, a positive Bu for some deadline requires KEEP; strictly negative Bu for every positive
+deadline requires DROP by Theorem 4.1.b.
+Step 4: Obtain the three sufficient conditions. For any deadline with F(u) > 0, substitute
+the lower bound in (EC.1.15) into (EC.1.17) to obtain
+Bu ≥F(u)
+
+min{C,R} −ε(L) −γbs
+W(u)
+F(u)
+
+.
+Choose u∗minimizing W(u)/F(u) over these deadlines. Such a minimizer exists because the set is
+finite and nonempty, and its ratio equals deff. Hence
+Bu∗≥F(u∗){min{C,R} −ε(L) −γbsdeff} > 0
+under (4.15). Step 3 therefore requires retention.
+For eviction, we must bound the gain of every positive deadline. If F(u) > 0, the upper bound
+gh ≤R gives
+Bu ≤F(u)
+
+R −γbs
+W(u)
+F(u)
+
+≤F(u){R −γbsdeff} < 0
+under (4.14). For the short-cache condition, the sharper bound gh ≤D gives instead
+Bu ≤F(u){D −γbsdeff} < 0
+if
+D < γbsdeff.
+Using D = ¯λe(a1L + a2L2) and bs = βL, and dividing by L > 0, the last condition is exactly (4.16).
+Finally, if F(u) = 0, no return occurs by u, so W(u) = u and Bu = −γbsu < 0. Thus either eviction
+condition makes all finitely many positive-deadline gains strictly negative. Their maximum is
+negative, and Step 3 requires eviction.
+EC.1.3.3. Evaluating the deficit and protected lengths
+Consider the policy that serves
+the returning prompt at its owner, continues until completion or H, and then drops its cache
+and rejects all later prompts. Conditional on T = h, let qe(h,L) be the probability that this turn
+completes by H, and let Cw
+e (h,L) be its expected execution and active-memory charges through H.
+Its value is qe(h,L) −Cw
+e (h,L), so evaluating this policy in (EC.1.9) gives
+ε(L) ≤
+max
+1≤h≤N
+P(T =h)>0
+{R −qe(h,L) + Cw
+e (h,L)}.
+(EC.1.19)
+
+
+--- Page 43 ---
+ec10
+e-companion
+Suppose, uniformly over the lengths and dates being compared,
+qe(h,L) ≥q0 > 0,
+Cw
+e (h,L) ≤c0 + c1L,
+c0,c1 ≥0,
+(EC.1.20)
+where Cw
+e (h,L) ≤c0 + c1L is justified later in this subsection. Then q0 ≤min{1,R} and ε(L) ≤
+R −q0 + c0 + c1L. Substitution into (4.15), using R −min{C,R} = [R −C]+, proves the sufficient
+condition
+c0 + (c1 + βγdeff)L + [R −λ(a1L + a2L2)]+ < q0.
+(EC.1.21)
+An explicit interval. Hold the return law and these coefficients fixed across lengths. Suppose
+λ > 0 and q0 > c0. Define
+Lc = −a1 +
+p
+a2
+1 + 4a2R/λ
+2a2
+,
+L+ =
+q0 −c0
+c1 + βγdeff
+.
+Here Lc > 0 solves λ(a1Lc + a2L2
+c) = R. If Lc < L+, every admissible length in [Lc,L+) satisfies
+(EC.1.21): its positive-part term is zero and its remaining cost is strictly below q0. This gives the
+interval of protected lengths stated in the main text.
+Under the additional short-cache condition and ¯λe > 0, the sufficient eviction interval is
+0 < L < βγdeff −¯λea1
+¯λea2
+,
+βγdeff > ¯λea1.
+(EC.1.22)
+This follows by solving (4.16) for L. If ¯λe = 0, that test instead implies eviction at every positive
+length.
+A service-cost example. An incremental work model with m new tokens has profiles
+cold:
+a0 + a1(L + m) + a2(L + m)2,
+warm:
+a0 + a1m + a2(2Lm + m2).
+Their difference is a1L + a2L2: tokenwise work contributes the linear term and attention within
+the old prefix contributes the quadratic term. New tokens still attend to that prefix when it is
+cached (Vaswani et al., 2017; Hugging Face, 2026).
+Suppose the warm turn uses at most m new tokens, its total execution work is bounded by the
+warm profile, and its active footprint is at most β(L + m). If ¯λe and ¯γe bound the execution and
+active-memory prices over the remaining horizon, then
+Cw
+e (h,L) ≤¯λe[a0 + a1m + a2(2Lm + m2)] + ¯γeβH(L + m) = c0 + c1L,
+(EC.1.23)
+c0 = ¯λe(a0 + a1m + a2m2) + ¯γeβHm,
+c1 = 2¯λea2m + ¯γeβH.
+The completion bound q0 is evaluated separately from the service kernels. Both the warm upper
+bound and cold lower bound count work actually charged by H.
+The same policy-evaluation argument allows several future turns. If a specified policy has expected
+completions at least Q and expected charges at most c0 + c1L at every possible return date, then
+ε(L) ≤R −Q + c0 + c1L, and (EC.1.21) holds with Q replacing q0.
+
+
+--- Page 44 ---
+e-companion
+ec11
+EC.1.3.4. Return distributions and the age comparison
+For two residual return times
+T1 ≤st T2 (meaning that P(T1 > u) ≤P(T2 > u) for every u) over the same remaining horizon, every
+deadline satisfies
+E[min(T1,u)] ≤E[min(T2,u)],
+P(T1 ≤u) ≥P(T2 ≤u).
+Thus each positive-denominator ratio for T2 is weakly smaller for T1, and T1 may have additional
+eligible deadlines. Minimization gives deff(T1) ≤deff(T2), with the same infinity convention.
+Proof of Corollary 4.3. At an age a with P(U > a | L) > 0, define
+Sa(h) = P(U > a + h | U > a,L),
+Sa(0) = 1.
+Let Ta be the residual return time, with returns beyond the common horizon N recorded as ∞. For
+h ≤N, P(Ta = h) = Sa(h −1)p(a + h −1,L). The identity min(Ta,u) = Pu
+h=1 1{Ta ≥h} gives, for
+1 ≤u ≤N,
+E[min(Ta,u)] =
+u
+X
+h=1
+Sa(h −1),
+P(Ta ≤u)
+E[min(Ta,u)] =
+Pu
+h=1 Sa(h −1)p(a + h −1,L)
+Pu
+h=1 Sa(h −1)
+.
+The denominator is positive. If the hazard is nonincreasing, this weighted average is at most p(a,L),
+with equality at u = 1. Taking reciprocals of the maximum ratio gives deff(a,L) = 1/p(a,L) when
+p(a,L) > 0. If p(a,L) = 0, all subsequent hazards vanish, so both sides are infinite. The expression
+is nondecreasing in age.
+If the hazard is nondecreasing, then P(Ta > h) = Qh−1
+r=0(1 −p(a + r,L)), h ≤N. Every factor is
+weakly smaller at an older age, so its residual return time is stochastically smaller. The ordering
+proved above makes deff nonincreasing in age. Constant hazard gives deff = 1/p, independently of
+age.
+EC.1.3.5. Time-varying waiting prices
+For a deterministic nonnegative owner-price path,
+replace γdeff in the three certificates by
+min
+1≤u≤N
+P(T ≤u)>0
+E
+hPmin(T,u)
+h=1
+γe(t + h −1)
+i
+P(T ≤u)
+.
+(EC.1.24)
+To verify this, denote the numerator by Wγ(u). The deadline calculation becomes
+Bu =
+u
+X
+h=1
+phgh −bsWγ(u).
+
+
+--- Page 45 ---
+ec12
+e-companion
+Using the lower bound on gh at a minimizing deadline proves the retention certificate. Using either
+upper bound at every deadline with F(u) > 0 proves the corresponding eviction certificate. A
+deadline with F(u) = 0 has gain −bsWγ(u) ≤0. Hence eviction is optimal under either strict eviction
+inequality; it is the unique initial action if γe(t) > 0, because every positive deadline then incurs a
+strictly positive charge.
+If warm-service bounds are available only for returns in the first m ≤N epochs, the retention
+test can restrict both the deficit’s maximum and the deadline minimum to this range. Its proof
+chooses a deadline u ≤m and therefore uses only these bounds. Eviction tests continue to use all
+possible return dates and deadlines.
+EC.2. Proofs for the buffer-reserve policy
+Notation and the emergency rule. Fluid populations and flows in this appendix are divided
+by n. Write
+δn = rn/n = b
+p
+log n/n,
+Wt(m;c) = NA(m) + Vt(m;c),
+where c collects execution and memory capacities over the remaining horizon. The nominal profile is
+ct; the profile used by the buffered LP at t is c−,n;t
+t
+, with entries Be−(τ −t+1)δn and Ge−(τ −t+1)δn
+for τ ≥t. Thus Wt(m) in the main text means Wt(m;ct). An implemented quota is ⌊nys,e⌋or
+⌊nzs,K⌋in these units.
+For the analysis, the potential ordinary epoch follows the quota decisions and the ordinary service
+laws without intervention. The theoretical emergency mechanism in Section 3 enforces the actual
+capacity constraints causally. We use its following property: it leaves the epoch unchanged whenever
+the potential ordinary execution loads and post-retention boundary-memory loads fit. Otherwise
+it can stop admissions, interrupt unfinished work, and release memory before the corresponding
+constraint is violated. An infeasible reoptimization also triggers the emergency rule. Previously
+completed turns keep their rewards, and interrupted turns earn none. This specifies the safety
+mechanism used in the theorem; future potential loads are used only in its probability analysis.
+Let ¯ν = maxτ
+P
+s νs(τ) and Kτ = K0 + τ(¯ν + 1). The estimates below are uniform over histories
+with ∥M (n)(τ)∥1 ≤Kτn. On the good successor events used below, the next population satisfies the
+corresponding bound with Kτ+1. Constants may depend on K0,H, the fixed primitives, and b, but
+not on n or the history.
+EC.2.1. Two properties of the fluid LP
+We first establish a uniform fluid-value regularity.
+
+
+--- Page 46 ---
+e-companion
+ec13
+Lemma EC.2.1. There is a finite constant L, uniform over starting epochs, such that any two
+feasible parameter pairs satisfy
+|Wt(m;c) −Wt(m′;c′)| ≤L
+ ∥m −m′∥1 + ∥c −c′∥1
+
+.
+The same conclusion holds for Vt. Both values are nondecreasing in each capacity coordinate.
+Proof. Sub-stochastic transitions and flow conservation give
+∥m(τ + 1)∥1 ≤∥m(τ)∥1 +
+X
+s
+νs(τ).
+This bounds every population variable over the finite horizon. Arrival and retention conservation
+then bound every action variable. Each feasible instance consequently has a finite attained optimum.
+Add resource slacks, remove linearly dependent equality rows, and write the remaining LP as
+max{f ⊤x : Ax = d + Dm + Fc, x ≥0},
+where the matrices are fixed and A has full row rank. The dual feasible set {v : A⊤v ≥f} is nonempty
+by LP strong duality. This polyhedron has no line: a line direction would satisfy A⊤v = 0, and full
+row rank forces v = 0. It therefore has finitely many vertices v1,...,vJ, and a finite attained dual
+optimum occurs at a vertex. For every feasible parameter pair,
+Vt(m;c) = min
+1≤j≤J(vj)⊤(d + Dm + Fc).
+Let L0 be the largest infinity norm of the slope vectors ((vj)⊤D,(vj)⊤F) of these affine functions.
+If j′ minimizes at (m′,c′), evaluation of the same affine function at (m,c) gives
+Vt(m;c) −Vt(m′;c′) ≤L0(∥m −m′∥1 + ∥c −c′∥1).
+Interchanging the pairs proves the absolute bound. Adding NA(m) increases the constant by at
+most one. Enlarging capacities enlarges the feasible set, proving monotonicity. Taking the largest
+constant over the finitely many starting epochs gives L.
+Next we establish a recourse for a perturbed initial population.
+Lemma EC.2.2. If the remaining-horizon fluid LP is feasible from m1 under c, then it is feasible
+from any m2 ≥0 under
+c + Lrec∥m2 −m1∥11,
+Lrec = max
+τ,e,s∈SA{ℓs,e(τ),κact
+s,e(τ)}.
+The maximum covers the remaining horizon and is zero if there are no active states.
+
+
+--- Page 47 ---
+ec14
+e-companion
+Proof. Start with a feasible solution from m1. At each idle state and epoch, extract its routing
+fractions
+αs,e(τ) =
+y1
+s,e(τ)
+ps(τ)m1
+s(τ) + νs(τ)
+when the denominator is positive; otherwise assign fraction one to rejection. Similarly, extract the
+retention fractions
+βs,h(τ) =
+z1
+s,h(τ)
+em1
+s(τ + 1),
+h ∈{K,D},
+using DROP with fraction one when the denominator is zero. Each set of fractions is nonnegative
+and sums to one.
+Let m∧
+s = min{m1
+s,m2
+s}. Starting from m∧, apply these fractions to the new populations, including
+all original exogenous sources. Specifically, set
+bys,e(τ) = αs,e(τ)[ps(τ) bms(τ) + νs(τ)],
+bzs,h(τ) = βs,h(τ) bems(τ + 1),
+and obtain the populations from the pre- and post-retention equations. All flow equations hold
+by construction. If bm(τ) ≤m1(τ) componentwise, the same fractions and exogenous sources imply
+by(τ) ≤y1(τ). Nonnegative transition coefficients then imply bem(τ + 1) ≤em1(τ + 1), followed by
+bz(τ) ≤z1(τ) and bm(τ + 1) ≤m1(τ + 1). These inequalities hold initially and hence throughout the
+horizon. Every resource load is therefore no greater than in the original solution.
+Add a separate flow of mass d = m2 −m∧, with no exogenous sources. Its idle sessions reject every
+prompt and drop every cache. Its initially active turns continue under QA; after completion, they
+use the same reject-and-drop rule. No new active turn is created, and sub-stochastic transitions
+cannot increase the total mass. Consequently, the added active mass never exceeds
+∥d∥1 ≤∥m2 −m1∥1.
+Its load in any execution or memory row is at most Lrec∥m2 −m1∥1. Idle caches contribute no load
+because memory is measured after boundary eviction. Superposing this flow on the solution from
+m∧gives initial population m2, retains exactly the prescribed exogenous sources, and satisfies all
+flow equations. The stated capacity increase covers every added load.
+EC.2.2. Quota errors and the successor population
+Fix a feasible buffered LP at epoch t and condition on its beginning history Ft, with M = nm.
+Suppress t in the normalized current flows (y,z), and write em+,m+ for their pre- and post-retention
+successors. In the potential ordinary epoch, let Ys,e count action-e arrivals from state s, f
+Ms count
+pre-retention sessions, and M + be the post-retention population. The boundary rule is
+Zs,K = min{⌊nzs,K⌋, f
+Ms},
+Zs,D = f
+Ms −Zs,K,
+s ∈SI,
+(EC.2.1)
+
+
+--- Page 48 ---
+e-companion
+ec15
+with zero KEEP flow in cache-free states.
+We establish some concentration results for quota and successor.
+Lemma EC.2.3. There are constants C,c > 0 such that
+E
+
+
+X
+s∈SI,e∈E0
+|Ys,e −nys,e| + ∥M + −nm+∥1
+
+Ft
+
+≤C√n,
+(EC.2.2)
+P
+ ∥M + −nm+∥1 > C + u | Ft
+
+≤C exp
+
+−
+u2
+c(n + u)
+
+,
+u ≥0.
+(EC.2.3)
+The route-count error has the tail C exp{−u2/(cn)} above a constant offset, i.e.,
+P
+
+
+X
+s∈SI,e∈E0
+|Ys,e −nys,e| > 2E|SI| + u
+
+Ft
+
+≤C exp
+
+−u2
+cn
+
+,
+u ≥0.
+Proof. Let As be endogenous arrivals, Ds = As + Ξ(n)
+s , and qs = psms + νs. Define
+UA =
+X
+s∈SI
+|As −npsms|,
+UD =
+X
+s∈SI
+|Ds −nqs|.
+Conditional Bernoulli independence, Ms ≤Ktn, and Hoeffding’s inequality bound each endogenous
+deviation by a constant times exp{−u2/(cn)}. Assumption 5.1 gives the same bound for each
+exogenous deviation. If a sum of d absolute deviations exceeds u, one exceeds u/d; a union bound
+over the fixed number of states therefore gives
+P(UA + UD > u | Ft) ≤C exp{−u2/(cn)}.
+(EC.2.4)
+For each state, let Qs = P
+e∈E⌊nys,e⌋and as = P
+e∈E ys,e ≤qs. Sequential quota filling gives
+X
+e∈E
+Ys,e = min{Ds,Qs},
+Ys,e ≤nys,e
+(e ∈E).
+Since nas −E ≤Qs ≤nas,
+X
+e∈E
+|Ys,e −nys,e| = nas −min{Ds,Qs} ≤E + |Ds −nqs|.
+Arrival conservation also gives |Ys,0 −nys,0| ≤E + 2|Ds −nqs|. Thus
+UY :=
+X
+s∈SI,e∈E0
+|Ys,e −nys,e| ≤2E|SI| + 3UD.
+(EC.2.5)
+Condition further on the arrival list, writing Gt = Ft ∨σ(arrival list). The quota routes are then
+fixed, and
+µr := E[f
+Mr | Gt] =
+X
+s∈SA
+MsQA
+t (s,r) +
+X
+s∈SI
+(Ms −As)QI
+t(s,r) +
+X
+s∈SI,e∈E0
+Ys,eP e
+t (s,r).
+
+
+--- Page 49 ---
+ec16
+e-companion
+At most Nt = ∥M∥1 + P
+s Ξ(n)
+s
+independent categorical outcomes contribute to f
+M. The new-session
+count need not have a deterministic bound proportional to n. Instead, choose a > Kt + P
+s νs(t) + 1.
+The exogenous tail bound implies
+P(Nt > an + u | Ft) ≤C exp{−(n + u)2/(cn)}.
+On any arrival list with Nt ≤an + u, Hoeffding’s inequality for each coordinate, followed by a union
+bound, yields
+P(∥f
+M −µ∥1 > u | Gt) ≤C exp{−u2/[c(n + u)]}.
+Splitting according to Nt ≤an + u and taking expectations proves
+P(∥f
+M −µ∥1 > u | Ft) ≤C exp{−u2/[c(n + u)]}.
+Sub-stochastic kernel rows have one-norm at most one, so subtracting the fluid transition equation
+gives
+∥µ −n em+∥1 ≤UA + UY .
+Combining the last two bounds with (EC.2.4)–(EC.2.5) shows that Upre := ∥f
+M −n em+∥1 has the
+stated tail above a fixed constant offset. This also proves the claimed concentration bound for
+routing counts. Indeed, for every u ≥0,
+P
+ UY > 2E|SI| + u | Ft
+
+≤P(UD > u/3 | Ft)
+≤P(UA + UD > u/3 | Ft)
+≤C exp
+
+−u2
+9cn
+
+.
+The first inequality follows from (EC.2.5), the second uses UA ≥0, and the third applies (EC.2.4)
+with threshold u/3. Absorbing the factor 9 into the constant c gives the stated routing-count bound.
+Because zs,K ≤em+
+s , the minimum in (EC.2.1) implies
+|Zs,K −nzs,K| ≤1 + |f
+Ms −n em+
+s |,
+|Zs,D −nzs,D| ≤1 + 2|f
+Ms −n em+
+s |.
+The second inequality follows by subtracting KEEP from retention conservation. Active mass passes
+unchanged through retention, and DROP sends each idle column to one state E(s). Consequently,
+∥M + −nm+∥1 ≤2|SI| + 3Upre,
+which proves (EC.2.3).
+For a nonnegative variable with this tail, its mean is at most a constant plus
+C
+Z n
+0
+e−u2/(2cn) du + C
+Z ∞
+n
+e−u/(2c) du = O(√n).
+Here n + u ≤2n on the first interval and n + u ≤2u on the second. Applying this bound to the
+successor and route errors proves (EC.2.2).
+
+
+--- Page 50 ---
+e-companion
+ec17
+EC.2.3. Current safety and feasibility of the next plan
+The following lemma shows that a sufficiently large capacity reserve absorbs single-epoch stochastic
+fluctuations without emergency intervention and preserves feasibility of the buffered linear program
+across the horizon with high probability.
+Lemma EC.2.4. For any q > 0, choose b (from (5.3)) sufficiently large. At a history with a feasible
+buffered LP and ∥M (n)(t)∥1 ≤Ktn, there is an event of conditional probability at least 1 −Cn−q on
+which the current epoch needs no intervention and the next buffered LP is feasible. On this event,
+∥M (n)(t + 1)∥1 ≤Kt+1n. Starting from a feasible buffered LP and ∥M (n)(t)∥1 ≤K0n, the probability
+of an emergency during the remaining horizon is at most Cn−q.
+Proof. We first show that the reserve covers current resource fluctuations, then show that the next
+buffered LP remains feasible, and finally combine these bounds over the horizon. All current-epoch
+coefficients suppress their argument t.
+Step 1: Current resource use stays within capacity. Fix the beginning-of-epoch history
+Ft, and let Gt = Ft ∨σ(arrival list) include the epoch’s arrival list. Conditional on Gt, the quota rule
+determines which prompts are admitted and their assigned endpoints.
+Consider the epoch under ordinary service, without intervention. At endpoint e, its execu-
+tion load and unfinished-turn memory are Xe = P
+i∈At Lt,i,e + P
+1≤j≤Jt:
+et,j=e Ct,j,e,Ae = P
+i∈At Kact
+t,i,e +
+P
+1≤j≤Jt:
+et,j=e Kadm
+t,j,e. Thus, each summand is the resource use of one initially active session or one newly
+admitted prompt. The memory terms are zero for turns that complete before the boundary. Let Ie
+be the memory occupied by idle caches retained at that boundary. Using the conditional resource
+means gives
+µX
+e := E[Xe | Gt] =
+X
+s∈SA
+ℓs,eMs +
+X
+s∈SI
+cs,eYs,e,
+µA
+e := E[Ae | Gt] =
+X
+s∈SA
+κact
+s,eMs +
+X
+s∈SI
+κadm
+s,e Ys,e.
+For each real endpoint, the quota rule ensures Ys,e ≤nys,e. Define the fluid retention footprint
+Ie = nP
+s∈SI:
+o(s)=e
+bszs,K. The buffered LP reserves rn units in each current resource constraint. Since
+resource coefficients are nonnegative,
+µX
+e ≤nBe −rn,
+µA
+e + Ie ≤nGe −rn.
+(EC.2.6)
+Moreover, the retention quotas imply Ie ≤Ie on every realization.
+We next bound deviations from these conditional means. The total number of sessions receiving
+service is N srv
+t
+:= |At| + P
+s∈SI,e∈E Ys,e. This number is fixed conditional on Gt. Arrival conservation
+in the fluid LP and the routing quotas give
+N srv
+t
+≤∥M∥1 + n
+X
+s∈SI,e∈E
+ys,e ≤∥M∥1 + n
+X
+s∈SI
+(psms + νs)
+
+
+--- Page 51 ---
+ec18
+e-companion
+≤
+
+2Kt +
+X
+s∈SI
+νs
+
+n ≤CNn,
+where CN is independent of n.
+By the bounded-resource condition, each session’s execution requirement and boundary-memory
+footprint lie in [0,K] for a fixed K. Conditional on Gt, these resource outcomes are independent
+across sessions. Consequently, either W = Xe or W = Ae is a sum of at most N srv
+t
+independent
+bounded random variables. Hoeffding’s inequality therefore gives
+P(W −E[W | Gt] > u | Gt) ≤exp
+
+−
+2u2
+N srv
+t
+K2
+
+≤exp
+
+−u2
+CRn
+
+,
+u > 0,
+for a constant CR.
+The reserved slack converts these deviation bounds into capacity guarantees. In particular,
+{Xe > nBe} ⊆{Xe −µX
+e > rn}. For memory, the pathwise retention bound gives
+Ae + Ie ≤Ae + Ie ≤nGe −rn + (Ae −µA
+e ),
+so {Ae + Ie > nGe} ⊆{Ae −µA
+e > rn}. This argument allows retention to depend on the observed
+service outcomes: only the upper bound Ie ≤Ie is needed.
+Apply the concentration inequality with u = rn, average over the arrival list, and take a union
+bound over the execution and memory constraints at all endpoints. Since rn = b√nlog n,
+P(some ordinary resource load exceeds capacity | Ft) ≤2E exp
+
+−r2
+n
+CRn
+
+= 2En−b2/CR. (EC.2.7)
+When all these loads fit, the safety mechanism makes no intervention.
+Step 2: The next buffered LP remains feasible. Let m+ be the fluid successor and M +
+the successor under the ordinary stochastic epoch. Set
+Krec = max{1,Lrec},
+dn =
+δn
+2Krec
+,
+δn = rn
+n .
+For sufficiently large n, the constant offset in (EC.2.3) is at most ndn/2, and ndn/2 ≤n. Therefore,
+applying that inequality with u = ndn/2 yields
+P
+ ∥M +/n −m+∥1 > dn | Ft
+
+≤C exp
+
+−nd2
+n
+8c
+
+= Cn−b2/(32cK2
+rec).
+(EC.2.8)
+The future portion of the current fluid solution is feasible from m+. At each future epoch τ ≥t+1,
+its execution capacity is Be −(τ −t + 1)δn, whereas the LP reoptimized at t + 1 uses Be −(τ −t)δn.
+The latter therefore has an additional δn in every execution constraint, and the same increase occurs
+in every memory constraint.
+
+
+--- Page 52 ---
+e-companion
+ec19
+On the event ∥M +/n−m+∥1 ≤dn, Lemma EC.2.2 constructs a feasible solution from the realized
+population using at most Lrec∥M +/n−m+∥1 ≤Lrecdn ≤δn/2 additional capacity in each constraint.
+The available increase δn covers this adjustment, so the next buffered LP is feasible.
+The population bound also continues to hold. Fluid mass can increase only through new sessions,
+so ∥m+∥1 ≤Kt + ¯ν. For sufficiently large n, dn ≤1, and hence ∥M +/n∥1 ≤∥m+∥1 +dn ≤Kt + ¯ν +1 =
+Kt+1. At t = H −1, no further LP is needed; the terminal memory constraint is already covered by
+Step 1.
+Step 3: Combine the bounds over the horizon. Choose b large enough that
+b2
+CR
+> q,
+b2
+32cK2
+rec
+> q.
+Call an epoch successful when its ordinary resource loads fit and its successor error is at most dn.
+Steps 1 and 2 show that, conditional on a feasible buffered LP and the population bound, an epoch
+is unsuccessful with probability at most Cn−q. A successful epoch requires no intervention and
+preserves both conditions for the next epoch.
+Let Aτ be the event that all epochs from t through τ −1 are successful. The events identifying
+the first unsuccessful epoch are disjoint, so
+P(some epoch is unsuccessful) =
+H−1
+X
+τ=t
+E[1Aτ P(epoch τ is unsuccessful | Fτ)] ≤HCn−q.
+An emergency can occur only if some epoch is unsuccessful. Since H is fixed, absorbing it into the
+constant proves the whole-horizon bound. Steps 1 and 2 also establish the one-epoch assertion.
+EC.2.4. The fluid upper bound
+Lemma EC.2.5. Every feasible nonanticipative policy without service interruptions has expected
+remaining completions at most nWt(m;ct) when its initial population is nm.
+Proof. Fix a feasible nonanticipative policy without service interruptions. We show that its expected
+populations and decisions form a feasible fluid solution with the same expected completion reward,
+after division by n.
+All expectations below condition on the initial population M (n)(t) = nm. Define
+¯ms(τ) = E[M (n)
+s
+(τ)]/n,
+ems(τ + 1) = E[f
+M (n)
+s
+(τ + 1)]/n,
+¯ys,e(τ) = E[Y (n)
+s,e (τ)]/n,
+¯zs,h(τ) = E[Z(n)
+s,h (τ)]/n.
+These expectations are finite. The population is bounded by the initial population plus all new
+sessions entering so far, and each session submits at most one prompt per epoch.
+
+
+--- Page 53 ---
+ec20
+e-companion
+Step 1: Expected flows satisfy the fluid equations. Every arriving prompt receives exactly
+one action, including rejection. Therefore, P
+e∈E0 Y (n)
+s,e (τ) = A(n)
+s (τ) + Ξ(n)
+s (τ). Taking expectations,
+using the conditional arrival means, and dividing by n gives P
+e∈E0 ¯ys,e(τ) = ps(τ) ¯ms(τ) + νs(τ).
+Next consider the pre-retention population. Fix an epoch τ, and define
+Ij,s,e = 1{arrival j occurs in state s and receives action e}.
+If fewer than j arrivals occur, this indicator and its next-state contribution are zero. Let esj denote
+the pre-retention state of the session submitting arrival j, and let Hτ,j contain the information
+available at its routing decision, including the selected action.
+At that decision, Ij,s,e is already known. Conditional on Ij,s,e = 1, the probability of next state
+r is P e
+τ (s,r). Hence E[Ij,s,e1{esj = r} | Hτ,j] = Ij,s,eP e
+τ (s,r). Taking expectations and summing over
+arrivals yields
+E
+"X
+j≥1
+Ij,s,e1{esj = r}
+#
+=
+X
+j≥1
+P e
+τ (s,r)E[Ij,s,e] = P e
+τ (s,r)E[Y (n)
+s,e (τ)].
+The sums have nonnegative terms and a finite expected number of arrivals, so expectation and
+summation can be interchanged.
+Initially active sessions contribute QA
+τ (s,r)E[M (n)
+s
+(τ)] in expectation to state r. For idle sessions
+that submit no prompt, the corresponding contribution is QI
+τ(s,r)E[M (n)
+s
+(τ) −A(n)
+s (τ)] = (1 −
+ps(τ))QI
+τ(s,r)E[M (n)
+s
+(τ)]. Adding these contributions and dividing by n gives
+emr(τ + 1) =
+X
+s∈SA
+¯ms(τ)QA
+τ (s,r) +
+X
+s∈SI
+(1 −ps(τ)) ¯ms(τ)QI
+τ(s,r) +
+X
+s∈SI,e∈E0
+¯ys,e(τ)P e
+τ (s,r).
+This is the fluid pre-retention equation.
+At the boundary, every idle session is assigned either KEEP or DROP. Taking expectations in
+the realized retention and state-update equations gives
+¯zs,K(τ) + ¯zs,D(τ) = ems(τ + 1),
+s ∈SI,
+¯mr(τ + 1) = ¯zr,K(τ) +
+X
+s:E(s)=r
+¯zs,D(τ),
+r ∈SI,
+¯mr(τ + 1) = emr(τ + 1),
+r ∈SA.
+These identities hold even when retention uses the observed service outcomes, because the realized
+equations hold before taking expectations.
+
+
+--- Page 54 ---
+e-companion
+ec21
+Step 2: Expected flows satisfy the capacity constraints. For a real endpoint e, conditioning
+at the routing decision also gives
+E[Ij,s,eCτ,j,e] = E[Ij,s,eE[Cτ,j,e | Hτ,j]] = cs,e(τ)E[Ij,s,e].
+Thus, summing over arrivals, the expected execution requirement of state-s prompts routed to e
+is cs,e(τ)E[Y (n)
+s,e (τ)]. Replacing execution requirements by admission-memory footprints gives the
+same equality with κadm
+s,e (τ).
+For initially active sessions, conditioning on the beginning-of-epoch history gives expected
+execution and memory loads
+X
+s∈SA
+ℓs,e(τ)E[M (n)
+s
+(τ)],
+X
+s∈SA
+κact
+s,e(τ)E[M (n)
+s
+(τ)].
+Finally, the realized retained idle footprint is exactly P
+s∈SI:o(s)=e bsZ(n)
+s,K(τ).
+Taking expectations in the almost-sure capacity constraints and dividing by n therefore yields
+X
+s∈SA
+ℓs,e(τ) ¯ms(τ) +
+X
+s∈SI
+cs,e(τ)¯ys,e(τ) ≤Be,
+X
+s∈SA
+κact
+s,e(τ) ¯ms(τ) +
+X
+s∈SI
+κadm
+s,e (τ)¯ys,e(τ) +
+X
+s∈SI:o(s)=e
+bs¯zs,K(τ) ≤Ge.
+Together with Step 1 and ¯m(t) = m, these inequalities show that the expected flows are feasible for
+the nominal fluid LP.
+Step 3: The fluid objective equals expected completions. Without interruptions, each
+initially active or newly admitted turn either completes by H or remains active at H. Consequently,
+on every realization,
+completed turns = NA(M (n)(t)) +
+H−1
+X
+τ=t
+X
+s∈SI,e∈E
+Y (n)
+s,e (τ) −NA(M (n)(H)),
+where NA(m) = P
+s∈SA ms. Taking expectations gives
+E[completed turns] = n
+
+NA(m) +
+H−1
+X
+τ=t
+X
+s∈SI,e∈E
+¯ys,e(τ) −NA( ¯m(H))
+
+.
+The expression in brackets is the completion objective of the feasible fluid solution constructed
+above. It cannot exceed the optimal fluid value Wt(m;ct), which proves the result.
+EC.2.5. Value tracking and the performance guarantee
+Let us track the buffered completion value.
+
+
+--- Page 55 ---
+ec22
+e-companion
+Lemma EC.2.6. Choose the reserve in Lemma EC.2.4 for q > 2. Uniformly on the bounded
+population domains specified above, every feasible buffered initial state satisfies
+V BR
+t,n (nm) ≥nWt(m;c−,n;t
+t
+) −At
+√n −Dtn1−q,
+for constants At,Dt independent of n and the observed history.
+Proof. We use backward induction. At H there are no further completions, and WH(m) = NA(m)−
+NA(m) = 0, so take AH = DH = 0.
+At epoch t < H, let m+ be the successor of the chosen optimal buffered solution. Write cold for its
+capacity tail and cnew for the next reoptimization’s profile, which is larger by δn in each coordinate.
+The current solution’s tail is optimal from m+ under cold, since a better feasible tail would improve
+the full solution. With gt = NA(m) + P
+s∈SI,e∈E ys,e −NA(m+), cancelling the intermediate active
+count gives
+Wt(m;c−,n;t
+t
+) = gt + Wt+1(m+;cold).
+(EC.2.9)
+In the potential ordinary epoch, its completion count is Cpot
+t
+= NA(nm) + P
+s∈SI,e∈E Ys,e −
+NA(M +). The quota and successor bounds in Lemma EC.2.3 give
+E[|Cpot
+t
+−ngt| | Ft] ≤C√n,
+E[∥M +/n −m+∥1 | Ft] ≤C/√n.
+(EC.2.10)
+Let Et be the good event from Lemma EC.2.4. On this event, the actual epoch equals the potential
+one and the next LP is feasible. The successor also lies in the next bounded population domain.
+Lipschitz continuity in Lemma EC.2.1 and capacity monotonicity imply
+Wt+1(M +/n;cnew) ≥Wt+1(m+;cnew) −L∥M +/n −m+∥1
+≥Wt+1(m+;cold) −L∥M +/n −m+∥1.
+Both parameter pairs in the first line are feasible; the recourse lemma establishes this for the realized
+successor. At t = H −1, the continuation values are zero.
+Future completion rewards are nonnegative even on Ec
+t . Applying the induction hypothesis on Et
+gives the following bound, with the integrand set to zero outside Et:
+V BR
+t,n (nm) ≥E
+
+1Et{Cpot
+t
++ nWt+1(M +/n;cnew) −At+1
+√n −Dt+1n1−q} | Ft
+
+.
+The event is determined by the completed epoch in the potential construction. On Et, it is the
+same observed history as in the actual system, so conditioning on the next history is legitimate.
+
+
+--- Page 56 ---
+e-companion
+ec23
+To remove the indicator, observe first that Cpot
+t
+≤NA(nm) + P
+s∈SI,e∈E Ys,e ≤Cn by the quotas.
+Also, m+ has bounded total mass, so Wt+1(m+;cold) ≤C: each session completes at most one turn
+per epoch, and the total fluid source mass is bounded. Thus (EC.2.10) yields
+E[1EtCpot
+t
+| Ft] ≥ngt −C√n −CnP(Ec
+t | Ft),
+E[1EtnWt+1(M +/n;cnew) | Ft] ≥nWt+1(m+;cold) −CL√n −CnP(Ec
+t | Ft).
+Replacing the probability-weighted induction errors by their full amounts weakens the lower bound.
+Using P(Ec
+t | Ft) ≤Cn−q and (EC.2.9), we obtain
+V BR
+t,n (nm) ≥nWt(m;c−,n;t
+t
+) −(At+1 + C′)√n −(Dt+1 + C′′)n1−q.
+Set At = At+1 + C′ and Dt = Dt+1 + C′′ to complete the induction.
+Proof of Theorem 5.2. The routing decisions use current arrivals and previously filled quotas;
+retention uses the observed boundary states. The emergency mechanism is causal and enforces
+capacities. Thus the policy is nonanticipative and feasible with that mechanism. Taking q > 2 in
+Lemma EC.2.4 gives P(En) ≤Cn−q ≤n−2 for all sufficiently large n.
+The nominal and buffered initial LPs are both feasible, and
+∥ct −c−,n;t
+t
+∥1 = 2E
+H−1
+X
+τ=t
+(τ −t + 1)δn = E(H −t)(H −t + 1)b
+r
+log n
+n
+.
+Lemma EC.2.1 therefore implies
+n[Wt(m;ct) −Wt(m;c−,n;t
+t
+)] ≤C
+p
+nlog n.
+Combining this reserve loss with Lemma EC.2.6 gives
+nWt(m) −V BR
+t,n (nm) ≤C
+p
+nlog n + C√n + Cn1−q ≤C′p
+nlog n.
+These three terms respectively account for the reserve, quota and transition errors, and exceptional
+epochs. Since q > 2, the last term is O(1/n). Lemma EC.2.5 supplies the comparison with feasible
+policies without service interruptions.
+Proof of Remark 5.3. Let Cπ and Dπ count completed and interrupted turns over the
+remaining horizon under policy π. An interruption ends the current turn and releases its active
+memory, and incurs a penalty ϖ independent of n, whose value will be specified later. Work already
+performed counts against capacity. The affected session may depart or become idle.
+Form the normalized expected flow vector x ≥0 as in Lemma EC.2.5, using actual states and
+decisions and taking the resource slacks to be expected unused capacities divided by n. Write
+
+
+--- Page 57 ---
+ec24
+e-companion
+Ax = h for the nominal fluid equations in the standard form of Lemma EC.2.1. Then, for a constant
+k depending only on the per-turn resource bounds,
+∥Ax −h∥1 ≤k EDπ/n.
+To see this, assign each initially active or newly admitted turn its potential uninterrupted outcome
+for the current epoch, using its conditional law at epoch start or at routing, respectively. These
+potential outcomes have the means used in the fluid equations. This calculation allows the subsequent
+interruption decision to depend on observed usage. Each interruption changes one session’s successor
+state, a discrepancy of at most two in ℓ1, and saves at most one turn’s bounded execution and
+active-memory requirements for that epoch. Arrival and retention balances hold exactly for the
+observed states. Summing over epochs gives the displayed bound.
+Let f be the fluid objective vector and v an optimal nominal dual vertex. By Lemma EC.2.1, we
+may take ∥v∥∞≤U uniformly over starting epochs and feasible instances. Since A⊤v ≥f and x ≥0,
+f ⊤x ≤v⊤h + v⊤(Ax −h) ≤Vt(m;ct) + Uk EDπ/n.
+Each interrupted turn must also be subtracted when converting admissions into completions. The
+completion accounting identity therefore gives
+E[Cπ −ϖDπ] = n[NA(m) + f ⊤x] −(1 + ϖ)EDπ ≤nWt(m) + (Uk −1 −ϖ)EDπ.
+Thus any fixed ϖ ≥max{0,Uk −1} suffices for the fluid upper bound.
+Finally, choose b large enough to take q = 4 in Lemma EC.2.4. Over the fixed horizon, each
+session submits at most one prompt per epoch, so DBR is at most (H +1) times the total number of
+initial and newly arriving sessions. The bounded normalized initial population and Assumption 5.1
+give E[(DBR)2] = O(n2). Since DBR = 0 outside the emergency event En, Cauchy–Schwarz gives
+EDBR ≤
+ E[(DBR)2]P(En)
+1/2 = O(1/n).
+The expected penalty is therefore O(1/n) for fixed ϖ. Combining this estimate with (5.4) and the
+fluid upper bound proves the claim.
+EC.3. Experimental Details and Hyperparameters
+EC.3.1. Telemetry, Prefix-Reuse Measurement, and Baseline Implementation
+Control loop and telemetry. In all cluster runs, vLLM asynchronously publishes per-replica
+running and waiting request counts, pending prefill tokens, KV block utilization, and prefix-reuse
+counters to the request-scheduler over gRPC at a nominal one-second cadence. Under PARK,
+replicas additionally send sequenced admission and completion acknowledgments to reconcile in-
+flight reservations. An independent monitoring process (Prometheus) polls each replica’s cumulative
+generated-token counters every five seconds using actual request timestamps to compute fleet output
+throughput.
+
+
+--- Page 58 ---
+e-companion
+ec25
+Intrinsic prefix-hit estimator. Because vLLM’s native prefix hit rate divides reused tokens
+by total queried prompt tokens, new prompt text registers as a miss even when the entire prior
+history remains cached. To provide feedback on retained history without external KV transfer, each
+replica maintains an intrinsic-hit estimator using rotating Bloom filters over chained block hashes
+(excluding preempted lookups). For an admitted lookup j, let bIj denote the reusable prefix length
+(in blocks) present in the engine’s bounded local history and Aj the actual local hit length, yielding
+recomputation gap Grec
+j
+= (bIj −Aj)+. When positive intrinsic mass is observed, the background
+publisher increments cumulative feedback counters by
+δQRS = b
+X
+j
+bIj,
+δHRS = b
+X
+j
+(bIj −Grec
+j ),
+where b is the block-to-token scale. The window ratio ∆HRS/∆QRS measures the fraction of locally
+seen historical prefixes successfully retained, falling back to ordinary hit/query counts when intrinsic
+mass is zero.
+Baseline tie-breaking, staleness, and cohort replenishment. All baseline routing con-
+trollers and the SGLang routing port exclude replicas whose latest heartbeat is older than 5 seconds,
+holding requests for a 500-ms recheck if no fresh replica is available. Equal routing scores are broken
+by a rotating cursor over a fixed replica ordering (or lowest replica index in the SGLang port).
+Upon dispatch, each baseline immediately increments We by one and Be by Ue (or P for Least
+prefill) until the next heartbeat overwrites these estimates; TB’s Shortest queue wrapper instead
+retains all dispatches from the preceding one-second window across heartbeats. For the SGLang
+routing port (revision a176ba2f7b74), load is Le = Re +We, complete prompt blocks are Q = ⌊P/b⌋,
+and matched blocks are he = min{Q,⌊He/b⌋}; the controller falls back to minimum load when
+Lmax −Lmin > 32 and Lmax > 1.1Lmin, or when maxe he/Q ≤0.5 (evaluated in 32-bit floating point).
+All runs in Table 4 continuously replenish completed sessions throughout the three-hour window,
+beginning at the first vLLM request admission with no excluded warmup or concurrency ramp.
+EC.3.2. PARK Implementation Details and Hyperparameters
+Forecasts available before dispatch. Let P and O denote the realized prompt and output
+token lengths of a completed turn. Between two consecutive turns, newly appended user or tool-
+output tokens are measured by G = (Pnext −Pprev −Oprev)+. For X ∈{O,G}, let DX denote the set
+of completed model-wide observations and DiX the subset belonging to request i’s session. Given an
+initial prior mean X0 and prior weight κ, the empirical Bayes forecasts are computed via hierarchical
+shrinkage:
+X =
+κX0 + P
+x∈DX x
+κ + |DX|
+,
+b
+Xi =
+κX + P
+x∈DiX x
+κ + |DiX|
+.
+
+
+--- Page 59 ---
+ec26
+e-companion
+For a returning session, the next prompt length is forecast as bPi = P prev
+i
++ Oprev
+i
++ bGi; for a new
+session, P prev
+i
+= 0 and bPi equals the smoothed model-wide mean of first-turn prompt lengths,
+initialized at P0. Both prompt and output forecasts are floored at one token. Let bh denote the
+smoothed model-wide prefix-reuse fraction, clipped to [0,1], where each completed returning turn
+contributes its reused prompt tokens divided by min{Pnext,Pprev}. Setting oi = 0 when session i has
+no current cache owner, the predicted number of reusable tokens at endpoint e is
+bHie = 1{e = oi}bhmin{ bPi,P prev
+i
+}.
+The controller relies on this historical reuse rate because it does not maintain a real-time inventory
+of resident prefix blocks at each endpoint.
+Resource charges and residual capacity. Let CW
+e = νWTW denote the work-backlog budget
+given nominal processing rate νW and target backlog horizon TW, and let CM
+e = ρKe denote the
+active-memory budget given usable KV-block capacity Ke and safety fraction ρ. For a candidate
+route to endpoint e, the estimated resource charges are
+wie = min{( bPi −bHie)+ + bOi,CW
+e },
+mie = blke( bPi + bOi),
+where blke(·) converts token counts into physical KV blocks. Capping wie at CW
+e
+ensures that an
+unusually long prompt can still be admitted by utilizing an idle endpoint’s entire work budget rather
+than being permanently blocked. For each resource j ∈{W,M}, let Cej = Cj
+e denote capacity, Iej
+inherited load from active work, and Aej capacity committed to live, unconsumed offers. Residual
+available capacity is then
+rej = [Cej −Iej −Aej]+.
+Inherited work IeW aggregates pending prefill tokens, dispatch reservations awaiting engine acknowl-
+edgment, and remaining output estimates for active requests, with sequenced events reconciling
+dispatches against periodic engine reports. Inherited active memory IeM equals the maximum of
+active memory reservations and reported occupied blocks after excluding reclaimable idle caches.
+Bid and migration safeguards. In (5.5), the waiting bonus is ωi = min{ai/τage,bmax}, where
+ai denotes the elapsed waiting time (in seconds) since ready request i entered the admission queue.
+For a migration to an endpoint e̸ = oi, the continuation adjustment is given by
+∆ie = α(Fioi −Fie),
+Fie = λe min{ bGi + bOi,CW
+e } + γe blke( bPi + bGi + 2 bOi).
+Only endpoints with status snapshots at most τstale seconds old are eligible for routing. While a
+new session may be routed to any fresh endpoint, a returning session may always use a fresh cache
+owner oi and is permitted to migrate to e̸ = oi only if
+ℓoi −ℓe ≥gload
+continuously for at least τgap,
+sie −sioi ≥gscore,
+θ −θbind
+i
+≥τbind,
+
+
+--- Page 60 ---
+e-companion
+ec27
+where ℓe = maxj Iej/Cej is the normalized load at endpoint e, θ is the current time, and θbind
+i
+is the
+session’s most recent endpoint-binding time. The load-gap timer resets whenever the load advantage
+falls below gload, a status snapshot becomes stale, or an engine restarts.
+One control round. Every δ seconds, the controller reconciles status snapshots with sequenced
+events, releases completed reservations, and purges expired offers. It excludes stale endpoints and
+resets an endpoint’s dual prices and timers upon detecting an engine restart; if no endpoints are
+fresh, all pending requests remain on hold. Each session contributes at most one ready request
+and is eligible only if it has no turn or offer currently in flight. Within each round, the controller
+executes three steps in sequence:
+1. Measure desired load. For each ready candidate i with a nonempty eligible endpoint set Ei,
+let bi = maxe∈Ei sie and let e⋆
+i attain this maximum. Candidates are processed in arrival order,
+breaking ties by lower current maximum normalized desired load at the endpoint and then by
+fixed endpoint index. Writing cie,W = wie and cie,M = mie, desired load is
+Dej = Iej + Aej +
+X
+i: Ei̸=∅
+1{e⋆
+i = e, bi ≥0}cie,j,
+where the sum runs over all ready candidates. Note that the nonnegativity filter bi ≥0 applies
+here even for overdue requests that will receive priority during allocation.
+2. Issue offers. Overdue requests (ai ≥τFIFO) are served first in arrival order, followed by remaining
+candidates in decreasing order of bi (breaking ties by earlier arrival). For each request, eligible
+endpoints are evaluated in descending order of sie, breaking ties by smaller prospective peak
+utilization maxj(Cej −rej + cie,j)/Cej. The controller selects the first unprotected endpoint
+satisfying cie,j ≤rej for both resources (j ∈{W,M}) and sie ≥0, waiving only the bid sign test
+for overdue requests. Once selected, the offer’s resource charges are immediately deducted from
+rej. If an overdue request cannot be accommodated immediately, the controller protects its
+top-ranked destination against subsequent offers in the same round so that existing work can
+drain. Unplaced requests remain on hold.
+3. Update prices and reconcile dispatches. Initialized at zero, dual prices are updated via (5.6) using
+the desired loads recorded prior to allocation and carried forward to the next round. Issued offers
+expire after τoffer seconds. When a client acts on an offer, the controller re-verifies offer validity,
+snapshot freshness, engine identity, cache ownership, migration safeguards, absence of an in-flight
+turn, and residual budgets net of other live offers. If all checks pass, the controller binds the
+request to the endpoint, records a dispatch reservation, and forwards the request; otherwise, it
+releases the offer and returns the request to the queue.
+
+
+--- Page 61 ---
+ec28
+e-companion
+From a session’s retention score to physical blocks. The idle age a in (5.7) measures the
+elapsed time since the session’s previous turn completed; when estimating return-time distributions
+from historical logs, sessions that remain idle at the end of the observation window are treated
+as right-censored. Substituting the capped return gain and bs = βL into (5.7) yields the length-
+normalized index
+bIproxy(L,a) =
+1
+β c
+deff(a,L)
+min
+( bR
+L ,λe(a1 + a2L)
+)
+.
+Given a discrete nondecreasing priority map Q with Q(0) = 0, the aggregate eviction priority of
+physical KV block b at endpoint e is
+πe(b) =
+X
+i∈Se(b)
+Q(bIi),
+where Se(b) denotes the set of sessions sharing block b and bIi is session i’s retention index. For
+instance, if two sessions map to priorities 4 and 2, their private blocks receive priorities 4 and 2,
+whereas their shared prefix blocks receive priority 6. Maintaining unpinned blocks in persistent
+priority buckets allows the local allocator to reclaim the lowest-priority eligible block in O(1) bucket
+operations without scanning all idle sessions upon every allocation.
+A session with a zero retention index contributes zero weight. For a positive index I, the map
+Q rounds 232I down to a power of two and clips the result to [1,230]. Each reclaimable block is
+assigned to a bucket according to the sum of its sessions’ weights. Bucket 0 holds blocks of zero total
+weight. The lower bounds for buckets 1 through 31 are 1,2,4,. . . ,230, respectively. The allocator
+reclaims the block that entered the lowest nonempty bucket earliest. A block that changes buckets
+joins the tail of its new bucket.
+The endpoint queues a session for rescoring when a turn finishes or a return arrives. While a
+session remains idle, its next refresh is due one second after its previous refresh completes. Each
+scheduler step starts at most four session lookups and updates at most 256 block contributions,
+subject to a soft time budget of 0.5 ms.
+When a session ends, the worker closes the session at the router. At the endpoint, an idle forecast
+expires 120 seconds after the last turn completes if no return is pending. If a compatible return is
+already queued, its idle claim ends when the request attaches to the cached prefix. As sessions gain
+or lose a claim on a block, the endpoint adds or subtracts each affected session’s contribution and
+updates the bucket using the new total. For example, a block with contributions of 4 and 2 starts in
+bucket 3. Withdrawing the 4-unit contribution leaves a total of 2 and moves the block to bucket 2.
+The cached data remain in place until an allocation reclaims the block with zero active references.
+Experimental settings. Table EC.1 lists the parameter values used for PARK (Algorithm 2)
+across the cluster experiments. In particular, we set bR = 131,072 as a fixed reference-value cap,
+calibrated to the linear work of rebuilding a full context at a reference execution price of one.
+
+
+--- Page 62 ---
+e-companion
+ec29
+Table EC.1
+Experimental hyperparameters for PARK (Algorithm 2).
+Parameter
+Symbol
+Value
+Initial priors (prompt, output, growth)
+(P0,O0,G0)
+(2,048, 256, 512) tokens
+Empirical Bayes prior weight
+κ
+2
+Initial cache-hit fraction prior
+bh0
+0.90
+Work-backlog budget
+CW
+e
+131,072 token-work units (4 × 32,768)
+Active KV-memory safety fraction
+ρ
+0.90
+Control update interval
+δ
+1.0 s
+Snapshot staleness threshold
+τstale
+5.0 s
+Admission offer lifetime
+τoffer
+2.0 s
+Waiting bonus scale and cap
+(τage,bmax)
+(60 s, 2.0)
+Overdue FIFO threshold
+τFIFO
+1,500 s
+Migration continuation weight
+α
+0.25
+Minimum normalized load gap
+gload
+0.25
+Minimum bid improvement
+gscore
+0.25
+Minimum load-gap duration
+τgap
+30 s
+Minimum time since last binding
+τbind
+300 s
+Dual subgradient step size
+η
+1.0
+Retention cost coefficients
+(a1,a2)
+(1.0, 10−6)
+Retention value cap
+bR
+131,072
