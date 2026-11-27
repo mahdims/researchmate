@@ -1,0 +1,636 @@
+--- Page 1 ---
+Understanding Failure Patterns in LLM-Based
+Mathematical Optimization Modeling
+Ryoichi Takase1
+Xian Yeow Lee1
+Hikaru Tomonari2
+Masaya Tsunokake2
+1Hitachi America, Ltd., California, USA
+2Hitachi, Ltd., Tokyo, Japan
+{ryoichi.takase, xian.lee}@hal.hitachi.com
+{hikaru.tomonari.oj, masaya.tsunokake.qu}@hitachi.com
+Abstract
+Industrial optimization involves complex constraints, making optimization mod-
+eling difficult to automate. Large language models (LLMs) have been explored
+for generating optimization models from natural language, but their reliability in
+end-to-end settings remains limited, often producing non-executable, infeasible,
+or feasible but incorrect solutions. In this work, we study failure modes in LLM-
+based optimization modeling by decomposing the process into three components:
+mathematical reasoning, solver usage, and domain knowledge, and constructing
+datasets that target each aspect. Using these datasets, we analyze how different
+components relate to errors and find that they are associated with different types of
+failure, although these relationships are not always strong or consistent. Further-
+more, while combining these components improves execution reliability, feasible
+but incorrect solutions remain the dominant failure mode, suggesting a remaining
+gap between executability and correctness. These findings highlight limitations
+of current dataset designs and suggest the importance of data that better capture
+constraint completeness and formulation accuracy to enhance reliability.
+1
+Introduction
+Optimization is central to industrial operations, where planning and scheduling tasks must satisfy
+complex constraints arising from safety requirements and regulatory compliance. Optimization
+frameworks such as linear programming (LP) and mixed-integer linear programming (MILP) remain
+fundamental for achieving efficient and reliable solutions in industrial applications [14, 6]. Meanwhile,
+constructing such models typically requires domain expertise and manual effort, limiting scalability
+and adaptability to new operational scenarios.
+Recent progress in large language models (LLMs) has motivated efforts to automatically generate
+optimization models from natural-language descriptions [10, 15, 13]. While these approaches demon-
+strate promising results, achieving high reliability in industrial-scale problems remains challenging.
+In practice, LLM-based optimization systems often fail in multiple ways, including generating non-
+executable solver code, producing infeasible formulations, or yielding feasible but incorrect solutions.
+Existing work has primarily focused on improving modeling accuracy, with limited attention to
+analyzing failure modes in LLM-generated outputs.
+In this work, we analyze failure modes in LLM-based optimization modeling. We decompose
+the modeling process into three components—mathematical reasoning, solver usage, and domain
+knowledge—and construct datasets that explicitly capture each component. Using these datasets, we
+examine how different data elements relate to errors in end-to-end generation. Our analysis shows
+that different components are associated with distinct failure types, such as non-executable code and
+infeasible formulations. While integrating these components improves execution reliability, it does
+Preprint.
+arXiv:2611.33351v1  [cs.LG]  24 Nov 2026
+
+
+--- Page 2 ---
+not substantially reduce feasible but incorrect solutions, which remain the dominant failure mode
+across benchmarks, suggesting a gap between executability and correctness.
+2
+Method
+2.1
+End-to-End Optimization Modeling
+We define an end-to-end pipeline that maps natural-language descriptions to optimization solutions.
+The LLM generates solver-compatible code, which is then executed by a solver to obtain a solution.
+The LLM is responsible for (i) translating problem descriptions into mathematical formulations,
+(ii) implementing these formulations as executable solver code, and (iii) incorporating domain-
+specific constraints required for realistic settings. Errors may arise from multiple sources, including
+formulation and solver implementation, and are often entangled in the generated code, making it
+difficult to produce correct solutions.
+2.2
+Decomposing Optimization Modeling into Core Components
+Building on the role of LLM in end-to-end optimization modeling, we decompose the process into
+three key elements that define distinct aspects of the dataset:
+• Mathematical reasoning: Translating real-world requirements into optimization models
+involves a structured derivation from informal specifications to decision variables, objective
+functions, and constraints. Data that captures such reasoning processes enables models to
+learn how to construct well-formed mathematical representations.
+• Solver usage: Constructing executable optimization models requires knowledge of solver-
+specific APIs and configuration details (e.g., variable types, linearity constraints, and syntax)
+as in PySCIPOpt [8]. Data reflecting solver interaction—including both correct usage and
+common implementation errors—supports the generation of executable and debuggable
+code.
+• Domain knowledge: Realistic optimization problems depend on domain-specific constraints
+and operational rules. Data incorporating such knowledge defines feasible regions and
+dependencies, helping prevent invalid modeling assumptions and improving solution validity.
+These elements are tightly coupled, and their interactions may give rise to distinct failure modes. This
+design allows us to examine how different aspects of the dataset relate to execution reliability and
+solution correctness. We hypothesize that each component is associated with specific failure modes
+and that its coverage may influence overall model reliability.
+2.3
+Constructing Datasets via LLM and Solver Feedback
+Figure 1 provides an overview of the data generation pipeline. Datasets are constructed using an LLM-
+driven framework that generates optimization modeling tasks through prompting and solver-based
+feedback. Math-Opt Reasoning data are generated by prompting the LLM to produce optimization
+problems in the form of natural-language descriptions, mathematical formulations, and solver code,
+followed by solver-based filtering to retain only solvable instances. Solver Usage data are constructed
+by applying iterative debugging to non-executable outputs using error messages and code correction
+prompts, capturing common issues in implementation and solver execution. Domain Knowledge
+data are obtained by refining infeasible problems with domain-specific constraints and expanding
+them through iterative scaling, resulting in more realistic and complex optimization tasks.
+In this study, we use gpt-oss-120b [1] as the data-generating LLM and the s1-1.1 dataset [9] as the
+starting point for data construction. This process yields three datasets—Math-Opt Reasoning (32K
+samples), Solver Usage (4K samples), and Domain Knowledge (8K samples). For each dataset,
+5%–8% of samples are reserved for testing and the remainder for training and validation.
+2
+
+
+--- Page 3 ---
+Step 1: Data Generation Based on 
+Mathematical Reasoning
+Math2Opt
+Step 2: Data Generation for Solver Usage 
+from Non-Executable Data
+Code Debugging
+Solver & Filtering
+Infeasibility Debugging
+Solver & Filtering
+Step 3: Data Generation Leveraging Domain 
+Knowledge Using Infeasible Data
+Solver & Filtering 
+Infeasible  Data
+Domain Knowledge 
+Scaled Data
+Non-executable Data
+Solver Usage Data
+Math Reasoning Data
+Math-Opt
+Reasoning Data
+Solution Validity 
+Debugging
+Solver & Filtering
+Problem Scaling
+Solver & Filtering
+Domain Knowledge 
+Seed Data
+Domain Knowledge 
+Seed Data
+Domain Change
+Problem Type Change
+Figure 1: Overview of the three-step data construction pipeline.
+3
+Results
+3.1
+Dataset Characteristics and Failure Analysis
+To enable comparison of how different datasets capture distinct aspects of optimization modeling,
+we examine the model responses using off-the-shelf LLMs (gpt-oss 120B/20B and Qwen3 32B/8B).
+These models are used only as diagnostic tools to reveal dataset properties, and the reported metrics
+are not intended as model performance benchmarks. In Figures 2 and 3, the Math-Opt Reasoning,
+Solver Usage, and Domain Knowledge datasets are shown in red, blue, and orange, respectively,
+while existing benchmarks such as ComplexOR [15], IndustryOR [4], and ComplexLP [5] are shown
+in grayscale.
+As shown in Figure 2, the Math-Opt Reasoning dataset has reasoning lengths comparable to existing
+benchmarks. Solver Usage shows similar lengths but lower accuracy, indicating challenges in
+generating valid solver code. Domain Knowledge requires more reasoning tokens yet achieves
+lower accuracy, reflecting the complexity of incorporating domain-specific constraints. These results
+suggest that dataset difficulty depends not only on reasoning length but also on solver requirements
+and constraint complexity.
+Figure 3 compares non-executable and infeasible rates, revealing distinct failure modes. Solver Usage
+has the highest non-executable rate, while Domain Knowledge produces more infeasible solutions
+due to complex constraints. In contrast, Math-Opt Reasoning shows error rates comparable to existing
+benchmarks. Overall, non-executable errors and infeasibility arise from different sources, reflecting
+distinct challenges in optimization modeling.
+Figure 2: Modeling accuracy and reasoning-token usage. The Math-Opt Reasoning dataset requires
+reasoning tokens comparable to existing benchmarks, while Solver Usage achieves lower accu-
+racy with similar token lengths. Domain Knowledge requires more tokens due to domain-specific
+formulation complexity.
+3
+
+
+--- Page 4 ---
+Figure 3: Non-executable and infeasible rates. Math-Opt Reasoning shows error rates comparable to
+existing benchmarks, while Solver Usage has higher non-executable rates and Domain Knowledge
+higher infeasible rates, highlighting distinct challenges.
+Figure 4: Failure patterns across benchmarks: although the non-executable rate decreases with
+fine-tuning, LLMs still produce wrong objectives (i.e., feasible but incorrect solutions), particularly
+in more complex tasks.
+3.2
+Effect and Limitations of Data Components
+To analyze the contribution of each data component, we fine-tune LLMs on the constructed datasets
+and perform ablation studies by removing reasoning, solver usage, or domain knowledge. We
+evaluate models on standard benchmarks (ComplexOR, IndustryOR, ComplexLP, NLP4LP, NL4Opt),
+categorizing outputs into five types: non-executable, timeout, infeasible, feasible but incorrect, and
+correct. To account for stochasticity, we sample multiple outputs per instance (32 for ComplexOR
+and 4 for others) and report averaged results.
+Experiments on Qwen3 models (1.7B and 4B) [16], using teacher data generated from a Qwen3-32B
+model via solver-based rejection sampling, show that the full dataset consistently yields the best
+performance (Tables 1 and 2), suggesting that all components are beneficial. Removing solver usage
+data increases non-executable outputs, although the causal relationship remains unclear.
+Nevertheless, across all settings, including larger 32B models fine-tuned with GRPO [11], feasible but
+incorrect outputs (denoted as Wrong Obj.) remain dominant (Figure 4). Although fine-tuning reduces
+non-executable errors, this failure mode persists and becomes more pronounced as task complexity
+increases, indicating that LLMs often generate plausible yet invalid optimization formulations.
+Our results reveal a key limitation of current LLM-based optimization systems: while data-centric
+design reduces explicit failures such as non-executable outputs, it does not adequately address formu-
+lation errors. In particular, feasible but incorrect solutions remain dominant, often caused by subtle
+issues such as missing constraints or incorrect objectives that are difficult to detect through standard
+supervision or execution-based validation. This suggests that improving reliability requires datasets
+that explicitly capture formulation structure, constraint completeness, and boundary conditions,
+enabling models to distinguish correct formulations from near-correct ones.
+4
+
+
+--- Page 5 ---
+4
+Conclusion
+This work presents an analysis of failure modes in LLM-based optimization modeling. We show that
+different data components correspond to distinct failure modes and that integrating them improves
+execution reliability. However, feasible but incorrect solutions remain the dominant failure mode,
+highlighting a gap between executability and correctness. Addressing this limitation requires new
+dataset designs that better capture the structure of valid optimization formulations and reduce such
+errors in end-to-end pipelines.
+References
+[1] Sandhini Agarwal, Lama Ahmad, Jason Ai, Sam Altman, Andy Applebaum, Edwin Arbus, Rahul K
+Arora, Yu Bai, Bowen Baker, Haiming Bao, et al. gpt-oss-120b & gpt-oss-20b model card. arXiv preprint
+arXiv:2508.10925, 2025.
+[2] Ali AhmadiTeshnizi, Wenzhi Gao, and Madeleine Udell. Optimus: Optimization modeling using mip
+solvers and large language models. arXiv preprint arXiv:2310.06116, 2023.
+[3] Gurobi Optimization, LLC. Gurobi Optimizer Reference Manual, 2024.
+[4] Xuhan Huang, Qingning Shen, et al. Orlm: A customizable framework in training large models for
+automated optimization modeling. arXiv preprint arXiv:2405.17743, 2024.
+[5] Xuhan Huang, Qingning Shen, Yan Hu, Anningzhe Gao, and Benyou Wang. Mamo: a mathematical
+modeling benchmark with solvers. arXiv preprint arXiv:2405.13144, 2024.
+[6] Ivan Kantor, Jean-Loup Robineau, Hür Bütün, and François Maréchal. A mixed-integer linear programming
+formulation for optimizing multi-scale material and energy integration. Frontiers in Energy Research, 8,
+2020.
+[7] Vinícius Lima, Dzung T. Phan, Jayant Kalagnanam, Dhaval Patel, and Nianjun Zhou. Toward a trustworthy
+optimization modeling agent via verifiable synthetic data generation. CoRR, abs/2508.03117, 2025.
+[8] Stephen Maher, Matthias Miltenberger, João Pedro Pedroso, Daniel Rehfeldt, Robert Schwarz, and Felipe
+Serrano. Pyscipopt: Mathematical programming in python with the scip optimization suite. In International
+Congress on Mathematical Software, pages 301–307. Springer, 2016.
+[9] Niklas Muennighoff, Zitong Yang, Weijia Shi, Xiang Lisa Li, Li Fei-Fei, Hannaneh Hajishirzi, Luke
+Zettlemoyer, Percy Liang, Emmanuel Candès, and Tatsunori Hashimoto. s1: Simple test-time scaling.
+arXiv preprint arXiv:2501.19393, 2025.
+[10] Rindranirina Ramamonjison, Timothy T. Yu, Raymond Li, Haley Li, Giuseppe Carenini, Bissan Ghaddar,
+Shiqi He, Mahdi Mostajabdaveh, Amin Banitalebi-Dehkordi, Zirui Zhou, and Yong Zhang. Nl4opt compe-
+tition: Formulating optimization problems based on their natural language descriptions. In Proceedings of
+the NeurIPS 2022 Competition Track, pages 189–203. PMLR, 2022.
+[11] Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan
+Zhang, Y.K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical reasoning in
+open language models. arXiv preprint arXiv:2402.03300, 2024.
+[12] Guangming Sheng, Chi Zhang, Zilingfeng Ye, Xibin Wu, Wang Zhang, Ru Zhang, Yanghua Peng, Haibin
+Lin, and Chuan Wu. Hybridflow: A flexible and efficient rlhf framework. arXiv preprint arXiv: 2409.19256,
+2024.
+[13] Zhuohan Wang, Ziwei Zhu, Yizhou Han, Yufeng Lin, Zhihang Lin, Ruoyu Sun, and Tian Ding. Optibench:
+Benchmarking large language models in optimization modeling with equivalence-detection evaluation. In
+ICLR, 2025.
+[14] Jarosław Wikarek and Paweł Sitek. Proactive scheduling and routing of mrp-based production with
+constrained resources. Applied Sciences, 15(15):8522, 2025.
+[15] Ziyang Xiao, Dongxiang Zhang, et al. Chain-of-experts: When llms meet complex operations research
+problems. In ICLR, 2024.
+[16] An Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao,
+Chengen Huang, Chenxu Lv, et al. Qwen3 technical report. arXiv preprint arXiv:2505.09388, 2025.
+5
+
+
+--- Page 6 ---
+A
+Method Details
+A.1
+Three Key Elements in Mathematical Optimization
+Formulating real-world problems as solvable optimization models requires integrating three key
+elements to ensure correctness and practical feasibility.
+• Mathematical reasoning: Transforming real-world requirements into optimization models
+requires a logical, step-by-step derivation from informal specifications to decision variables,
+objectives, and constraints. This reasoning ensures that optimization models capture the
+essential structure of the problem and yield well-defined mathematical formulations.
+• Solver usage: Implementing optimization models correctly requires familiarity with solver-
+specific APIs and parameters (e.g., variable types and linearity/convexity requirements) as
+in Gurobi [3] and PySCIPOpt [8]. Understanding syntax, configuration, and debugging is
+essential for producing executable, solver-ready code.
+• Domain knowledge: Background knowledge of operational rules and industry constraints
+in OT domains helps define the feasible decision space and its dependencies, thereby pre-
+venting invalid modeling assumptions and ensuring that optimization formulations maintain
+correctness and practical feasibility.
+Motivated by the importance of combining mathematical reasoning, appropriate solver usage, and
+industry-specific domain knowledge, we propose a data-generation method that integrates these three
+elements to train LLMs to produce solvable optimization models. As shown in Figure 1, our pipeline
+unifies these key components, which are described in detail below.
+A.2
+Step 1: Data Generation Based on Mathematical Reasoning
+This data-generation step extracts multi-step reasoning traces from mathematical reasoning datasets
+and converts them into optimization modeling tasks covering a wide range of domains and problem
+types. Solver-based filtering retains only solvable problems that require both reasoning and modeling
+skills.
+Math2Opt first prompts an LLM to generate a multi-step reasoning trace from a math problem
+and its solution, and then converts this trace into a new mathematical optimization problem. The
+prompt instructs the LLM to construct an optimization model whose variables, constraints, and
+objective are derived from the reasoning steps. The resulting data consists of three components:
+(i) a natural-language problem description, (ii) a mathematical formulation, and (iii) PySCIPOpt
+code. This process ensures that the generated data imposes multi-step reasoning on LLMs rather than
+simple text-to-equation conversion.
+Domain Change increases dataset diversity by mapping each seed optimization problem to one
+of 18 application domains (e.g., manufacturing, supply chain, energy), following [2, 7]. For each
+seed problem, an LLM generates a new version in a specified target domain while preserving the
+structural pattern of the original formulation. By systematically creating domain-specific variations,
+this process enhances cross-domain reasoning in LLMs.
+Problem Type Change further increases dataset diversity by introducing multiple classes of opti-
+mization problems, including Linear Programming (LP), Nonlinear Programming (NLP), Quadratic
+Programming (QP), and Mixed-Integer Linear Programming (MILP). Similar to the previous step, the
+LLM reformulates each seed problem into a new problem belonging to one of these classes, enabling
+LLMs to deal with a wide range of objectives and constraints.
+Solver & Filtering validates the generated problems by executing solvers and retaining only those that
+yield optimal solutions. These filtered samples constitute the Math-Opt Reasoning Data. Samples
+that fail to solve are used for subsequent steps.
+A.3
+Step 2: Data Generation for Solver Usage from Non-Executable Data
+Among the failed samples from Step 1, we categorize the errors as follows:
+• Infeasible: No solution exists under the given objectives and constraints.
+6
+
+
+--- Page 7 ---
+• Timeout: Computation could not be completed within the specified time limit.
+• Non-executable: Solver execution failed due to errors.
+Infeasible samples typically require substantial reformulation of the objectives or constraints and are
+therefore used in Step 3, which leverages domain knowledge. Timeout samples constitute only a
+small fraction of failures and are excluded from data generation.
+In Step 2, we focus on non-executable samples and debug them to extract the cases from which the
+correct solver code can be successfully recovered. These samples are typically resolved by fixing code
+or configuration errors, and the resulting corrections provide valuable information on the appropriate
+problem formulations.
+Code Debugging is applied to non-executable code in representative OT domains, such as man-
+ufacturing, supply chain, and energy, to reduce data construction time. These domains provide
+diverse formulations and solver usage, ensuring sufficient dataset coverage. A debugging prompt
+is constructed by combining the problem description, source code, and associated error messages,
+and is then provided to the LLM. By resolving common errors that prevent successful execution,
+this process yields datasets that help LLMs learn the correct optimization formulation and solver
+configuration. Only code that becomes executable after several debugging iterations is reserved as
+Solver Usage Data. Samples that remain non-executable or result in timeouts after the debugging
+iterations are discarded, whereas infeasible samples are used in Step 3.
+A.4
+Step 3: Data Generation Leveraging Domain Knowledge Using Infeasible Data
+In real-world optimization problems, operational rules and requirements often introduce complex
+constraints that can produce infeasible solutions. In Step 3, the infeasible samples obtained from
+the previous steps are iteratively analyzed and corrected, thus ensuring the validity of the resulting
+dataset. Furthermore, by scaling the problem size, we construct more domain-aware optimization
+problems that integrate relevant expert knowledge.
+Infeasibility Debugging refines infeasible samples by prompting the LLM to determine whether the
+infeasibility arises from a coding error or a modeling issue, then minimally reformulates the problem
+and updates the code while preserving intent. By making only minimal changes to restore feasibility,
+the method produces samples near the feasible–infeasible boundary.
+Solution Validity Debugging constructs a prompt from the problem description, code, and solver
+output to obtain relevant domain knowledge from the LLM1. This domain knowledge is then used
+to revise the objective and constraints, so the optimization model yields realistic solutions. During
+iteration, samples that time out or become non-executable are processed again to obtain feasible
+solutions, while samples that become infeasible are handled with infeasibility debugging. In the end,
+this process produces the Domain Knowledge Seed Data, which serve as starting points for scaling
+the optimization problem.
+Problem Scaling expands the Domain Knowledge Seed Data by applying one of the three types of
+domain knowledge, such as insights, operational rules, or tacit knowledge. Each type is used to
+introduce additional decision variables or constraints. For example, when leveraging operational
+rules, we scale the problem by adding new decision variables in the target OT domain using the
+following prompt: “In particular, incorporate key operational rules from the energy domain, increase
+the number of decision variables, and significantly expand the problem scale”2.
+After an optimal solution is found under the initial scaling, additional scaling is applied to further
+expand the problem. If this scaling results in timeouts or non-executable samples, the previous scaling
+level is retried to obtain an optimal solution. When infeasibility arises, infeasibility debugging with
+domain knowledge is applied. Samples that yield optimal solutions after this process are reserved as
+Domain Knowledge Scaled Data.
+1In this study, domain knowledge refers to short, listed statements describing physical or operational rules that are generated
+by the LLM. For example, in the energy domain, the generated list includes statements on charger efficiency, grid peak-demand
+limits, and tariff constraints.
+2Examples of added operational rules include required shut-down periods for thermal protection and associated start-up
+cost effects.
+7
+
+
+--- Page 8 ---
+Solver Usage Data
+Math-Opt
+Reasoning Data
+Domain Knowledge 
+Seed Data
+Solver Usage Data
+Domain Knowledge 
+Scaled Data
+Reasoning trace 
+sampling
+Solver & Filtering 
+✓
+✘
+Debugging
+Reasoning trace 
+sampling
+Solver & Filtering 
+Reject
+Reasoning trace 
+sampling
+Solver & Filtering 
+Reject
+Rejection Sampling Fine-tuning
+Reinforcement Learning
+Sampled reasoning traces
+Solver
+Fine-tuning
+✓
+✘
+✓
+✘
+✓
+✘
+：correct
+：otherwise
+Domain Knowledge 
+Seed RFT Data
+Reward = 
+1   if correct    
+ 0  otherwise
+Solver Usage
+ RFT Data
+Debugging
+RFT data
+Math-Opt 
+Reasoning RFT data
+Fine-tuning
+LLM
+LLM
+Figure 5: Overview of training reasoning LLMs. Left: Rejection Sampling Fine-Tuning (RFT), which
+generates multiple reasoning traces using Math-Opt Reasoning Data, Solver Usage Data, and Domain
+Knowledge Seed Data, using only solver-verified correct traces for training. Right: Reinforcement
+Learning (RL), which trains the model on Solver Usage Data and Domain Knowledge Scaled Data,
+with solver-executed reasoning traces providing binary rewards based on objective value correctness.
+In the proposed method, we used the gpt-oss-120b [1] as the data-generating LLM and the s1-1.1
+dataset [9] as the starting point for mathematical reasoning data, from which we produced four
+datasets: Math-Opt Reasoning Data (31,773 samples), Solver Usage Data (4,264 samples), Domain
+Knowledge Seed Data (735 samples), and Domain Knowledge Scaled Data (7,009 samples). For
+each dataset, approximately 5% to 8% of the samples were reserved as test data, while the remaining
+samples were used for training and validation purposes.
+A.5
+Training Reasoning LLMs
+In this study, we adopt Qwen3-32B [16] as the base reasoning model. Our dataset contains the
+problem description, code, and ground-truth objective value, but does not include the reasoning traces
+required for training. To obtain these traces, we apply Qwen3-32B to our dataset and generate the
+corresponding reasoning traces. As shown in Figure 5, we first apply Rejection Sampling Fine-Tuning
+(RFT) to improve the accuracy of mathematical optimization modeling, followed by reinforcement
+learning (RL) to further enhance overall performance.
+Rejection Sampling Fine-Tuning (RFT)
+We construct training data using Math-Opt Reasoning Data, Solver Usage Data, and Domain Knowl-
+edge Seed Data. For each problem, we sample 8 reasoning traces from the Math-Opt Reasoning Data
+and 16 reasoning paths from the Solver Usage Data and Domain Knowledge Seed Data. We then
+execute a solver on the sampled reasoning paths and extract only those whose objective values match
+the ground-truth results, thereby producing three types of RFT data: Math-Opt Reasoning RFT Data
+(57,025 samples), Solver Usage RFT Data (1,477 samples), and Domain Knowledge Seed RFT Data
+(946 samples)3.
+For the Math-Opt Reasoning Data, we additionally perform debugging, and any correctly solved
+samples are incorporated into the Debugging RFT Data (24,253 samples). In contrast, debugging
+is not performed for the Solver Usage Data or the Domain Knowledge Seed Data, as these will be
+repeatedly evaluated later through RL.
+3Solver Usage Data and Domain Knowledge Seed Data are more difficult than Math-Opt Reasoning Data. The pass rates
+for Math-Opt Reasoning Data, Solver Usage Data, and Domain Knowledge Seed Data are 0.27, 0.051, and 0.17, respectively.
+In addition, RFT for Solver Usage Data and Domain Knowledge Seed Data use only subsets that are not included in RL
+training, resulting in fewer correct samples compared to Math-Opt Reasoning Data.
+8
+
+
+--- Page 9 ---
+Table 1: Ablation study results for Qwen3-1.7B on the full dataset and variants without mathematical
+reasoning, solver usage, or domain knowledge.
+Dataset Variant (Qwen3-1.7B)
+Correct
+Wrong Obj.
+Infeasible
+Timeout
+Non-exec.
+Full
+0.394
+0.268
+0.033
+0.000
+0.305
+W/O Math Opt. Reasoning
+0.362
+0.310
+0.057
+0.001
+0.271
+W/O Solver Usage
+0.376
+0.249
+0.032
+0.000
+0.343
+W/O Domain Knowledge
+0.357
+0.282
+0.037
+0.000
+0.325
+Table 2: Ablation study results for Qwen3-4B on the full dataset and variants without mathematical
+reasoning, solver usage, or domain knowledge.
+Dataset Variant (Qwen3-4B)
+Correct
+Wrong Obj.
+Infeasible
+Timeout
+Non-exec.
+Full
+0.503
+0.280
+0.044
+0.001
+0.173
+W/O Math Opt. Reasoning
+0.500
+0.278
+0.051
+0.001
+0.169
+W/O Solver Usage
+0.459
+0.294
+0.055
+0.000
+0.192
+W/O Domain Knowledge
+0.497
+0.304
+0.042
+0.001
+0.157
+Reinforcement Learning (RL)
+We perform Group Relative Policy Optimization (GRPO) [11] using the Solver Usage Data and the
+Domain Knowledge Scaled Data. To compute the reward, we first extract the code from the reasoning
+traces generated by the LLM, and then execute a solver on the extracted code to obtain its objective
+value. We assign a reward of 1 if the resulting objective value matches the ground-truth value, and
+0 otherwise. This reward function is designed to directly reflect optimization-modeling quality by
+evaluating the accuracy of the objective values. The LLM parameters are then updated to maximize
+this reward, thereby improving the LLM’s mathematical optimization modeling capability. In this
+study, we set the sampling parameters to temperature = 0.6, TopK = 20, and TopP = 0.95. For each
+problem, four reasoning trajectories were generated. The RL training is performed using verl [12].
+B
+Additional Results
+B.1
+Ablation Study on Small Models
+To verify that integrating mathematical reasoning, solver usage, and domain knowledge leads to
+improved performance, we conduct an ablation study with four settings: using all three components,
+removing Math-Opt Reasoning data, removing Solver Usage data, and removing Domain Knowledge
+data. Each dataset remains identical across configurations, and the total number of training steps
+and the overall amount of data used to update the LLM are kept constant across all four cases. We
+conducted the ablations on the 1.7B and 4B models due to the computational cost of 32B-scale
+experiments, while maintaining sensitivity to performance differences. The results are shown in
+Tables 1 and 2. The Full setting achieves the best overall performance, indicating that combining
+all three forms of supervision is crucial. Although further analysis is needed to quantify each
+component’s contribution, the consistent trend across both the 1.7B and 4B models supports the
+benefit of integrating mathematical reasoning, solver usage, and domain knowledge.
+B.2
+Reasoning LLM Training Results
+For performance evaluation, we adopted five benchmark datasets: ComplexOR [15], IndustryOR [4],
+NL4Opt [10], NLP4LP [2], and ComplexLP [5], which are widely used in optimization modeling
+research [13]. To ensure the robustness of the results, we employed a multi-sampling strategy.
+Specifically, for the ComplexOR dataset, 32 candidate solutions were sampled for each problem due
+to the small amout of data size, while for the remaining datasets, four candidate solutions per problem
+were generated. The final accuracy was computed as the average across all sampled solutions. This
+approach mitigates variance caused by stochastic generation and provides a more reliable estimate of
+model performance.
+9
+
+
+--- Page 10 ---
+Table 3 shows the training results. Supervised fine-tuning and reinforcement learning consistently
+improve optimization-modeling performance over the base model, and the 32B model reaches
+performance comparable to or exceeding o3 on several benchmarks. However, the key observation is
+that improved benchmark performance does not fully resolve the reliability challenges of optimization
+modeling. The dominant remaining failure mode is feasible but incorrect solutions, indicating that
+many generated formulations can be executed successfully while still encoding incorrect objectives
+or constraints. This finding highlights the importance of datasets and training signals that emphasize
+formulation correctness in addition to executability.
+Table 3: Dataset-level accuracy comparison across all models on the benchmarks.
+Model
+ComplexOR
+IndustryOR
+ComplexLP
+NLP4LP
+NL4OPT
+Average
+GPT-5.2
+0.595±0.046
+0.353±0.037
+0.463±0.080
+0.791±0.053
+0.840±0.037
+0.609±0.050
+o3
+0.552±0.159
+0.330±0.119
+0.392±0.181
+0.748±0.070
+0.886±0.074
+0.582±0.121
+GPT-4.1
+0.521±0.100
+0.308±0.082
+0.427±0.117
+0.700±0.068
+0.892±0.063
+0.570±0.086
+gpt-oss-120b
+0.472±0.227
+0.270±0.113
+0.341±0.207
+0.590±0.190
+0.692±0.253
+0.473±0.198
+gpt-oss-20b
+0.226±0.247
+0.125±0.142
+0.137±0.185
+0.374±0.313
+0.460±0.400
+0.264±0.257
+Qwen3-32B
+0.432±0.224
+0.295±0.120
+0.318±0.198
+0.602±0.262
+0.672±0.292
+0.464±0.219
+Qwen3-8B
+0.335±0.131
+0.238±0.062
+0.303±0.181
+0.536±0.250
+0.611±0.258
+0.405±0.177
+Qwen3-32B-RFT
+0.446±0.057
+0.328±0.067
+0.352±0.138
+0.675±0.128
+0.778±0.145
+0.516±0.107
+Qwen3-32B-GRPO
+0.583±0.038
+0.330±0.026
+0.395±0.026
+0.757±0.032
+0.860±0.032
+0.585±0.031
+10
